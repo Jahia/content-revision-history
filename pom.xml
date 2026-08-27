@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>org.jahia.modules</groupId>
+        <artifactId>jahia-modules</artifactId>
+        <version>8.2.3.2</version>
+    </parent>
+
+    <artifactId>content-revision-history</artifactId>
+    <name>Content Revision History</name>
+    <version>1.0.0-SNAPSHOT</version>
+    <packaging>bundle</packaging>
+    <description>Public, curated revision history for Jahia pages: Markdown snapshots taken on
+        publication, promoted by editors into named public revisions, with a diff viewer.
+    </description>
+
+    <properties>
+        <jahia-depends>default</jahia-depends>
+        <jahia-module-type>module</jahia-module-type>
+        <jahia.version>8.2.3.2</jahia.version>
+        <!-- No git metadata plugin: keeps the build green before the first commit. -->
+        <skip.git.commit.info>true</skip.git.commit.info>
+        <!-- difflib is exported by the platform (see karaf/etc/custom-jahia.system.packages.generated.properties).
+             Import it rather than embedding a fork, to avoid duplicate classes. -->
+        <import-package>difflib,difflib.myers,*</import-package>
+    </properties>
+
+    <dependencies>
+        <dependency>
+            <groupId>org.jahia.server</groupId>
+            <artifactId>jahia-api</artifactId>
+            <version>${jahia.version}</version>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.jahia.server</groupId>
+            <artifactId>jahia-impl</artifactId>
+            <version>${jahia.version}</version>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.jahia.server</groupId>
+            <artifactId>jahia-taglib</artifactId>
+            <version>${jahia.version}</version>
+            <scope>provided</scope>
+        </dependency>
+    </dependencies>
+</project>

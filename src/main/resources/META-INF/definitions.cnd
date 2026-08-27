@@ -1,0 +1,32 @@
+<jmix = 'http://www.jahia.org/jahia/mix/1.0'>
+<jnt = 'http://www.jahia.org/jahia/nt/1.0'>
+<crh = 'http://www.jahia.org/crh/1.0'>
+
+// Opt-in marker. Only pages carrying this mixin are snapshotted on publication.
+[jmix:publiclyRevisioned] mixin
+ extends = jnt:page
+
+// Public, editorial container rendered on the page. Holds only revision entries.
+[crh:revisionHistory] > jnt:content, jmix:editorialContent, jmix:list
+ itemtype = content
+ - historyTitle (string) i18n
+ + * (crh:revisionEntry)
+
+// One public revision. Authored by an editor; publishing it is what makes it public.
+[crh:revisionEntry] > jnt:content, jmix:editorialContent
+ itemtype = content
+ - revisionLabel (string) mandatory
+ - revisionDate (date) mandatory
+ - summary (string, richtext) i18n mandatory
+ - changeType (string, choicelist[resourceBundle]) = 'substantive' < 'editorial', 'substantive', 'correction'
+ - snapshotRef (string) mandatory
+
+// System-generated, never published, never editor-edited. Append-only record.
+// indexed=no / nofulltext throughout: historical copies must not pollute site search.
+[crh:revisionSnapshot] > jnt:content
+ - snapshotDate (date) mandatory indexed=no
+ - language (string) mandatory indexed=no
+ - contentHash (string) mandatory indexed=no
+ - generatorVersion (string) mandatory indexed=no
+ - fallbackTypes (string) multiple indexed=no nofulltext
+ - markdown (string) mandatory indexed=no nofulltext
