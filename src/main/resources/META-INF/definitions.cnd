@@ -19,21 +19,56 @@
  - revisionDate (date) mandatory
  - summary (string, richtext) i18n mandatory
  - changeType (string, choicelist[resourceBundle]) = 'substantive' < 'editorial', 'substantive', 'correction'
- - snapshotRef (string) mandatory
+ // System-set, and deliberately so:
+ //  * hidden -- it used to be an editor-visible mandatory string holding an internally
+ //    generated key, which no editor could possibly know, so a revision entry could not be
+ //    saved at all. It is populated programmatically; `hidden` (rather than `protected`)
+ //    because Jahia refuses programmatic writes to protected properties too.
+ //  * weakreference -- referential integrity and a real picker instead of a free-text key.
+ //  * i18n -- snapshots are partitioned per language. As a single non-i18n value an entry
+ //    could only ever point at one language's snapshot, which makes a diff viewer impossible
+ //    on a multilingual site. Changing this later would be a data migration, so it is done now.
+ - snapshotRef (weakreference) i18n hidden indexed=no
 
-// Container for the snapshot tree. Declares the child definitions explicitly so
-// crh:revisionSnapshot never has to be jmix:droppableContent -- snapshots are
-// system-generated and must not appear as a component editors can add.
-[crh:snapshotFolder] > jnt:content, jmix:droppableContent
+// Container for the snapshot tree, at all three levels
+// (revision-history / <pageUuid> / <language>).
+// jmix:droppableContent is a *structural* requirement, not an editorial affordance:
+// /sites/<site>/contents is a jnt:contentFolder whose only wildcard child definitions are
+// `+ * (jmix:droppableContent)` and `+ * (jnt:contentFolder)`, so without it the root folder
+// cannot be created at all (verified: ConstraintViolationException "No child node definition
+// for revision-history"). What actually has to be prevented -- the type showing up as a
+// component an editor can drop onto a page -- is what jmix:hiddenType does, and that is
+// declared here. Child definitions are declared explicitly so crh:revisionSnapshot never
+// needs to be droppable either.
+// The crh:latest* / crh:snapshotCount properties are a denormalised index on the language
+// folder: dedupe used to scan every historical snapshot node -- each carrying a full page's
+// Markdown -- on every capture, so its cost grew linearly and forever.
+// The crh:lastCapture* properties make a missing snapshot self-explaining: without them a gap
+// in the record is indistinguishable from "the content did not change", which is the single
+// distinction this feature exists to make.
+[crh:snapshotFolder] > jnt:content, jmix:droppableContent, jmix:hiddenType
+ - crh:latestHash (string) indexed=no nofulltext
+ - crh:latestSnapshot (string) indexed=no nofulltext
+ - crh:snapshotCount (long) indexed=no
+ - crh:prunedCount (long) indexed=no
+ - crh:lastCaptureStatus (string) indexed=no nofulltext
+ - crh:lastCaptureMessage (string) indexed=no nofulltext
+ - crh:lastCaptureDate (date) indexed=no
  + * (crh:snapshotFolder)
  + * (crh:revisionSnapshot)
 
 // System-generated, never published, never editor-edited. Append-only record.
 // indexed=no / nofulltext throughout: historical copies must not pollute site search.
-[crh:revisionSnapshot] > jnt:content
- - snapshotDate (date) mandatory indexed=no
- - language (string) mandatory indexed=no
- - contentHash (string) mandatory indexed=no
- - generatorVersion (string) mandatory indexed=no
- - fallbackTypes (string) multiple indexed=no nofulltext
- - markdown (string) mandatory indexed=no nofulltext
+// crh:capturedBy records the principal the render ran as. It is always `guest`: a snapshot is
+// destined to be shown publicly, so it is built from what an anonymous visitor can see, never
+// from the privileges of whoever triggered the capture.
+// crh:markdown is binary, not string, so reading a snapshot's metadata does not drag the whole
+// page payload along with it.
+[crh:revisionSnapshot] > jnt:content, jmix:hiddenType
+ - crh:snapshotDate (date) mandatory indexed=no
+ - crh:language (string) mandatory indexed=no nofulltext
+ - crh:contentHash (string) mandatory indexed=no nofulltext
+ - crh:generatorVersion (string) mandatory indexed=no nofulltext
+ - crh:capturedBy (string) mandatory indexed=no nofulltext
+ - crh:sourceUrl (string) indexed=no nofulltext
+ - crh:markdown (binary) mandatory indexed=no nofulltext

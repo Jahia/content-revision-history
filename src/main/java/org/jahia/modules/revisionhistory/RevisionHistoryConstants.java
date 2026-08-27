@@ -1,0 +1,116 @@
+package org.jahia.modules.revisionhistory;
+
+/**
+ * Every JCR name and every hard cap the module relies on, in one place.
+ *
+ * <p>Node type and property names were previously repeated as string literals across the
+ * service, the capture trigger and the CND. A typo in any one of them fails at runtime, on a
+ * write path whose whole purpose is an auditable record, so they live here and nowhere else.
+ */
+public final class RevisionHistoryConstants {
+
+    private RevisionHistoryConstants() {
+        // constants holder
+    }
+
+    // ---------------------------------------------------------------- node types
+
+    /** Opt-in marker mixin. Only pages carrying it are snapshotted. */
+    public static final String REVISIONED_PAGE_MIXIN = "jmix:publiclyRevisioned";
+    public static final String PAGE_TYPE = "jnt:page";
+    public static final String SNAPSHOT_TYPE = "crh:revisionSnapshot";
+    public static final String FOLDER_TYPE = "crh:snapshotFolder";
+
+    // ---------------------------------------------------------------- layout
+
+    /** Folder created under {@code /sites/<siteKey>/contents}. */
+    public static final String ROOT_FOLDER_NAME = "revision-history";
+    /** Snapshots are written to the editing workspace only and are never published. */
+    public static final String WORKSPACE = "default";
+    /** Template type of the Markdown views ({@code jnt_page/markdown/page.jsp} etc.). */
+    public static final String MARKDOWN_TEMPLATE_TYPE = "markdown";
+
+    // ---------------------------------------------------- crh:revisionSnapshot properties
+
+    public static final String PROP_SNAPSHOT_DATE = "crh:snapshotDate";
+    public static final String PROP_LANGUAGE = "crh:language";
+    public static final String PROP_CONTENT_HASH = "crh:contentHash";
+    public static final String PROP_GENERATOR_VERSION = "crh:generatorVersion";
+    /** Principal the capture ran as. Always {@value #CAPTURE_PRINCIPAL} by construction. */
+    public static final String PROP_CAPTURED_BY = "crh:capturedBy";
+    public static final String PROP_SOURCE_URL = "crh:sourceUrl";
+    public static final String PROP_MARKDOWN = "crh:markdown";
+
+    // ------------------------------------------------------ crh:snapshotFolder properties
+
+    public static final String PROP_LATEST_HASH = "crh:latestHash";
+    public static final String PROP_LATEST_SNAPSHOT = "crh:latestSnapshot";
+    public static final String PROP_SNAPSHOT_COUNT = "crh:snapshotCount";
+    public static final String PROP_PRUNED_COUNT = "crh:prunedCount";
+    public static final String PROP_LAST_CAPTURE_STATUS = "crh:lastCaptureStatus";
+    public static final String PROP_LAST_CAPTURE_MESSAGE = "crh:lastCaptureMessage";
+    public static final String PROP_LAST_CAPTURE_DATE = "crh:lastCaptureDate";
+
+    // ------------------------------------------------------- crh:revisionEntry properties
+
+    /** System-set, i18n weak reference to the {@code crh:revisionSnapshot} of that language. */
+    public static final String PROP_SNAPSHOT_REF = "snapshotRef";
+
+    // ---------------------------------------------------------------- capture identity
+
+    /**
+     * The one and only principal a capture may run as.
+     *
+     * <p>A snapshot is published to the world, so it must be built from what the world can
+     * see. Rendering as anybody else -- in particular as whoever happened to trigger the
+     * capture -- would let ACL-filtered content leak into a public record.
+     */
+    public static final String CAPTURE_PRINCIPAL = "guest";
+
+    // ---------------------------------------------------------------- hard caps
+
+    /**
+     * Maximum size of a single Markdown snapshot. Beyond this the capture is refused and
+     * recorded as {@link CaptureStatus#OVERSIZE} rather than truncated: a truncated snapshot
+     * is a falsified record.
+     */
+    public static final int MAX_MARKDOWN_BYTES = 1024 * 1024;
+
+    /**
+     * Maximum number of snapshots kept per page and language. Once reached, the oldest are
+     * pruned and the running total is recorded in {@link #PROP_PRUNED_COUNT}, so the loss is
+     * visible rather than silent.
+     */
+    public static final int MAX_SNAPSHOTS_PER_PAGE_LANGUAGE = 500;
+
+    /**
+     * Minimum wall-clock gap between two capture attempts for the same page and language.
+     *
+     * <p>Deliberately short. Its job is only to collapse near-simultaneous duplicate events
+     * for a single editorial action; the actual bound on work is
+     * {@link #MAX_CAPTURES_PER_WINDOW}. A long interval would trade the abuse it no longer
+     * needs to prevent -- capture is authenticated and publication-gated now -- against
+     * dropping a real revision, which is the exact failure this whole design removes. When it
+     * does refuse, the refusal is recorded on the folder, so it is never a silent hole.
+     */
+    public static final long MIN_CAPTURE_INTERVAL_MILLIS = 1_000L;
+
+    /**
+     * Maximum capture attempts per page and language within {@link #RATE_WINDOW_MILLIS}. Far
+     * above any human editing rate, and low enough that no page can consume the node.
+     */
+    public static final int MAX_CAPTURES_PER_WINDOW = 60;
+
+    public static final long RATE_WINDOW_MILLIS = 60L * 60L * 1000L;
+
+    /** Upper bound on how many distinct pages one publication event may enqueue. */
+    public static final int MAX_PAGES_PER_PUBLICATION = 500;
+
+    /** Upper bound on nodes inspected per publication event when resolving pages. */
+    public static final int MAX_PUBLICATION_INFOS_INSPECTED = 20_000;
+
+    // ---------------------------------------------------------------- system properties
+
+    /** Optional override of the loopback base URL used for guest capture renders. */
+    public static final String SYSPROP_CAPTURE_BASE_URL = "jahia.crh.captureBaseUrl";
+}
