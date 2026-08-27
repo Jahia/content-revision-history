@@ -7,13 +7,13 @@
  extends = jnt:page
 
 // Public, editorial container rendered on the page. Holds only revision entries.
-[crh:revisionHistory] > jnt:content, jmix:editorialContent, jmix:list
+[crh:revisionHistory] > jnt:content, jmix:droppableContent, jmix:editorialContent, jmix:list
  itemtype = content
  - historyTitle (string) i18n
  + * (crh:revisionEntry)
 
 // One public revision. Authored by an editor; publishing it is what makes it public.
-[crh:revisionEntry] > jnt:content, jmix:editorialContent
+[crh:revisionEntry] > jnt:content, jmix:droppableContent, jmix:editorialContent
  itemtype = content
  - revisionLabel (string) mandatory
  - revisionDate (date) mandatory

@@ -27,7 +27,7 @@
         <skip.git.commit.info>true</skip.git.commit.info>
         <!-- difflib is exported by the platform (see karaf/etc/custom-jahia.system.packages.generated.properties).
              Import it rather than embedding a fork, to avoid duplicate classes. -->
-        <import-package>difflib,difflib.myers,*</import-package>
+        <import-package>difflib,difflib.myers,org.springframework.beans.factory.xml,org.springframework.context.support,*</import-package>
     </properties>
 
     <dependencies>
@@ -50,4 +50,21 @@
             <scope>provided</scope>
         </dependency>
     </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.felix</groupId>
+                <artifactId>maven-bundle-plugin</artifactId>
+                <extensions>true</extensions>
+                <configuration>
+                    <instructions>
+                        <!-- Suppress dev-mode source mounting: it makes
+                             ModulesSourceSpringInitializer take over Spring handling. -->
+                        <Jahia-Source-Folders/>
+                    </instructions>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
 </project>
