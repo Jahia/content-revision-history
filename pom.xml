@@ -22,6 +22,10 @@
     <properties>
         <jahia-depends>default</jahia-depends>
         <jahia-module-type>module</jahia-module-type>
+        <!-- REQUIRED: without this the Jahia blueprint extender silently skips the bundle,
+             so no module Spring context is created and every code extension point
+             (Actions, render filters) is inert while views and CNDs still work fine. -->
+        <require-capability>osgi.extender;filter:="(osgi.extender=org.jahia.bundles.blueprint.extender.config)"</require-capability>
         <jahia.version>8.2.3.2</jahia.version>
         <!-- No git metadata plugin: keeps the build green before the first commit. -->
         <skip.git.commit.info>true</skip.git.commit.info>
@@ -49,6 +53,12 @@
             <version>${jahia.version}</version>
             <scope>provided</scope>
         </dependency>
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <version>5.10.2</version>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 
     <build>
@@ -64,6 +74,11 @@
                         <Jahia-Source-Folders/>
                     </instructions>
                 </configuration>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <version>3.2.5</version>
             </plugin>
         </plugins>
     </build>

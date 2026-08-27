@@ -21,6 +21,13 @@
  - changeType (string, choicelist[resourceBundle]) = 'substantive' < 'editorial', 'substantive', 'correction'
  - snapshotRef (string) mandatory
 
+// Container for the snapshot tree. Declares the child definitions explicitly so
+// crh:revisionSnapshot never has to be jmix:droppableContent -- snapshots are
+// system-generated and must not appear as a component editors can add.
+[crh:snapshotFolder] > jnt:content, jmix:droppableContent
+ + * (crh:snapshotFolder)
+ + * (crh:revisionSnapshot)
+
 // System-generated, never published, never editor-edited. Append-only record.
 // indexed=no / nofulltext throughout: historical copies must not pollute site search.
 [crh:revisionSnapshot] > jnt:content

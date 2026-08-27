@@ -39,6 +39,8 @@ public final class MarkdownNormalizer {
     private static final Pattern INLINE_SPACE = Pattern.compile("[ \\t]{2,}");
     /** Sentence boundary: .!? followed by whitespace and an uppercase-ish start. */
     private static final Pattern SENTENCE_END = Pattern.compile("([.!?])\\s+(?=[\\p{Lu}\\[`*#])");
+    /** A heading must start its own block, or it fuses onto the previous line. */
+    private static final Pattern GLUED_HEADING = Pattern.compile("(?m)(?<=[^\\s#])(#{1,6}\\s)");
 
     private MarkdownNormalizer() {
     }
@@ -49,6 +51,7 @@ public final class MarkdownNormalizer {
             return "";
         }
         String s = toMarkdown(rawViewOutput);
+        s = GLUED_HEADING.matcher(s).replaceAll("\n\n$1");
         s = collapseWhitespace(s);
         s = semanticLineBreaks(s);
         return s.trim() + "\n";

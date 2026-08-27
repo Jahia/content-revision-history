@@ -36,7 +36,7 @@ public class RevisionSnapshotService {
 
     public static final String FOLDER = "revision-history";
     public static final String SNAPSHOT_TYPE = "crh:revisionSnapshot";
-    private static final String CONTENT_FOLDER_TYPE = "jnt:contentFolder";
+    private static final String FOLDER_TYPE = "crh:snapshotFolder";
     private static final String WORKSPACE = "default";
     private static final DateTimeFormatter STAMP =
             DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss").withLocale(Locale.ROOT);
@@ -113,7 +113,7 @@ public class RevisionSnapshotService {
         try {
             return parent.getNode(name);
         } catch (PathNotFoundException notThereYet) {
-            return parent.addNode(name, CONTENT_FOLDER_TYPE);
+            return parent.addNode(name, FOLDER_TYPE);
         }
     }
 }
