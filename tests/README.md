@@ -34,10 +34,13 @@ already owns 8080/8000. Cypress reaches Jahia at `jahia:8080` on the `stack` net
 CI path is unaffected; only host-side debugging uses the mapped ports (Jahia at
 `http://localhost:8081`, JPDA on 8001).
 
-**The module must be enabled on the site.** `assets/provisioning.yml` enables
-`content-revision-history` on `digitall` after the site import. A module's views and render
-filters only apply to sites where it is enabled — without this the module still looks healthy
-(bundle ACTIVE, node types registered) while every snapshot assertion fails.
+**The module must be enabled on the site, and that happens in the spec, not in
+provisioning.** A module's views and render filters only apply to sites where it is enabled —
+without it the module still looks healthy (bundle ACTIVE, node types registered) while every
+snapshot assertion fails. It cannot be done in `assets/provisioning.yml`: the harness installs
+the module *after* the manifest runs, so a provisioning `enable` step silently no-ops (the
+operation cannot find a module that is not installed yet). The spec's `before()` calls
+`enableModule('content-revision-history', 'digitall')` instead.
 
 **Specs force a cache miss on purpose.** The capture filter runs late in the render chain, and
 Jahia's HTML output cache short-circuits that chain, so a cached page produces no capture at

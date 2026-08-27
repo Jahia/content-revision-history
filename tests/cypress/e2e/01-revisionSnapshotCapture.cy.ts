@@ -1,5 +1,11 @@
 import gql from 'graphql-tag';
-import {addMixins, deleteNode, publishAndWaitJobEnding, setNodeProperty} from '@jahia/cypress';
+import {
+    addMixins,
+    deleteNode,
+    enableModule,
+    publishAndWaitJobEnding,
+    setNodeProperty
+} from '@jahia/cypress';
 
 /**
  * Capture behaviour of the Content Revision History module.
@@ -80,6 +86,11 @@ describe('Revision snapshot capture', () => {
 
     before(() => {
         cy.login();
+        // Enable the module on the site HERE, not in provisioning.yml: the harness installs
+        // the module after the manifest runs, so a provisioning `enable` step silently
+        // no-ops. A module's views and render filters only apply to sites where it is
+        // enabled -- without this the module looks healthy and every assertion fails.
+        enableModule('content-revision-history', siteKey);
         // Start from a known-empty history so counts are meaningful.
         deleteNode(historyRoot).then(null, () => undefined);
         addMixins(pagePath, ['jmix:publiclyRevisioned']);
@@ -142,6 +153,11 @@ describe('Revision snapshot capture', () => {
 
     it('does not store a second snapshot when the content has not changed', () => {
         listSnapshots().then(before => {
+            // Guard: 0 === 0 would pass vacuously if capture were broken entirely.
+            expect(before.length, 'precondition: at least one snapshot exists').to.be.greaterThan(
+                0
+            );
+
             // Act -- a fresh render, but identical content
             renderLive();
 

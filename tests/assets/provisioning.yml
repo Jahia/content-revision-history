@@ -31,12 +31,10 @@
 - importSite: "jar:mvn:org.jahia.modules/digitall/RELEASE/zip/import!/Digitall.zip"
 - karafCommand: "log:log 'END - Import Digitall site'"
 
-# A module's views and render filters only apply to a site where the module is ENABLED.
-# Without this every snapshot assertion fails while the module still looks healthy.
-- karafCommand: "log:log 'START - Enable content-revision-history on digitall'"
-- enable: "content-revision-history"
-  site: "digitall"
-- karafCommand: "log:log 'END - Enable content-revision-history on digitall'"
+# NOTE: the module is deliberately NOT enabled here. The harness installs the module
+# AFTER this manifest runs, so an `enable` step at this point silently no-ops (the
+# provisioning `enable` operation cannot find a module that is not installed yet).
+# Enabling happens in the spec's before() hook via enableModule().
 
 - karafCommand: "log:log 'END - provisioning'"
 
