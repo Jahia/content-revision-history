@@ -1,1 +1,5 @@
 target/
+
+# Never commit local env files: they carry the Jahia license
+.env
+.env.local
