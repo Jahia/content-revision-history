@@ -1,3 +1,9 @@
+# Never copy local env files into an image layer: .env carries the Jahia EE license,
+# and image layers are immutable so deleting it in a later layer does NOT remove it.
+# The license is supplied at RUNTIME via docker-compose (JAHIA_LICENSE), never baked in.
+.env
+.env.local
+artifacts/
 results/
 run-artifacts/
 node_modules
