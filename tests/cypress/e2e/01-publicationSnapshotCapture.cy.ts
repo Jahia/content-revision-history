@@ -53,100 +53,100 @@ describe('Publication-triggered revision snapshot capture', () => {
     // ---------------------------------------------------------------- GraphQL response shapes
 
     interface JcrPropertyValue {
-        name: string;
-        value: string | null;
+        name: string
+        value: string | null
     }
 
     interface BinarySize {
-        size: number | null;
+        size: number | null
     }
 
     interface ApolloResult<T> {
-        data?: T;
-        errors?: Array<{message: string}>;
+        data?: T
+        errors?: Array<{ message: string }>
     }
 
     interface SnapshotGqlNode {
-        name: string;
-        properties: JcrPropertyValue[];
-        markdown: BinarySize | null;
+        name: string
+        properties: JcrPropertyValue[]
+        markdown: BinarySize | null
     }
 
     interface SnapshotsQueryData {
         jcr: {
             nodeByPath: {
                 descendants: {
-                    nodes: SnapshotGqlNode[];
-                } | null;
-            } | null;
-        } | null;
+                    nodes: SnapshotGqlNode[]
+                } | null
+            } | null
+        } | null
     }
 
     interface FolderQueryNode {
-        properties: JcrPropertyValue[];
+        properties: JcrPropertyValue[]
     }
 
     interface FolderQueryData {
         jcr: {
-            nodeByPath: FolderQueryNode | null;
-        } | null;
+            nodeByPath: FolderQueryNode | null
+        } | null
     }
 
     interface NamedTypedNode {
-        name: string;
-        primaryNodeType: {name: string};
+        name: string
+        primaryNodeType: { name: string }
     }
 
     interface LanguageFolderGqlNode extends NamedTypedNode {
-        children: {nodes: NamedTypedNode[]};
+        children: { nodes: NamedTypedNode[] }
     }
 
     interface PageFolderGqlNode extends NamedTypedNode {
-        children: {nodes: LanguageFolderGqlNode[]};
+        children: { nodes: LanguageFolderGqlNode[] }
     }
 
     interface HistoryTreeQueryData {
         jcr: {
             nodeByPath: {
-                children: {nodes: PageFolderGqlNode[]};
-            } | null;
-        } | null;
+                children: { nodes: PageFolderGqlNode[] }
+            } | null
+        } | null
     }
 
     interface NodeQueryData {
         jcr: {
             nodeByPath: {
-                uuid: string;
-                properties: JcrPropertyValue[];
-            } | null;
-        } | null;
+                uuid: string
+                properties: JcrPropertyValue[]
+            } | null
+        } | null
     }
 
     interface AddNodeQueryData {
         jcr: {
             addNode: {
-                uuid: string;
-            };
-        };
+                uuid: string
+            }
+        }
     }
 
     // ---------------------------------------------------------------- domain shapes
 
     interface Snapshot {
-        name: string;
-        contentHash: string;
-        language: string;
-        generatorVersion: string;
-        capturedBy: string;
-        markdownSize: number;
+        name: string
+        contentHash: string
+        language: string
+        generatorVersion: string
+        capturedBy: string
+        markdownSize: number
     }
 
     interface FolderStatus {
-        latestHash: string;
-        snapshotCount: number;
-        lastCaptureStatus: string;
-        lastCaptureMessage: string;
-        lastCaptureDate: string;
+        latestHash: string
+        snapshotCount: number
+        lastCaptureStatus: string
+        lastCaptureMessage: string
+        lastCaptureDate: string
     }
 
     const emptyFolderStatus: FolderStatus = {
@@ -177,7 +177,7 @@ describe('Publication-triggered revision snapshot capture', () => {
         query snapshots($path: String!, $names: [String]) {
             jcr(workspace: EDIT) {
                 nodeByPath(path: $path) {
-                    descendants(typesFilter: {types: ["crh:revisionSnapshot"]}) {
+                    descendants(typesFilter: { types: ["crh:revisionSnapshot"] }) {
                         nodes {
                             name
                             properties(names: $names) {
@@ -451,9 +451,7 @@ describe('Publication-triggered revision snapshot capture', () => {
 
         getNode(pagePath, []).then(node => {
             pageUuid = node?.uuid ?? '';
-            expect(pageUuid, 'the page must resolve to a uuid before any test can proceed').to.match(
-                uuidPattern
-            );
+            expect(pageUuid, 'the page must resolve to a uuid before any test can proceed').to.match(uuidPattern);
         });
     });
 
@@ -485,8 +483,7 @@ describe('Publication-triggered revision snapshot capture', () => {
         ).then(snapshots => {
             const forLanguage = snapshots.filter(snapshot => snapshot.language === language);
 
-            expect(forLanguage.length, 'a snapshot must have been stored by the async capture job').to.be
-                .greaterThan(0);
+            expect(forLanguage.length, 'a snapshot must have been stored by the async capture job').to.be.greaterThan(0);
         });
     });
 
@@ -676,6 +673,73 @@ describe('Publication-triggered revision snapshot capture', () => {
         );
     });
 
+    it('renders Compare buttons with real, distinct, escaped labels', () => {
+        // Two defects meet in this markup and NEITHER was covered by any test:
+        //   1. <fmt:message> writes its output unescaped, so an editor-authored revisionLabel
+        //      is a stored-XSS sink.
+        //   2. Escaping it with <c:set> placed ABOVE the assignments silently produced "" for
+        //      every value -- JSTL has no hoisting -- blanking every button to
+        //      "Compare  () with the previous revision,  ()". Unit and e2e stayed green.
+        // Assert on the rendered page so both regressions are caught in future.
+        const renderContainer = `${pagePath}/area-main/crh-render-check`;
+        const xssLabel = '<img src=x onerror=alert(1)>';
+        const plainLabel = 'Version 9.9 render check';
+
+        addNode({
+            parentPathOrId: `${pagePath}/area-main`,
+            primaryNodeType: 'crh:revisionHistory',
+            name: 'crh-render-check'
+        }).then((container: ApolloResult<AddNodeQueryData>) => {
+            expect(container.errors, 'the revision history container must be creatable on the page').to.be.undefined;
+
+            return addNode({
+                parentPathOrId: renderContainer,
+                primaryNodeType: 'crh:revisionEntry',
+                name: 'entry-newer',
+                properties: [
+                    {name: 'revisionLabel', value: xssLabel},
+                    {name: 'revisionDate', value: new Date().toISOString(), type: 'DATE'},
+                    {name: 'summary', value: 'newer entry', language}
+                ]
+            });
+        })
+            .then(() =>
+                addNode({
+                    parentPathOrId: renderContainer,
+                    primaryNodeType: 'crh:revisionEntry',
+                    name: 'entry-older',
+                    properties: [
+                        {name: 'revisionLabel', value: plainLabel},
+                        {name: 'revisionDate', value: new Date(Date.now() - 86400000).toISOString(), type: 'DATE'},
+                        {name: 'summary', value: 'older entry', language}
+                    ]
+                })
+            )
+            .then(() =>
+                // Render in the authoring workspace: no publish needed, so this cannot perturb
+                // the snapshot counts the other tests assert on.
+                cy.request<string>({url: `/cms/render/default/${language}${pagePath}.html`})
+            )
+            .then(response => {
+                const html = response.body;
+
+                // The label must actually reach the button -- not the blanked "Compare  ()" form.
+                expect(html, 'the older entry label must appear in the rendered page').to.contain(plainLabel);
+                // Two spaces: that is exactly what an empty {0} produces in
+                // "Compare {0} ({1}) with ...". Do not relax this to one space.
+                expect(html, 'the Compare button must not be blank').to.not.contain('Compare  () with')
+                expect(html, 'no unresolved resource-bundle key may reach the page').to.not.contain('???');
+
+                // ...and the XSS payload must arrive escaped, never as live markup.
+                expect(html, 'the payload must be escaped').to.contain('&lt;img src=x onerror=alert(1)&gt;');
+                expect(html, 'the payload must NOT render as a live tag').to.not.contain(
+                    '<img src=x onerror=alert(1)>'
+                );
+
+                deleteNode(renderContainer).then(null, () => undefined);
+            });
+    });
+
     it('allows creating a crh:revisionEntry without a snapshotRef', () => {
         // SnapshotRef used to be an editor-visible mandatory string holding an internally
         // generated key no editor could know -- a revisionEntry could not be saved at all.
@@ -686,10 +750,7 @@ describe('Publication-triggered revision snapshot capture', () => {
             primaryNodeType: 'crh:revisionHistory',
             name: scratchContainerName
         }).then((containerResult: ApolloResult<AddNodeQueryData>) => {
-            expect(
-                containerResult.errors,
-                'creating the crh:revisionHistory container must not fail'
-            ).to.be.undefined;
+            expect(containerResult.errors, 'creating the crh:revisionHistory container must not fail').to.be.undefined;
 
             addNode({
                 parentPathOrId: scratchContainerPath,
@@ -701,13 +762,9 @@ describe('Publication-triggered revision snapshot capture', () => {
                     {name: 'summary', value: 'Created without a snapshotRef on purpose', language}
                 ]
             }).then((entryResult: ApolloResult<AddNodeQueryData>) => {
-                expect(
-                    entryResult.errors,
-                    'a revisionEntry must be creatable without snapshotRef'
-                ).to.be.undefined;
-                expect(entryResult.data?.jcr?.addNode.uuid, 'the entry must actually be created').to.be.a(
-                    'string'
-                ).and.not.be.empty;
+                expect(entryResult.errors, 'a revisionEntry must be creatable without snapshotRef').to.be.undefined;
+                expect(entryResult.data?.jcr?.addNode.uuid, 'the entry must actually be created').to.be.a('string').and
+                    .not.be.empty;
 
                 deleteNode(scratchContainerPath).then(null, () => undefined);
             });

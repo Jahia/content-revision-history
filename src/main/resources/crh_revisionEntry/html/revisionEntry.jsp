@@ -61,12 +61,10 @@
 <c:set var="changeTypeCode" value="${currentNode.properties.changeType.string}"/>
 <c:set var="currentLabel" value="${currentNode.properties.revisionLabel.string}"/>
 <%-- SECURITY: <fmt:message> writes its output UNESCAPED -- unlike <c:out> it has no
-     escapeXml attribute -- and revisionLabel is free text authored by an editor. Escape every
-     value here, immediately after it is assigned: these <c:set>s must come AFTER the
-     assignments above, because JSTL evaluates strictly top-to-bottom with no hoisting, and
-     escaping an unassigned variable silently yields "" (which blanks the button text). --%>
-<c:set var="currentLabelSafe" value="${fn:escapeXml(currentLabel)}"/>
-<c:set var="humanDateSafe" value="${fn:escapeXml(humanDate)}"/>
+     escapeXml attribute -- and revisionLabel is editor-authored free text. Every
+     <fmt:param> below therefore escapes AT THE POINT OF USE. Do not reintroduce
+     intermediate <c:set> "safe" variables: they did not survive to <fmt:message>,
+     and an empty param silently blanks the button instead of failing loudly. --%>
 
 <article class="crh-entry" aria-labelledby="crh-entry-heading-${currentNode.identifier}">
     <h3 id="crh-entry-heading-${currentNode.identifier}">
@@ -80,7 +78,10 @@
         <dt><fmt:message key="crh_revisionEntry.changeType"/></dt>
         <%-- changeTypeCode is constrained by the CND choicelist to editorial|substantive|correction,
              so building the resource key from it is not attacker-controlled input. --%>
-        <dd><fmt:message key="crh_revisionEntry.changeType.${changeTypeCode}"/></dd>
+        <dd><c:choose>
+            <c:when test="${not empty changeTypeCode}"><fmt:message key="crh_revisionEntry.changeType.${changeTypeCode}"/></c:when>
+            <c:otherwise><fmt:message key="crh_revisionEntry.changeType.substantive"/></c:otherwise>
+        </c:choose></dd>
 
         <dt><fmt:message key="crh_revisionEntry.summary"/></dt>
         <%-- Escaped plain text, deliberately -- see the security note above. --%>
@@ -91,8 +92,6 @@
         <c:when test="${not empty previousEntry}">
             <fmt:formatDate var="previousHumanDate" value="${previousEntry.properties.revisionDate.date.time}" dateStyle="long"/>
             <c:set var="previousLabel" value="${previousEntry.properties.revisionLabel.string}"/>
-            <c:set var="previousLabelSafe" value="${fn:escapeXml(previousLabel)}"/>
-            <c:set var="previousHumanDateSafe" value="${fn:escapeXml(previousHumanDate)}"/>
             <%-- Native <button>: keyboard/switch operable by default, no role/tabindex needed.
                  Target size and focus-indicator styling are NOT shipped by this module -- see
                  the accessibility notes in the parent agent's summary for what the host site
@@ -101,10 +100,10 @@
                     data-crh-current="${fn:escapeXml(currentNode.identifier)}"
                     data-crh-previous="${fn:escapeXml(previousEntry.identifier)}">
                 <fmt:message key="crh_revisionEntry.compareWithPrevious">
-                    <fmt:param value="${currentLabelSafe}"/>
-                    <fmt:param value="${humanDateSafe}"/>
-                    <fmt:param value="${previousLabelSafe}"/>
-                    <fmt:param value="${previousHumanDateSafe}"/>
+                    <fmt:param value="${fn:escapeXml(currentNode.properties.revisionLabel.string)}"/>
+                    <fmt:param value="${fn:escapeXml(humanDate)}"/>
+                    <fmt:param value="${fn:escapeXml(previousEntry.properties.revisionLabel.string)}"/>
+                    <fmt:param value="${fn:escapeXml(previousHumanDate)}"/>
                 </fmt:message>
             </button>
         </c:when>
@@ -113,7 +112,7 @@
                  never a disabled/dead control with no explanation. --%>
             <p class="crh-compare-unavailable">
                 <fmt:message key="crh_revisionEntry.compareUnavailable">
-                    <fmt:param value="${currentLabelSafe}"/>
+                    <fmt:param value="${fn:escapeXml(currentNode.properties.revisionLabel.string)}"/>
                 </fmt:message>
             </p>
         </c:otherwise>
