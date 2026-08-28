@@ -18,6 +18,13 @@
     <description>Public, curated revision history for Jahia pages: Markdown snapshots taken on
         publication, promoted by editors into named public revisions, with a diff viewer.
     </description>
+    <licenses>
+        <license>
+            <name>MIT License</name>
+            <url>https://opensource.org/licenses/MIT</url>
+            <distribution>repo</distribution>
+        </license>
+    </licenses>
 
     <properties>
         <jahia-depends>default</jahia-depends>
@@ -73,13 +80,16 @@
             <scope>test</scope>
         </dependency>
         <!-- Real HTML parser for MarkdownNormalizer: replaces the regex pipeline (ReDoS risk,
-             entity-decoding-order bugs). The platform ships jsoup but does not export
-             org.jsoup, so this must stay compile-scoped and be embedded in the bundle
+             entity-decoding-order bugs). The platform ships jsoup but does not export org.jsoup, so this stays
+             compile-scoped and is embedded in the bundle. Because it is EMBEDDED rather than
+             imported, our copy is private to this bundle and can be patched independently of
+             the platform's, which is why this is 1.23.1 (the advisory fix) rather than the
+             1.21.2 the platform ships
              (see the parent pom's embed-dependency instruction). -->
         <dependency>
             <groupId>org.jsoup</groupId>
             <artifactId>jsoup</artifactId>
-            <version>1.21.2</version>
+            <version>1.23.1</version>
         </dependency>
     </dependencies>
 
@@ -94,6 +104,14 @@
                         <!-- Suppress dev-mode source mounting: it makes
                              ModulesSourceSpringInitializer take over Spring handling. -->
                         <Jahia-Source-Folders/>
+                        <!-- Ship the licence inside the bundle: neither the parent pom nor bnd
+                             does this automatically, and sibling Jahia modules carry
+                             META-INF/LICENSE.txt. -->
+                        <!-- {maven-resources} MUST be listed explicitly: naming Include-Resource replaces
+                             bnd's default inclusion, which silently drops definitions.cnd, every
+                             JSP view and the resource bundles, leaving a classes-only bundle that
+                             deploys 'successfully' and registers no node types. -->
+                        <Include-Resource>{maven-resources},META-INF/LICENSE.txt=LICENSE.txt</Include-Resource>
                     </instructions>
                 </configuration>
             </plugin>
