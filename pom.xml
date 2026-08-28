@@ -118,7 +118,7 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-surefire-plugin</artifactId>
-                <version>3.2.5</version>
+                <version>3.5.6</version>
             </plugin>
             <!-- Coverage reporting only, no enforced gate yet: this module is roughly
                  35-45% unit-testable (see class-level comments), the rest being JCR/HTTP/
