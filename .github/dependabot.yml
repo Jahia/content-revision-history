@@ -25,11 +25,10 @@ updates:
       # these belong to a deliberate platform upgrade, never to an automated PR.
       - dependency-name: "org.jahia.modules:jahia-modules"
       - dependency-name: "org.jahia.server:*"
-      # jsoup is EMBEDDED in the bundle and deliberately pinned to the version the platform
-      # ships (1.21.2). Letting Dependabot drift it away from the platform reintroduces exactly
-      # the duplicate-class risk that embedding was chosen to avoid, so bump it only when the
-      # target Jahia does.
-      - dependency-name: "org.jsoup:jsoup"
+      # NOTE: jsoup is deliberately NOT ignored. It is EMBEDDED in the bundle rather than
+      # imported, so our copy is private to this module and can be patched independently of the
+      # version the platform ships. Suppressing it would have hidden the advisory that took it
+      # to 1.23.1.
 
   - package-ecosystem: "npm"
     directory: "/tests"
