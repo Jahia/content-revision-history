@@ -114,7 +114,17 @@ public class SnapshotCaptureJob extends BackgroundJob {
             return;
         }
 
-        flushFragmentCache(page.path);
+        if (!flushFragmentCache(page.path)) {
+            // The flush is the whole reason the ordering is deterministic. Without it the fetch
+            // below can read a pre-publication fragment, hash identical to the previous
+            // snapshot, and durably record UNCHANGED for a change that did happen. A wrong
+            // record is worse than a visible gap, and unlike a gap it cannot be spotted later,
+            // so refuse and say so; re-publishing the page puts it right.
+            snapshotService.recordStatus(page.siteKey, page.uuid, language, CaptureStatus.FAILED,
+                    "Could not flush the fragment cache before capture; refused rather than risk"
+                    + " recording a stale render as UNCHANGED");
+            return;
+        }
         GuestMarkdownFetcher.Fetched fetched =
                 FetcherHolder.INSTANCE.fetch(page.path, language, cacheBuster);
         if (!fetched.isOk()) {
@@ -154,11 +164,14 @@ public class SnapshotCaptureJob extends BackgroundJob {
      * change" for a change. Flushing here makes the ordering deterministic; it costs nothing
      * extra, since publication was about to flush exactly these entries anyway.
      */
-    private void flushFragmentCache(String pagePath) {
+    /** @return false when the cache could not be flushed, in which case do NOT capture */
+    private boolean flushFragmentCache(String pagePath) {
         try {
             ModuleCacheProvider.getInstance().invalidate(pagePath, true);
+            return true;
         } catch (RuntimeException e) {
-            logger.warn("Could not flush the fragment cache for {} before capture", pagePath, e);
+            logger.error("Could not flush the fragment cache for {} before capture", pagePath, e);
+            return false;
         }
     }
 
@@ -182,7 +195,7 @@ public class SnapshotCaptureJob extends BackgroundJob {
         try {
             PageRef page = resolvePage(pageUuid);
             return page == null ? "unknown" : page.siteKey;
-        } catch (RepositoryException e) {
+        } catch (RepositoryException | RuntimeException e) {
             return "unknown";
         }
     }
@@ -204,9 +217,18 @@ public class SnapshotCaptureJob extends BackgroundJob {
     static String encode(List<String> pageUuids, List<Set<String>> languagesPerPage) {
         StringBuilder encoded = new StringBuilder();
         int pages = Math.min(pageUuids.size(), MAX_PAGES_PER_PUBLICATION);
+        if (pageUuids.size() > pages) {
+            logger.error("Publication touched {} revisioned pages, over the cap of {}; the last"
+                    + " {} will NOT be captured and carry no status of any kind",
+                    pageUuids.size(), MAX_PAGES_PER_PUBLICATION, pageUuids.size() - pages);
+        }
         for (int i = 0; i < pages; i++) {
             Set<String> languages = new LinkedHashSet<>(languagesPerPage.get(i));
             if (languages.isEmpty()) {
+                // Dropping this silently made a page with no resolvable language look exactly
+                // like a page that did not change.
+                logger.error("No language could be resolved for revisioned page {}; it will NOT"
+                        + " be captured for this publication", pageUuids.get(i));
                 continue;
             }
             if (encoded.length() > 0) {

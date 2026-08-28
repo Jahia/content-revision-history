@@ -28,6 +28,7 @@ import java.util.Locale;
 import java.util.Set;
 import java.util.TimeZone;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 import java.util.regex.Pattern;
 
@@ -120,10 +121,15 @@ public class RevisionSnapshotService {
         // write the record of having lost it.
         AtomicReference<String> concurrencyFailure = new AtomicReference<>();
 
+        // Same construction attemptCapture uses, so the two names cannot drift apart.
+        final String snapshotName = NAME_STAMP.format(instant) + '-'
+                + contentHash.substring(0, HASH_SUFFIX_LENGTH);
+
         CaptureStatus status = JCRTemplate.getInstance().doExecuteWithSystemSessionAsUser(null, WORKSPACE, null, (JCRCallback<CaptureStatus>) session -> withConcurrencyRetry(
                         () -> attemptCapture(session, siteKey, pageUuid, language, payload,
                                 contentHash, instant, principal, sourceUrl),
                         () -> session.refresh(false),
+                        () -> storedByTheWinner(session, siteKey, pageUuid, language, snapshotName),
                         concurrencyFailure::set,
                         pageUuid, language));
 
@@ -208,21 +214,24 @@ public class RevisionSnapshotService {
      *                      the race; the caller turns it into the durable {@code FAILED} record
      */
     static CaptureStatus withConcurrencyRetry(CaptureAttempt attempt, SessionReset reset,
+                                              BooleanSupplier storedByTheWinner,
                                               Consumer<String> recordFailure,
                                               String pageUuid, String language)
             throws RepositoryException {
         try {
             return attempt.run();
-        } catch (ItemExistsException sameSnapshot) {
-            return benignCollision(reset, pageUuid, language, sameSnapshot);
+        } catch (ItemExistsException collision) {
+            return resolveCollision(reset, storedByTheWinner, recordFailure,
+                    pageUuid, language, collision);
         } catch (InvalidItemStateException conflict) {
             logger.warn("Concurrent repository change while capturing page {} [{}]; retrying"
                     + " once against a refreshed session", pageUuid, language, conflict);
             reset.reset();
             try {
                 return attempt.run();
-            } catch (ItemExistsException sameSnapshot) {
-                return benignCollision(reset, pageUuid, language, sameSnapshot);
+            } catch (ItemExistsException collision) {
+                return resolveCollision(reset, storedByTheWinner, recordFailure,
+                        pageUuid, language, collision);
             } catch (InvalidItemStateException stillConflicting) {
                 reset.reset();
                 String message = "Lost a concurrent repository race twice; the snapshot was not"
@@ -236,15 +245,63 @@ public class RevisionSnapshotService {
         }
     }
 
-    private static CaptureStatus benignCollision(SessionReset reset, String pageUuid,
-                                                 String language, ItemExistsException collision)
+    /**
+     * Decides whether an {@link ItemExistsException} really was the harmless case.
+     *
+     * <p>It is harmless only when a node exists under the <em>deterministic snapshot name</em>,
+     * whose suffix is the content hash: that proves the winner stored exactly what this thread
+     * was about to store. The exception can however come from anywhere in the attempt, and the
+     * first thing an attempt does is create the shared {@code <pageUuid>} folder -- so two
+     * languages of a never-before-captured page race there, and the loser's collision has
+     * nothing to do with snapshot content. Treating that as benign discarded a genuinely new
+     * snapshot and reported {@code UNCHANGED}: a real revision erased while asserting that
+     * nothing changed, which is the failure this module exists to prevent.
+     */
+    private static CaptureStatus resolveCollision(SessionReset reset,
+                                                  BooleanSupplier storedByTheWinner,
+                                                  Consumer<String> recordFailure,
+                                                  String pageUuid, String language,
+                                                  ItemExistsException collision)
             throws RepositoryException {
-        // Same deterministic name means same content for the same publication: whoever won the
-        // race stored exactly what this thread was about to store. Nothing was lost.
-        logger.info("Snapshot for page {} [{}] was written concurrently under the same name: {}",
-                pageUuid, language, collision.getMessage());
         reset.reset();
-        return CaptureStatus.UNCHANGED;
+        if (storedByTheWinner.getAsBoolean()) {
+            logger.info("Snapshot for page {} [{}] was written concurrently under the same name:"
+                    + " {}", pageUuid, language, collision.getMessage());
+            return CaptureStatus.UNCHANGED;
+        }
+        String message = "Lost a concurrent creation race and no snapshot exists under the"
+                + " expected name, so nothing of this capture was stored ("
+                + collision.getClass().getSimpleName() + ": " + collision.getMessage() + ")";
+        logger.error("Revision snapshot for page {} [{}] was NOT stored: {}",
+                pageUuid, language, message, collision);
+        recordFailure.accept(message);
+        return CaptureStatus.FAILED;
+    }
+
+    /**
+     * Absolute path of the deterministically-named snapshot for one capture.
+     *
+     * <p>Three other places build this same path by concatenation; consolidating them is a
+     * reported finding of its own and deliberately not folded into this fix.
+     */
+    private static String snapshotPath(String siteKey, String pageUuid, String language,
+                                       String snapshotName) {
+        return "/sites/" + siteKey + "/contents/" + ROOT_FOLDER_NAME
+                + '/' + pageUuid + '/' + language + '/' + snapshotName;
+    }
+
+    /** @return true only when the winner's snapshot is actually visible to this session */
+    private static boolean storedByTheWinner(JCRSessionWrapper session, String siteKey,
+                                             String pageUuid, String language,
+                                             String snapshotName) {
+        try {
+            return session.nodeExists(snapshotPath(siteKey, pageUuid, language, snapshotName));
+        } catch (RepositoryException unreadable) {
+            // Unable to prove the winner stored it, so do not claim UNCHANGED on its behalf.
+            logger.warn("Could not confirm whether snapshot {} exists after a collision on page"
+                    + " {} [{}]", snapshotName, pageUuid, language, unreadable);
+            return false;
+        }
     }
 
     /**
@@ -393,7 +450,19 @@ public class RevisionSnapshotService {
     private JCRNodeWrapper childOrCreate(JCRNodeWrapper parent, String name, boolean lockDown)
             throws RepositoryException {
         try {
-            return parent.getNode(name);
+            JCRNodeWrapper adopted = parent.getNode(name);
+            // A folder this module did not create -- a contributor tidying /contents in jContent,
+            // a restored backup, a half-finished earlier run -- used to be adopted with whatever
+            // permissions it already had, which for anything under /contents means inherited
+            // contributor access to the entire evidentiary record. Re-assert the lockdown on
+            // adoption. It is a no-op on every folder we created ourselves, so this costs one
+            // property read per capture, not a write.
+            if (lockDown && !adopted.getAclInheritanceBreak()) {
+                logger.warn("Adopted an existing {} whose permissions were still inherited from"
+                        + " the site; breaking inheritance now", adopted.getPath());
+                restrictAccess(adopted);
+            }
+            return adopted;
         } catch (PathNotFoundException notThereYet) {
             JCRNodeWrapper created = parent.addNode(name, FOLDER_TYPE);
             if (lockDown) {
@@ -418,7 +487,7 @@ public class RevisionSnapshotService {
      */
     private void restrictAccess(JCRNodeWrapper root) throws RepositoryException {
         root.setAclInheritanceBreak(true);
-        logger.info("Created {} with inherited permissions broken; snapshots are system-only",
+        logger.info("Broke inherited permissions on {}; snapshots are system-only",
                 root.getPath());
     }
 

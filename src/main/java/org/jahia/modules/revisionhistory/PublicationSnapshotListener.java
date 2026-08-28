@@ -213,6 +213,16 @@ public class PublicationSnapshotListener implements PublicationEventListener {
             } catch (RepositoryException e) {
                 logger.warn("Could not determine languages for page {}", entry.getKey(), e);
             }
+            if (entry.getValue().isEmpty()) {
+                // Every later stage drops a page with no languages, and each drop used to be
+                // silent, so the publication ended up indistinguishable from "nothing changed".
+                // There is no durable status to write here: the status is keyed BY language, and
+                // the language is precisely what could not be resolved. Loud is the best
+                // available answer.
+                logger.error("Page {} published with no resolvable language (site unreadable, or"
+                        + " no active live language); no snapshot will be captured for it",
+                        entry.getKey());
+            }
         }
     }
 
@@ -279,6 +289,8 @@ public class PublicationSnapshotListener implements PublicationEventListener {
         }
         String payload = SnapshotCaptureJob.encode(pages, languages);
         if (payload.isEmpty()) {
+            logger.error("Publication touched {} revisioned page(s) but none could be encoded for"
+                    + " capture; no snapshot job was scheduled", pages.size());
             return;
         }
         try {
@@ -294,6 +306,51 @@ public class PublicationSnapshotListener implements PublicationEventListener {
             logger.info("Scheduled revision snapshot capture for {} page(s)", pages.size());
         } catch (Exception e) {
             logger.error("Could not schedule the revision snapshot capture job for {}", payload, e);
+            recordSchedulingFailure(languagesByPage, e);
+        }
+    }
+
+    /**
+     * Writes a durable FAILED status for every page/language the job would have captured.
+     *
+     * <p>Unlike the no-language case above, the languages are known here, so the failure can be
+     * recorded where an operator will actually look. Without this the folder kept whatever the
+     * previous publication left on it, and the newest publication looked already captured when
+     * it had never been attempted.
+     */
+    private void recordSchedulingFailure(Map<String, Set<String>> languagesByPage, Exception cause) {
+        RevisionSnapshotService service = new RevisionSnapshotService();
+        String message = "The capture job could not be scheduled ("
+                + cause.getClass().getSimpleName() + ": " + cause.getMessage() + ")";
+        for (Map.Entry<String, Set<String>> entry : languagesByPage.entrySet()) {
+            for (String language : entry.getValue()) {
+                try {
+                    service.recordStatus(siteKeyOf(entry.getKey()), entry.getKey(), language,
+                            CaptureStatus.FAILED, message);
+                } catch (RuntimeException alsoFailed) {
+                    // Recording the failure must never mask the failure being recorded.
+                    // recordStatus declares no checked exception because it swallows its own
+                    // repository errors internally -- which is a separate reported finding, not
+                    // one this batch touches.
+                    logger.error("Could not record the scheduling failure for page {} [{}]",
+                            entry.getKey(), language, alsoFailed);
+                }
+            }
+        }
+    }
+
+    /** @return the site key owning the page, or "unknown" when it cannot be resolved */
+    private String siteKeyOf(String pageUuid) {
+        try {
+            return JCRTemplate.getInstance().doExecuteWithSystemSessionAsUser(null, WORKSPACE, null,
+                    (JCRCallback<String>) session -> {
+                        JCRNodeWrapper page = session.getNodeByIdentifier(pageUuid);
+                        JCRSiteNode site = page.getResolveSite();
+                        return site == null ? "unknown" : site.getSiteKey();
+                    });
+        } catch (RepositoryException | RuntimeException unresolvable) {
+            logger.warn("Could not resolve the site owning page {}", pageUuid, unresolvable);
+            return "unknown";
         }
     }
 }

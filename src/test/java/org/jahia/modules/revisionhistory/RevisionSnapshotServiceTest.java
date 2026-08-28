@@ -43,6 +43,8 @@ class RevisionSnapshotServiceTest {
         CaptureStatus result = RevisionSnapshotService.withConcurrencyRetry(
                 () -> CaptureStatus.STORED,
                 () -> resetCalls.add("reset"),
+                () -> { throw new AssertionError("the collision predicate must not be consulted"
+                        + " when the attempt succeeds"); },
                 failuresRecorded::add,
                 "11111111-1111-1111-1111-111111111111", "en");
 
@@ -65,7 +67,7 @@ class RevisionSnapshotServiceTest {
 
         // Act
         CaptureStatus result = RevisionSnapshotService.withConcurrencyRetry(
-                attempt, () -> resetCalls.add("reset"), failuresRecorded::add,
+                attempt, () -> resetCalls.add("reset"), () -> true, failuresRecorded::add,
                 "11111111-1111-1111-1111-111111111111", "en");
 
         // Assert
@@ -73,6 +75,60 @@ class RevisionSnapshotServiceTest {
                 "a same-name collision proves identical content, never a lost write");
         assertEquals(1, resetCalls.size(), "the transient session state must be discarded exactly once");
         assertTrue(failuresRecorded.isEmpty(), "a benign collision is not a failure");
+    }
+
+    @Test
+    @DisplayName("ItemExistsException with no snapshot under the expected name is FAILED, never UNCHANGED")
+    void structuralCollisionIsNotTreatedAsBenign() throws RepositoryException {
+        // Arrange -- an ItemExistsException can come from anywhere in the attempt, and the first
+        // thing an attempt does is create the shared <pageUuid> folder. Two languages of a
+        // never-before-captured page race there, so the loser's collision says nothing about
+        // snapshot content. A node under the deterministic name (its suffix IS the content hash)
+        // is the only proof that the winner stored what this thread meant to store.
+        List<String> resetCalls = new ArrayList<>();
+        List<String> failuresRecorded = new ArrayList<>();
+        RevisionSnapshotService.CaptureAttempt attempt = () -> {
+            throw new ItemExistsException("/sites/x/contents/revision-history/<uuid> already exists");
+        };
+
+        // Act
+        CaptureStatus result = RevisionSnapshotService.withConcurrencyRetry(
+                attempt, () -> resetCalls.add("reset"), () -> false, failuresRecorded::add,
+                "11111111-1111-1111-1111-111111111111", "en");
+
+        // Assert
+        assertEquals(CaptureStatus.FAILED, result,
+                "reporting UNCHANGED here would erase a real revision while asserting nothing changed");
+        assertEquals(1, resetCalls.size(), "the transient session state must still be discarded");
+        assertEquals(1, failuresRecorded.size(), "the loss must be recorded durably, not swallowed");
+        assertTrue(failuresRecorded.get(0).contains("ItemExistsException"),
+                "the durable record must name the exception so an operator can diagnose it");
+    }
+
+    @Test
+    @DisplayName("A non-benign collision on the RETRY is FAILED too, not UNCHANGED")
+    void structuralCollisionOnRetryIsAlsoFailed() throws RepositoryException {
+        // Arrange -- the retry path has its own ItemExistsException catch, and it must apply the
+        // same proof or the narrowing is only half done.
+        List<String> resetCalls = new ArrayList<>();
+        List<String> failuresRecorded = new ArrayList<>();
+        boolean[] first = {true};
+        RevisionSnapshotService.CaptureAttempt attempt = () -> {
+            if (first[0]) {
+                first[0] = false;
+                throw new InvalidItemStateException("stale item state");
+            }
+            throw new ItemExistsException("structural collision on retry");
+        };
+
+        // Act
+        CaptureStatus result = RevisionSnapshotService.withConcurrencyRetry(
+                attempt, () -> resetCalls.add("reset"), () -> false, failuresRecorded::add,
+                "11111111-1111-1111-1111-111111111111", "en");
+
+        // Assert
+        assertEquals(CaptureStatus.FAILED, result);
+        assertEquals(1, failuresRecorded.size());
     }
 
     @Test
@@ -89,7 +145,7 @@ class RevisionSnapshotServiceTest {
 
         // Act
         CaptureStatus result = RevisionSnapshotService.withConcurrencyRetry(
-                attempt, () -> resetCalls.add("reset"), failuresRecorded::add,
+                attempt, () -> resetCalls.add("reset"), () -> true, failuresRecorded::add,
                 "11111111-1111-1111-1111-111111111111", "en");
 
         // Assert
@@ -118,7 +174,7 @@ class RevisionSnapshotServiceTest {
 
         // Act
         CaptureStatus result = RevisionSnapshotService.withConcurrencyRetry(
-                attempt, () -> resetCalls.add("reset"), failuresRecorded::add,
+                attempt, () -> resetCalls.add("reset"), () -> true, failuresRecorded::add,
                 "11111111-1111-1111-1111-111111111111", "en");
 
         // Assert
@@ -146,7 +202,7 @@ class RevisionSnapshotServiceTest {
 
         // Act
         CaptureStatus result = RevisionSnapshotService.withConcurrencyRetry(
-                attempt, () -> resetCalls.add("reset"), failuresRecorded::add,
+                attempt, () -> resetCalls.add("reset"), () -> true, failuresRecorded::add,
                 "11111111-1111-1111-1111-111111111111", "en");
 
         // Assert
