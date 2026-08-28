@@ -29,6 +29,25 @@ yarn run e2e:debug
 
 ## Module-specific notes
 
+**Use Yarn Classic locally, not the machine default.** `package.json` declares
+`packageManager: yarn@1.22.22`, the test image runs Yarn Classic 1.22.19, and `yarn.lock` is
+Classic v1 format. If your global `yarn` is Berry (v2+), running it here **silently rewrites
+the lockfile into Berry format**, which Classic then cannot read — it discards it and resolves
+fresh, so the lockfile stops pinning anything for the container that actually runs the tests.
+
+Install an isolated Classic binary and use that for every local `yarn` command:
+
+```bash
+npm i -g yarn@1.22.22 --prefix /tmp/yarn-classic
+/tmp/yarn-classic/bin/yarn install
+/tmp/yarn-classic/bin/yarn lint
+```
+
+You can tell which format is committed at a glance: Classic starts with
+`# yarn lockfile v1`, Berry with `__metadata:`. A healthy container build shows no
+`success Saved lockfile` line — if it appears, the lockfile was ignored.
+
+
 **Host ports are shifted to 8081 / 8001.** A local Jahia distribution in this workspace
 already owns 8080/8000. Cypress reaches Jahia at `jahia:8080` on the `stack` network, so the
 CI path is unaffected; only host-side debugging uses the mapped ports (Jahia at
