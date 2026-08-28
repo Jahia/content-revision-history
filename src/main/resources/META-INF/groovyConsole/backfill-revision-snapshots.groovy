@@ -70,7 +70,7 @@ def captureMethod = serviceClass.getMethod('captureIfChanged',
 
 // ------------------------------------------------------------------ SETTINGS
 //
-// Edit these three, then run. The console loads this script into its textarea, so the edit is
+// Edit these, then run. The console loads this script into its textarea, so the edit is
 // local to the run and never touches the shipped file.
 //
 // They are plain constants rather than console parameters on purpose: the console's
@@ -81,6 +81,18 @@ def captureMethod = serviceClass.getMethod('captureIfChanged',
 String PAGE_PATH = ''          // e.g. '/sites/digitall/home/maintenance-and-support-policy'
 String LANGUAGE  = 'en'
 boolean DRY_RUN  = true        // false actually writes snapshots
+
+// Reconstruction renders the DEFAULT workspace over this node's own HTTP connector, so it needs
+// an account that may read it. There is deliberately NO default: a hardcoded pair would ship a
+// working credential inside the module jar, and -- worse -- would silently stop working on any
+// instance that changed it, at which point every fetch 401s. Combined with the refusal below
+// that is merely noisy; without it, it wrote empty snapshots as authoritative history.
+String RENDER_USER   = ''
+String RENDER_SECRET = ''      // that account's password
+
+// This node's own HTTP connector. Change it if Jahia is not on 8080, or if the loopback
+// interface is not the one serving plain HTTP.
+String BASE_URL = 'http://127.0.0.1:8080'
 
 // Proceed even if the validation below cannot explain a difference. Read the report first: an
 // unexplained difference means the reconstruction produced text that was never captured, which
@@ -95,12 +107,19 @@ String pagePath = PAGE_PATH?.trim()
 String language = LANGUAGE?.trim() ?: 'en'
 boolean dryRun = DRY_RUN
 boolean allowUnexplained = ALLOW_UNEXPLAINED
-String baseUrl = 'http://127.0.0.1:8080'
+String baseUrl = BASE_URL?.trim() ?: 'http://127.0.0.1:8080'
+String credentials = (RENDER_USER ?: '').trim() + ':' + (RENDER_SECRET ?: '')
 
 def report = new StringBuilder()
 if (!pagePath) {
     return 'Set PAGE_PATH at the top of this script, for example ' +
            '/sites/digitall/home/maintenance-and-support-policy'
+}
+if (!(RENDER_USER ?: '').trim() || !(RENDER_SECRET ?: '')) {
+    return 'Set RENDER_USER and RENDER_SECRET at the top of this script. They must name an ' +
+           'account that can read the default workspace of ' + pagePath + '. There is no ' +
+           'default: an unauthenticated or wrongly-authenticated run cannot render the page, ' +
+           'and this script must never store what it could not read.'
 }
 
 // ------------------------------------------------------------------ composition
@@ -116,10 +135,25 @@ def SELF_RENDERING = ['jnt:bigText', 'crh:revisionHistory'] as Set
 def fetchMarkdown = { String path, long millis ->
     def url = new URL("${baseUrl}/cms/render/default/${language}${path}.markdown?v=${millis}")
     def conn = url.openConnection()
-    conn.setRequestProperty('Authorization', 'Basic ' + "root:root".bytes.encodeBase64().toString())
+    conn.setRequestProperty('Authorization', 'Basic ' + credentials.bytes.encodeBase64().toString())
     conn.connectTimeout = 10000
     conn.readTimeout = 30000
-    return conn.responseCode == 200 ? conn.inputStream.getText('UTF-8') : ''
+    int code = conn.responseCode
+    if (code != 200) {
+        // Returning '' here spliced a hole into a reconstruction that is about to be written as
+        // an authoritative historical record. The self-validation gate cannot catch it, because
+        // the gate only runs on instants that already have a captured snapshot -- and a page
+        // with no captured history is exactly the page this script exists for. So the only safe
+        // answer to a failed render is to refuse the whole run.
+        throw new IllegalStateException(
+            "Render of ${path} at ${millis} returned HTTP ${code}. Refusing to continue: a " +
+            "partial reconstruction would be stored as evidence. " +
+            ((code == 401 || code == 403)
+                ? "Check RENDER_USER / RENDER_SECRET -- that account must be able to read the " +
+                  "default workspace of ${path}."
+                : "Check BASE_URL (${baseUrl}) and that ${path} renders in the default workspace."))
+    }
+    return conn.inputStream.getText('UTF-8')
 }
 
 /** Mirrors jnt_content/markdown: emit a jcr:title heading, then recurse; leaves render themselves. */
