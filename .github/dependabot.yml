@@ -25,6 +25,12 @@ updates:
       # these belong to a deliberate platform upgrade, never to an automated PR.
       - dependency-name: "org.jahia.modules:jahia-modules"
       - dependency-name: "org.jahia.server:*"
+      # JUnit 6 is compiled to class file 61 (Java 17); this module targets Java 11, which the
+      # Jahia 8.2 platform fixes for us (Build-Jdk-Spec: 11). A major bump therefore cannot
+      # compile here -- it fails with "cannot access org.junit.jupiter.api.Test" -- so block
+      # majors while still receiving 5.x updates.
+      - dependency-name: "org.junit.jupiter:*"
+        update-types: ["version-update:semver-major"]
       # NOTE: jsoup is deliberately NOT ignored. It is EMBEDDED in the bundle rather than
       # imported, so our copy is private to this module and can be patched independently of the
       # version the platform ships. Suppressing it would have hidden the advisory that took it
