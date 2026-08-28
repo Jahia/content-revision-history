@@ -62,6 +62,13 @@ public final class MarkdownNormalizer {
 
     private static final Pattern URL_SCHEME = Pattern.compile("^([a-zA-Z][a-zA-Z0-9+.\\-]*):");
 
+    /**
+     * ASCII control characters (C0 plus DEL). Browsers remove these from a URL before parsing
+     * its scheme, so the allow-list has to remove them first as well -- see
+     * {@link #sanitizeUrl(String)}.
+     */
+    private static final Pattern URL_CONTROL_CHARS = Pattern.compile("[\\x00-\\x1F\\x7F]");
+
     /** Block-level tags handled generically: separated from surrounding content by a blank line. */
     private static final Set<String> BLOCK_TAGS = Set.of(
             "p", "div", "section", "article", "header", "footer", "aside",
@@ -228,8 +235,33 @@ public final class MarkdownNormalizer {
 
     private static void renderPre(Element el, StringBuilder out) {
         ensureBlankLine(out);
-        out.append("```\n").append(el.wholeText()).append("\n```");
+        String content = el.wholeText();
+        String fence = fenceLongerThanAnyRunIn(content);
+        out.append(fence).append('\n').append(content).append('\n').append(fence);
         ensureBlankLine(out);
+    }
+
+    /**
+     * Picks a fence that the fenced content cannot close.
+     *
+     * <p>A {@code <pre>} whose text already contains a triple backtick would otherwise end the
+     * block early, and everything after it -- attacker-supplied text that was meant to be inert
+     * code -- would be parsed as Markdown structure by any downstream renderer. CommonMark
+     * closes a fence only on a run of backticks at least as long as the opening one, so an
+     * opening fence one backtick longer than the longest run inside is unbreakable.
+     */
+    static String fenceLongerThanAnyRunIn(String content) {
+        int longestRun = 0;
+        int run = 0;
+        for (int i = 0; i < content.length(); i++) {
+            if (content.charAt(i) == '`') {
+                run++;
+                longestRun = Math.max(longestRun, run);
+            } else {
+                run = 0;
+            }
+        }
+        return "`".repeat(Math.max(3, longestRun + 1));
     }
 
     private static void renderList(Element list, StringBuilder out, boolean ordered, int depth) {
@@ -277,12 +309,21 @@ public final class MarkdownNormalizer {
         }
     }
 
-    /** Allow-lists link/image URL schemes; site-relative paths (no scheme) are always allowed. */
+    /**
+     * Allow-lists link/image URL schemes; site-relative paths (no scheme) are always allowed.
+     *
+     * <p>ASCII control characters are stripped <em>before</em> the scheme is matched, not after.
+     * {@code trim()} alone removes only leading and trailing whitespace, so
+     * {@code java&#9;script:alert(1)} -- which jsoup decodes to {@code java\tscript:alert(1)} --
+     * would fail to match the scheme pattern and fall through to the "no scheme, safe relative
+     * URL" branch untouched. Browsers strip tab, CR and LF from a URL before parsing its scheme,
+     * so that string is {@code javascript:} to them and must be to the allow-list too.
+     */
     private static String sanitizeUrl(String rawHref) {
         if (rawHref == null) {
             return null;
         }
-        String href = rawHref.trim();
+        String href = URL_CONTROL_CHARS.matcher(rawHref).replaceAll("").trim();
         if (href.isEmpty() || href.startsWith("//")) {
             return null;
         }

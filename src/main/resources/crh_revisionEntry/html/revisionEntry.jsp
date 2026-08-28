@@ -1,5 +1,6 @@
 <%@ taglib prefix="c" uri="http://java.sun.com/jsp/jstl/core" %>
 <%@ taglib prefix="fmt" uri="http://java.sun.com/jsp/jstl/fmt" %>
+<%@ taglib prefix="fn" uri="http://java.sun.com/jsp/jstl/functions" %>
 <%--
   Renders a single crh:revisionEntry as a self-contained record (<article> + <dl>).
   Designed to work standalone from just `currentNode` -- no data is threaded down
@@ -45,6 +46,14 @@
 <c:set var="previousEntry" value=""/>
 <c:set var="foundCurrent" value="false"/>
 <c:forEach items="${parentHistory.nodes}" var="sibling">
+    <%-- SECURITY: <fmt:message> writes its output unescaped -- it has no escapeXml
+         attribute, unlike <c:out>. revisionLabel is free text authored by an editor, so every
+         value interpolated below MUST be escaped here; escaping it only in the <h3> above is
+         not enough. The message text itself comes from our own resource bundle and is trusted. --%>
+    <c:set var="currentLabelSafe" value="${fn:escapeXml(currentLabel)}"/>
+    <c:set var="previousLabelSafe" value="${fn:escapeXml(previousLabel)}"/>
+    <c:set var="humanDateSafe" value="${fn:escapeXml(humanDate)}"/>
+    <c:set var="previousHumanDateSafe" value="${fn:escapeXml(previousHumanDate)}"/>
     <c:choose>
         <c:when test="${foundCurrent and empty previousEntry}">
             <c:set var="previousEntry" value="${sibling}"/>
@@ -88,13 +97,13 @@
                  the accessibility notes in the parent agent's summary for what the host site
                  must provide (>=44x44 CSS px target, >=2px/3:1 visible focus outline). --%>
             <button type="button" class="crh-compare-btn"
-                    data-crh-current="${currentNode.identifier}"
-                    data-crh-previous="${previousEntry.identifier}">
+                    data-crh-current="${fn:escapeXml(currentNode.identifier)}"
+                    data-crh-previous="${fn:escapeXml(previousEntry.identifier)}">
                 <fmt:message key="crh_revisionEntry.compareWithPrevious">
-                    <fmt:param value="${currentLabel}"/>
-                    <fmt:param value="${humanDate}"/>
-                    <fmt:param value="${previousLabel}"/>
-                    <fmt:param value="${previousHumanDate}"/>
+                    <fmt:param value="${currentLabelSafe}"/>
+                    <fmt:param value="${humanDateSafe}"/>
+                    <fmt:param value="${previousLabelSafe}"/>
+                    <fmt:param value="${previousHumanDateSafe}"/>
                 </fmt:message>
             </button>
         </c:when>
@@ -103,7 +112,7 @@
                  never a disabled/dead control with no explanation. --%>
             <p class="crh-compare-unavailable">
                 <fmt:message key="crh_revisionEntry.compareUnavailable">
-                    <fmt:param value="${currentLabel}"/>
+                    <fmt:param value="${currentLabelSafe}"/>
                 </fmt:message>
             </p>
         </c:otherwise>

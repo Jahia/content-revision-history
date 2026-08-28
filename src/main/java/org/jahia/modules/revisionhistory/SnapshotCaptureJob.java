@@ -62,6 +62,10 @@ public class SnapshotCaptureJob extends BackgroundJob {
 
     @Override
     public void executeJahiaJob(JobExecutionContext context) {
+        // Deregister immediately: once we are running, this job must not be cancelled by
+        // a later module stop, and it records its own outcome durably from here on.
+        PublicationSnapshotListener.jobStarted(context.getJobDetail().getName(),
+                context.getJobDetail().getGroup());
         JobDataMap data = context.getJobDetail().getJobDataMap();
         String encoded = data.getString(JOB_PAGES);
         long timestamp = data.containsKey(JOB_PUBLICATION_TIMESTAMP)
@@ -153,8 +157,7 @@ public class SnapshotCaptureJob extends BackgroundJob {
 
     /** @return the page, or null when it no longer exists or no longer opts in */
     private PageRef resolvePage(String pageUuid) throws RepositoryException {
-        return JCRTemplate.getInstance().doExecuteWithSystemSession(null, WORKSPACE,
-                (JCRCallback<PageRef>) session -> {
+        return JCRTemplate.getInstance().doExecuteWithSystemSessionAsUser(null, WORKSPACE, null, (JCRCallback<PageRef>) session -> {
                     try {
                         JCRNodeWrapper node = session.getNodeByIdentifier(pageUuid);
                         if (!node.isNodeType(REVISIONED_PAGE_MIXIN)) {

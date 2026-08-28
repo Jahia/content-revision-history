@@ -14,7 +14,9 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
+import java.util.LinkedHashSet;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Renders a page's Markdown view <em>as the public sees it</em>, by fetching the live page
@@ -44,7 +46,11 @@ final class GuestMarkdownFetcher {
 
     private static final int CONNECT_TIMEOUT_MILLIS = 5_000;
     private static final int READ_TIMEOUT_MILLIS = 30_000;
-    private static final String DEFAULT_BASE_URL = "http://127.0.0.1:8080";
+    private static final int DEFAULT_PORT = 8080;
+    private static final String DEFAULT_BASE_URL = "http://127.0.0.1:" + DEFAULT_PORT;
+
+    /** Guards the misconfiguration ERROR so it is emitted once per JVM, not once per capture. */
+    private static final AtomicBoolean FALLBACK_REPORTED = new AtomicBoolean(false);
 
     /** Result of one fetch: either a body, or a reason there is none. */
     static final class Fetched {
@@ -198,22 +204,84 @@ final class GuestMarkdownFetcher {
     }
 
     private static int detectHttpPort() {
+        ConnectorProbe probe = probeConnectors(ManagementFactory.getPlatformMBeanServer());
+        if (probe.httpPort != null) {
+            return probe.httpPort;
+        }
+        // Once per JVM, not once per capture: the condition is a deployment-wide
+        // misconfiguration, and repeating it per page would bury it in its own noise.
+        if (FALLBACK_REPORTED.compareAndSet(false, true)) {
+            logger.error(misconfigurationMessage(probe), probe.failure);
+        }
+        return DEFAULT_PORT;
+    }
+
+    /** What a JMX connector sweep found, or why it found nothing usable. */
+    static final class ConnectorProbe {
+        /** Port of the first usable plain-HTTP connector, or null when there is none. */
+        final Integer httpPort;
+        /** Schemes of the connectors that were present but not plain HTTP, e.g. {@code https}. */
+        final Set<String> otherSchemes;
+        /** Non-null only when the sweep itself failed. */
+        final Exception failure;
+
+        ConnectorProbe(Integer httpPort, Set<String> otherSchemes, Exception failure) {
+            this.httpPort = httpPort;
+            this.otherSchemes = otherSchemes;
+            this.failure = failure;
+        }
+    }
+
+    /**
+     * Sweeps the container's connector MBeans for a plain-HTTP listener.
+     *
+     * <p>Also collects the schemes it rejected, because "there is an https connector and no http
+     * one" is a diagnosis, while "the port could not be read" is only a symptom.
+     */
+    static ConnectorProbe probeConnectors(MBeanServer server) {
+        Set<String> otherSchemes = new LinkedHashSet<>();
         try {
-            MBeanServer server = ManagementFactory.getPlatformMBeanServer();
             Set<ObjectName> connectors = server.queryNames(new ObjectName("*:type=Connector,*"), null);
             for (ObjectName connector : connectors) {
                 Object scheme = server.getAttribute(connector, "scheme");
                 Object port = server.getAttribute(connector, "port");
-                if ("http".equals(scheme) && port instanceof Integer && (Integer) port > 0) {
-                    return (Integer) port;
+                boolean usablePort = port instanceof Integer && (Integer) port > 0;
+                if ("http".equals(scheme) && usablePort) {
+                    return new ConnectorProbe((Integer) port, otherSchemes, null);
+                }
+                if (scheme != null) {
+                    otherSchemes.add(String.valueOf(scheme));
                 }
             }
         } catch (Exception e) {
-            logger.warn("Could not read the HTTP connector port from JMX, falling back to {}."
-                    + " Set -D{} if that is wrong.", DEFAULT_BASE_URL,
-                    RevisionHistoryConstants.SYSPROP_CAPTURE_BASE_URL, e);
+            return new ConnectorProbe(null, otherSchemes, e);
         }
-        return 8080;
+        return new ConnectorProbe(null, otherSchemes, null);
+    }
+
+    /**
+     * The one message an operator gets for this condition, so it has to be self-contained:
+     * what broke, what it costs, and the exact property that fixes it.
+     */
+    static String misconfigurationMessage(ConnectorProbe probe) {
+        String cause;
+        if (probe.failure != null) {
+            cause = "the connector MBeans could not be read (" + probe.failure + ")";
+        } else if (probe.otherSchemes.isEmpty()) {
+            cause = "this node exposes no connector MBean at all";
+        } else {
+            cause = "this node exposes only " + probe.otherSchemes + " connector(s)"
+                    + (probe.otherSchemes.contains("https")
+                    ? " -- it looks like an HTTPS-only deployment" : "");
+        }
+        return "CONTENT REVISION HISTORY IS MISCONFIGURED: no plain-HTTP connector was found, "
+                + cause + ". Guest capture renders will be attempted against " + DEFAULT_BASE_URL
+                + ", which almost certainly listens to nothing, so EVERY snapshot capture for "
+                + "EVERY page will be recorded FAILED until this is corrected. Set -D"
+                + RevisionHistoryConstants.SYSPROP_CAPTURE_BASE_URL
+                + "=<base URL of this node, reachable from this node itself> (for example -D"
+                + RevisionHistoryConstants.SYSPROP_CAPTURE_BASE_URL
+                + "=https://127.0.0.1:8443) and restart.";
     }
 
     private static String stripTrailingSlash(String url) {

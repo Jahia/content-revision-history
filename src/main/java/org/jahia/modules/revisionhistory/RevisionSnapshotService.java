@@ -27,6 +27,8 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 import java.util.TimeZone;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Consumer;
 import java.util.regex.Pattern;
 
 import static org.jahia.modules.revisionhistory.RevisionHistoryConstants.*;
@@ -113,39 +115,136 @@ public class RevisionSnapshotService {
         final Instant instant = captureInstant == null ? Instant.now() : captureInstant;
         final String principal = capturedBy == null ? CAPTURE_PRINCIPAL : capturedBy;
 
-        return JCRTemplate.getInstance().doExecuteWithSystemSession(null, WORKSPACE,
-                (JCRCallback<CaptureStatus>) session -> {
-                    JCRNodeWrapper folder = ensureFolder(session, siteKey, pageUuid, language);
-                    String name = NAME_STAMP.format(instant) + '-'
-                            + contentHash.substring(0, HASH_SUFFIX_LENGTH);
+        // Collected inside the capture session, recorded from a fresh one afterwards: the
+        // session that just lost a state conflict is the last thing that should be asked to
+        // write the record of having lost it.
+        AtomicReference<String> concurrencyFailure = new AtomicReference<>();
 
-                    if (contentHash.equals(stringProperty(folder, PROP_LATEST_HASH))
-                            || folder.hasNode(name)) {
-                        logger.debug("Snapshot for page {} [{}] unchanged (hash {}), skipping",
-                                pageUuid, language, contentHash);
-                        markUnchanged(folder, session, instant);
-                        return CaptureStatus.UNCHANGED;
-                    }
+        CaptureStatus status = JCRTemplate.getInstance().doExecuteWithSystemSessionAsUser(null, WORKSPACE, null, (JCRCallback<CaptureStatus>) session -> withConcurrencyRetry(
+                        () -> attemptCapture(session, siteKey, pageUuid, language, payload,
+                                contentHash, instant, principal, sourceUrl),
+                        () -> session.refresh(false),
+                        concurrencyFailure::set,
+                        pageUuid, language));
 
-                    long kept = pruneIfNeeded(folder);
-                    createSnapshot(session, folder, name, language, payload, contentHash,
-                            instant, principal, sourceUrl);
-                    updateFolderState(folder, name, contentHash, kept + 1, instant);
-                    try {
-                        session.save();
-                    } catch (ItemExistsException | InvalidItemStateException concurrent) {
-                        // Another node or thread wrote the very same snapshot name, which by
-                        // construction means the very same content for the very same
-                        // publication. Nothing was lost; do not turn it into an error.
-                        logger.info("Snapshot {} for page {} [{}] was written concurrently",
-                                name, pageUuid, language);
-                        session.refresh(false);
-                        return CaptureStatus.UNCHANGED;
-                    }
-                    logger.info("Stored revision snapshot {} for page {} [{}] under {}",
-                            name, pageUuid, language, folder.getPath());
-                    return CaptureStatus.STORED;
-                });
+        if (status == CaptureStatus.FAILED) {
+            String message = concurrencyFailure.get();
+            recordStatus(siteKey, pageUuid, language, CaptureStatus.FAILED,
+                    message == null ? "Concurrent repository conflict" : message);
+        }
+        return status;
+    }
+
+    /** One full capture attempt against an already-open session. Never retries on its own. */
+    private CaptureStatus attemptCapture(JCRSessionWrapper session, String siteKey,
+                                         String pageUuid, String language, byte[] payload,
+                                         String contentHash, Instant instant, String principal,
+                                         String sourceUrl) throws RepositoryException {
+
+        JCRNodeWrapper folder = ensureFolder(session, siteKey, pageUuid, language);
+        String name = NAME_STAMP.format(instant) + '-'
+                + contentHash.substring(0, HASH_SUFFIX_LENGTH);
+
+        if (contentHash.equals(stringProperty(folder, PROP_LATEST_HASH))
+                || folder.hasNode(name)) {
+            logger.debug("Snapshot for page {} [{}] unchanged (hash {}), skipping",
+                    pageUuid, language, contentHash);
+            markUnchanged(folder, session, instant);
+            return CaptureStatus.UNCHANGED;
+        }
+
+        long kept = pruneIfNeeded(folder);
+        createSnapshot(session, folder, name, language, payload, contentHash,
+                instant, principal, sourceUrl);
+        updateFolderState(folder, name, contentHash, kept + 1, instant);
+        session.save();
+        logger.info("Stored revision snapshot {} for page {} [{}] under {}",
+                name, pageUuid, language, folder.getPath());
+        return CaptureStatus.STORED;
+    }
+
+    // ------------------------------------------------------- concurrency retry policy
+
+    /** One full capture attempt; the unit {@link #withConcurrencyRetry} replays. */
+    @FunctionalInterface
+    interface CaptureAttempt {
+        CaptureStatus run() throws RepositoryException;
+    }
+
+    /** Discards the working session's transient state so an attempt can be replayed cleanly. */
+    @FunctionalInterface
+    interface SessionReset {
+        void reset() throws RepositoryException;
+    }
+
+    /**
+     * Runs a capture attempt, telling a benign name collision apart from a genuinely lost write.
+     *
+     * <p>These two must not share a branch, which is what the previous
+     * {@code catch (ItemExistsException | InvalidItemStateException)} did:
+     *
+     * <ul>
+     *   <li>{@link ItemExistsException} is benign by construction. The node name is
+     *       {@code <publication instant>-<content hash prefix>}, so the same name proves the
+     *       same content for the same publication: whoever won wrote exactly what this thread
+     *       was about to write. Nothing was lost, and {@code UNCHANGED} is the truth.</li>
+     *   <li>{@link InvalidItemStateException} is the generic JCR optimistic-concurrency
+     *       failure. It also fires when two system sessions mutate the <em>same parent
+     *       folder</em> ({@code crh:latestHash}, {@code crh:snapshotCount}, ...) carrying
+     *       <em>different</em> payloads -- two publications of genuinely different content
+     *       picked up by two Quartz threads. There the loser's snapshot was never persisted,
+     *       {@code refresh(false)} throws it away, and reporting {@code UNCHANGED} would erase
+     *       a real revision while asserting nothing changed. That is precisely the silent gap
+     *       this module exists to prevent.</li>
+     * </ul>
+     *
+     * <p>So the state conflict is retried once against a refreshed session -- which usually
+     * succeeds, the winner's write now being visible, and legitimately yields
+     * {@code UNCHANGED} if the winner happened to store identical content. If the retry loses
+     * as well, the outcome is {@link CaptureStatus#FAILED}, recorded durably on the folder.
+     * Never {@code UNCHANGED}.
+     *
+     * @param recordFailure sink for the failure detail, invoked only when both attempts lose
+     *                      the race; the caller turns it into the durable {@code FAILED} record
+     */
+    static CaptureStatus withConcurrencyRetry(CaptureAttempt attempt, SessionReset reset,
+                                              Consumer<String> recordFailure,
+                                              String pageUuid, String language)
+            throws RepositoryException {
+        try {
+            return attempt.run();
+        } catch (ItemExistsException sameSnapshot) {
+            return benignCollision(reset, pageUuid, language, sameSnapshot);
+        } catch (InvalidItemStateException conflict) {
+            logger.warn("Concurrent repository change while capturing page {} [{}]; retrying"
+                    + " once against a refreshed session", pageUuid, language, conflict);
+            reset.reset();
+            try {
+                return attempt.run();
+            } catch (ItemExistsException sameSnapshot) {
+                return benignCollision(reset, pageUuid, language, sameSnapshot);
+            } catch (InvalidItemStateException stillConflicting) {
+                reset.reset();
+                String message = "Lost a concurrent repository race twice; the snapshot was not"
+                        + " stored (" + stillConflicting.getClass().getSimpleName() + ": "
+                        + stillConflicting.getMessage() + ")";
+                logger.error("Revision snapshot for page {} [{}] was NOT stored: {}",
+                        pageUuid, language, message, stillConflicting);
+                recordFailure.accept(message);
+                return CaptureStatus.FAILED;
+            }
+        }
+    }
+
+    private static CaptureStatus benignCollision(SessionReset reset, String pageUuid,
+                                                 String language, ItemExistsException collision)
+            throws RepositoryException {
+        // Same deterministic name means same content for the same publication: whoever won the
+        // race stored exactly what this thread was about to store. Nothing was lost.
+        logger.info("Snapshot for page {} [{}] was written concurrently under the same name: {}",
+                pageUuid, language, collision.getMessage());
+        reset.reset();
+        return CaptureStatus.UNCHANGED;
     }
 
     /**
@@ -159,8 +258,7 @@ public class RevisionSnapshotService {
                              CaptureStatus status, String message) {
         try {
             validate(siteKey, pageUuid, language);
-            JCRTemplate.getInstance().doExecuteWithSystemSession(null, WORKSPACE,
-                    (JCRCallback<Void>) session -> {
+            JCRTemplate.getInstance().doExecuteWithSystemSessionAsUser(null, WORKSPACE, null, (JCRCallback<Void>) session -> {
                         JCRNodeWrapper folder = ensureFolder(session, siteKey, pageUuid, language);
                         folder.setProperty(PROP_LAST_CAPTURE_STATUS, status.name());
                         folder.setProperty(PROP_LAST_CAPTURE_MESSAGE, truncate(message));

@@ -12,6 +12,7 @@ import org.jahia.services.content.PublicationEventListener;
 import org.jahia.services.content.decorator.JCRSiteNode;
 import org.jahia.services.scheduler.BackgroundJob;
 import org.quartz.JobDetail;
+import org.quartz.Scheduler;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -23,7 +24,9 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.AbstractMap;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.Set;
 
 import static org.jahia.modules.revisionhistory.RevisionHistoryConstants.*;
@@ -53,14 +56,69 @@ public class PublicationSnapshotListener implements PublicationEventListener {
     private static final Logger logger = LoggerFactory.getLogger(PublicationSnapshotListener.class);
 
     /** Registered on module start; Jahia calls this back for every completed publication. */
+    /**
+     * Jobs this listener has enqueued but that may not have fired yet, as (name, group) pairs.
+     *
+     * <p>Jobs are scheduled in Quartz's RAM store, whose lifecycle is independent of this
+     * bundle. If the module is stopped between a publication and the job firing, Quartz would
+     * still try to run {@link SnapshotCaptureJob} from a stopped bundle, and whatever failed
+     * there would never reach the durable status recorder -- leaving the publication with no
+     * trace at all, which is exactly the silent gap this module exists to prevent.
+     */
+    private final Map<Map.Entry<String, String>, Boolean> scheduledJobs = new ConcurrentHashMap<>();
+
+    private static volatile PublicationSnapshotListener INSTANCE;
+
     public void start() {
+        INSTANCE = this;
         JCRPublicationService.getInstance().registerListener(this);
         logger.info("Content revision history: listening for publication events");
     }
 
     public void stop() {
+        INSTANCE = null;
         JCRPublicationService.getInstance().unregisterListener(this);
+        cancelOutstandingJobs();
         logger.info("Content revision history: stopped listening for publication events");
+    }
+
+    /**
+     * Deletes still-pending capture jobs so Quartz cannot execute them against a stopped
+     * bundle. A job already executing is left alone: its classes are loaded and it records its
+     * own outcome durably, so letting it finish is safer than interrupting it mid-write.
+     */
+    private void cancelOutstandingJobs() {
+        if (scheduledJobs.isEmpty()) {
+            return;
+        }
+        int cancelled = 0;
+        try {
+            Scheduler scheduler = ServicesRegistry.getInstance().getSchedulerService().getRAMScheduler();
+            for (Map.Entry<String, String> job : scheduledJobs.keySet()) {
+                try {
+                    if (scheduler.deleteJob(job.getKey(), job.getValue())) {
+                        cancelled++;
+                    }
+                } catch (Exception e) {
+                    logger.warn("Could not cancel pending capture job {}", job.getKey(), e);
+                }
+            }
+        } catch (Exception e) {
+            logger.warn("Could not reach the scheduler to cancel pending capture jobs", e);
+        } finally {
+            scheduledJobs.clear();
+        }
+        if (cancelled > 0) {
+            logger.info("Cancelled {} pending revision snapshot capture job(s) on module stop", cancelled);
+        }
+    }
+
+    /** Called by the job when it starts, so a completed job is not cancelled later. */
+    static void jobStarted(String name, String group) {
+        PublicationSnapshotListener active = INSTANCE;
+        if (active != null) {
+            active.scheduledJobs.remove(new AbstractMap.SimpleEntry<>(name, group));
+        }
     }
 
     @Override
@@ -104,8 +162,7 @@ public class PublicationSnapshotListener implements PublicationEventListener {
         if (infos == null || infos.isEmpty()) {
             return new LinkedHashMap<>();
         }
-        return JCRTemplate.getInstance().doExecuteWithSystemSession(null, WORKSPACE,
-                (JCRCallback<Map<String, Set<String>>>) session -> {
+        return JCRTemplate.getInstance().doExecuteWithSystemSessionAsUser(null, WORKSPACE, null, (JCRCallback<Map<String, Set<String>>>) session -> {
                     Map<String, Set<String>> languagesByPage = new LinkedHashMap<>();
                     Map<String, String> memo = new HashMap<>();
                     int inspected = 0;
@@ -229,6 +286,7 @@ public class PublicationSnapshotListener implements PublicationEventListener {
             // useRAM = true: the work is transient, and re-running it hours later against
             // content that has moved on would record the wrong thing, not a missing thing.
             ServicesRegistry.getInstance().getSchedulerService().scheduleJobNow(detail, true);
+            scheduledJobs.put(new AbstractMap.SimpleEntry<>(detail.getName(), detail.getGroup()), Boolean.TRUE);
             logger.info("Scheduled revision snapshot capture for {} page(s)", pages.size());
         } catch (Exception e) {
             logger.error("Could not schedule the revision snapshot capture job for {}", payload, e);

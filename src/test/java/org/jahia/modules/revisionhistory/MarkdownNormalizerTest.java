@@ -93,6 +93,56 @@ class MarkdownNormalizerTest {
     }
 
     @Test
+    @DisplayName("a control character inside the scheme cannot smuggle javascript: past the allow-list")
+    void controlCharactersCannotBypassTheUrlSchemeAllowList() {
+        // Browsers strip ASCII tab/newline before parsing a URL scheme, so "java\tscript:" is
+        // executable. Matching the allow-list against the raw href would miss it: the regex
+        // fails, and the value falls through to the "no scheme, safe relative URL" branch.
+        String[] smuggled = {
+            "java\tscript:alert(1)",
+            "java\nscript:alert(1)",
+            "java\rscript:alert(1)",
+            "JAVA\tSCRIPT:alert(1)",
+            "da\tta:text/html;base64,PHNjcmlwdD4="
+        };
+
+        for (String href : smuggled) {
+            String md = MarkdownNormalizer.normalize("<p><a href=\"" + href + "\">click</a></p>");
+
+            assertFalse(md.toLowerCase().contains("javascript:"),
+                    "javascript: survived via a control character: " + md);
+            assertFalse(md.toLowerCase().contains("data:text/html"),
+                    "data:text/html survived via a control character: " + md);
+        }
+    }
+
+    @Test
+    @DisplayName("keeps ordinary links working while blocking dangerous schemes")
+    void allowsSafeSchemes() {
+        assertTrue(MarkdownNormalizer.normalize("<p><a href=\"https://x.test/a\">t</a></p>")
+                .contains("https://x.test/a"));
+        assertTrue(MarkdownNormalizer.normalize("<p><a href=\"/relative/path\">t</a></p>")
+                .contains("/relative/path"));
+        assertFalse(MarkdownNormalizer.normalize("<p><a href=\"javascript:alert(1)\">t</a></p>")
+                .toLowerCase().contains("javascript:"));
+    }
+
+    @Test
+    @DisplayName("a code block containing a triple backtick cannot break out of its fence")
+    void fencedCodeCannotEscapeItsFence() {
+        // Otherwise the embedded fence closes the block early and the remainder is parsed as
+        // Markdown structure by any downstream renderer.
+        String md = MarkdownNormalizer.normalize(
+                "<pre>before\n```\n# not a heading\nafter</pre>");
+
+        int opening = md.indexOf("````");
+        assertTrue(opening >= 0, "expected a fence longer than the embedded one, got:\n" + md);
+        assertTrue(md.indexOf("````", opening + 4) > opening,
+                "expected a matching closing fence, got:\n" + md);
+        assertTrue(md.contains("# not a heading"), "code content must survive verbatim");
+    }
+
+    @Test
     @DisplayName("hash is stable for equal content and differs for changed content")
     void hashIsStableAndSensitive() {
         String a = MarkdownNormalizer.normalize("<p>Same content.</p>");
