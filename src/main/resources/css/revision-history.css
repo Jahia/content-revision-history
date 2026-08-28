@@ -1,0 +1,181 @@
+/*
+ * Content Revision History -- public revision list and comparison panel.
+ *
+ * Scoped entirely under .crh-* class names: this stylesheet loads into whatever site the
+ * component was dropped on, so it must not restyle anything it does not own. No element
+ * selectors, no resets.
+ *
+ * Colour is never the only carrier of meaning (WCAG 1.4.1): every added or removed line also
+ * carries a +/- marker and a visually-hidden text label, so the diff is still readable in
+ * monochrome, in forced-colours mode, and with this stylesheet absent altogether.
+ *
+ * Foreground AND background are always set together. Setting only one leaves the pair at the
+ * mercy of the host site's theme, which is how a "green on white" rule becomes green on dark
+ * grey on someone else's page.
+ *
+ * Contrast targets WCAG 2.2 AAA (>= 7:1 for normal text); the pairs below sit near 11:1.
+ */
+
+/* ------------------------------------------------------------------ revision list */
+
+.crh-revision-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+
+.crh-entry {
+    padding: 0.75rem 0;
+    border-bottom: 1px solid #767676; /* 4.5:1 against white -- a border, not text */
+}
+
+.crh-entry-facts {
+    margin: 0.5rem 0;
+}
+
+.crh-entry-facts dt {
+    font-weight: 700;
+    margin-top: 0.5rem;
+}
+
+.crh-entry-facts dd {
+    margin: 0 0 0 1rem;
+}
+
+/*
+ * Standalone (non-inline) control, so WCAG 2.2 SC 2.5.8 target-size applies: 44x44 CSS px,
+ * reached through padding rather than a fixed height so the target grows with the text when a
+ * visitor zooms or enlarges fonts.
+ */
+.crh-compare-link {
+    display: inline-block;
+    min-height: 44px;
+    padding: 0.6rem 0.75rem;
+    box-sizing: border-box;
+}
+
+.crh-compare-unavailable {
+    color: #3a3a3a;
+    margin: 0.5rem 0;
+}
+
+/* Visible, thick, offset focus ring on every interactive element this module renders. */
+.crh-compare-link:focus-visible,
+.crh-diff-close:focus-visible,
+.crh-diff-panel:focus-visible {
+    outline: 3px solid currentColor;
+    outline-offset: 2px;
+}
+
+/* ------------------------------------------------------------------ diff panel */
+
+.crh-diff-panel {
+    margin-top: 2rem;
+    padding: 1rem;
+    background: #ffffff;
+    color: #1a1a1a;
+    border: 2px solid #1a1a1a;
+}
+
+.crh-diff-notice {
+    background: #fff4d6;
+    color: #4a3200;
+    padding: 0.5rem 0.75rem;
+    border-left: 4px solid #4a3200;
+    margin: 0.5rem 0;
+}
+
+.crh-diff-stats {
+    font-weight: 700;
+}
+
+.crh-diff-lines {
+    list-style: none;
+    margin: 1rem 0 0;
+    padding: 0;
+    /*
+     * Wide content scrolls inside its own container rather than pushing the page sideways:
+     * a Markdown line can be long, and SC 1.4.10 (Reflow) forbids two-dimensional scrolling
+     * of the page itself at 320px / 400% zoom.
+     */
+    overflow-x: auto;
+}
+
+.crh-diff-line {
+    /* pre-wrap keeps the record verbatim: Markdown leading spaces and blank lines are
+       structure, and HTML would otherwise collapse them out of the evidence. */
+    white-space: pre-wrap;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+    padding: 0.1rem 0.4rem;
+    background: #ffffff;
+    color: #1a1a1a;
+}
+
+.crh-diff-marker {
+    display: inline-block;
+    width: 1.2em;
+    font-weight: 700;
+}
+
+.crh-diff-added {
+    background: #dff5e5;
+    color: #0b3d1f;
+}
+
+.crh-diff-removed {
+    background: #fde8ea;
+    color: #5a0b14;
+}
+
+.crh-diff-gap {
+    background: #f0f0f0;
+    color: #3a3a3a;
+    font-style: italic;
+}
+
+/* ins/del carry the semantics; the underline/strikethrough defaults are removed because the
+   row already reads as added or removed and the extra decoration hurts legibility in
+   monospace. The elements themselves stay, for assistive technology. */
+.crh-diff-line ins,
+.crh-diff-line del {
+    text-decoration: none;
+    background: transparent;
+    color: inherit;
+}
+
+/* Word-level highlight inside a changed line. Underline as well as tint, so the distinction
+   survives without colour. */
+.crh-diff-line mark {
+    background: transparent;
+    color: inherit;
+    font-weight: 700;
+    text-decoration: underline;
+    text-decoration-thickness: 2px;
+}
+
+.crh-diff-close {
+    display: inline-block;
+    min-height: 44px;
+    padding: 0.6rem 0.75rem;
+    box-sizing: border-box;
+    margin-top: 1rem;
+}
+
+/* ------------------------------------------------------------------ utility */
+
+/*
+ * Text for assistive technology only. If this stylesheet fails to load, the labels simply
+ * become visible -- degraded appearance, never lost meaning. That is the correct direction for
+ * a fallback to fail in.
+ */
+.crh-visually-hidden {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+}

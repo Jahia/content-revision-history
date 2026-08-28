@@ -53,8 +53,26 @@ public final class RevisionHistoryConstants {
 
     // ------------------------------------------------------- crh:revisionEntry properties
 
-    /** System-set, i18n weak reference to the {@code crh:revisionSnapshot} of that language. */
-    public static final String PROP_SNAPSHOT_REF = "snapshotRef";
+    /** Editorial container an editor drops on a page; holds the public revision entries. */
+    public static final String HISTORY_TYPE = "crh:revisionHistory";
+    /** One public revision, authored by an editor. */
+    public static final String ENTRY_TYPE = "crh:revisionEntry";
+    public static final String PROP_REVISION_LABEL = "revisionLabel";
+    public static final String PROP_REVISION_DATE = "revisionDate";
+
+    /**
+     * Weak back-references from a snapshot to the {@code crh:revisionEntry} nodes it is the
+     * content for. Lives on the snapshot, not on the entry: see the note in the CND.
+     */
+    public static final String PROP_ENTRY_REFS = "crh:entryRefs";
+
+    /**
+     * Upper bound on nodes walked when looking for revision entries under a page. Pages hold
+     * editorial content, not bulk data, so anything approaching this is a malformed tree
+     * rather than a page -- and an unbounded walk on a capture path is how a background job
+     * takes a node down.
+     */
+    public static final int MAX_NODES_WALKED_PER_PAGE = 5_000;
 
     // ---------------------------------------------------------------- capture identity
 

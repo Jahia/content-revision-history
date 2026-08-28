@@ -276,13 +276,19 @@ public class RevisionSnapshotService {
 
     // ------------------------------------------------------------------ internals
 
-    private void validate(String siteKey, String pageUuid, String language) {
+    /**
+     * Package-private so {@link RevisionEntryBinder} enforces exactly the same rules on exactly
+     * the same coordinates. These three values are concatenated into a repository path, so a
+     * second, subtly different copy of this check elsewhere is how a path-traversal hole gets
+     * introduced later by someone who only reads one of them.
+     */
+    static void validate(String siteKey, String pageUuid, String language) {
         require(siteKey != null && SITE_KEY.matcher(siteKey).matches(), "siteKey", siteKey);
         require(pageUuid != null && UUID.matcher(pageUuid).matches(), "pageUuid", pageUuid);
         require(language != null && LANGUAGE.matcher(language).matches(), "language", language);
     }
 
-    private void require(boolean condition, String what, String value) {
+    private static void require(boolean condition, String what, String value) {
         if (!condition) {
             throw new IllegalArgumentException("Illegal " + what + " for snapshot capture: " + value);
         }

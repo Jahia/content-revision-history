@@ -59,6 +59,7 @@ public class SnapshotCaptureJob extends BackgroundJob {
     }
 
     private final RevisionSnapshotService snapshotService = new RevisionSnapshotService();
+    private final RevisionEntryBinder entryBinder = new RevisionEntryBinder();
 
     @Override
     public void executeJahiaJob(JobExecutionContext context) {
@@ -129,6 +130,12 @@ public class SnapshotCaptureJob extends BackgroundJob {
                     language, MarkdownNormalizer.normalize(fetched.body), captureInstant,
                     CAPTURE_PRINCIPAL, fetched.sourceUrl);
             logger.info("Revision snapshot for {} [{}]: {}", page.path, language, status);
+            // Only these two statuses mean the newest snapshot matches the live page, which is
+            // the precondition for attaching an editor's revision entry to it. See
+            // RevisionEntryBinder for why the other statuses must NOT bind.
+            if (status == CaptureStatus.STORED || status == CaptureStatus.UNCHANGED) {
+                entryBinder.bindNewEntries(page.siteKey, page.uuid, language);
+            }
         } catch (RepositoryException | RuntimeException e) {
             logger.error("Storing the revision snapshot for {} [{}] failed", page.path, language, e);
             snapshotService.recordStatus(page.siteKey, page.uuid, language, CaptureStatus.FAILED,

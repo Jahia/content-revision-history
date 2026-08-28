@@ -8,6 +8,14 @@
 
 // Public, editorial container rendered on the page. Holds only revision entries.
 [crh:revisionHistory] > jnt:content, jmix:droppableContent, jmix:editorialContent, jmix:list
+ // `orderable` is REQUIRED and is not implied by jmix:list -- jnt:contentList declares it
+ // separately for exactly this reason. Without it Jackrabbit refuses reordering
+ // ("child node ordering not supported on node ..."), so editors cannot drag entries into
+ // order at all. Both the list view and the comparison treat the next sibling in editorial
+ // order as the older revision, so a non-orderable history left that convention
+ // unachievable: the order was whatever insertion order the repository happened to give,
+ // and "compare with previous" could name a pair the editor never chose.
+ orderable
  itemtype = content
  - historyTitle (string) i18n
  + * (crh:revisionEntry)
@@ -19,16 +27,17 @@
  - revisionDate (date) mandatory
  - summary (string, richtext) i18n mandatory
  - changeType (string, choicelist[resourceBundle]) = 'substantive' < 'editorial', 'substantive', 'correction'
- // System-set, and deliberately so:
- //  * hidden -- it used to be an editor-visible mandatory string holding an internally
- //    generated key, which no editor could possibly know, so a revision entry could not be
- //    saved at all. It is populated programmatically; `hidden` (rather than `protected`)
- //    because Jahia refuses programmatic writes to protected properties too.
- //  * weakreference -- referential integrity and a real picker instead of a free-text key.
- //  * i18n -- snapshots are partitioned per language. As a single non-i18n value an entry
- //    could only ever point at one language's snapshot, which makes a diff viewer impossible
- //    on a multilingual site. Changing this later would be a data migration, so it is done now.
- - snapshotRef (weakreference) i18n hidden indexed=no
+ // NOTE: there is deliberately NO snapshotRef property here any more. The link between a
+ // revision entry and the snapshot it describes is stored on the SNAPSHOT
+ // (crh:revisionSnapshot / crh:entryRefs), pointing back at the entry, for one decisive
+ // reason: a crh:revisionEntry is editorial content, so any programmatic write to it bumps
+ // jcr:lastModified and the page reads as "modified" in jContent the instant capture binds
+ // it -- immediately after the editor published it. That turns every new revision into a
+ // two-publication ritual and a support question. A snapshot, by contrast, is system-only and
+ // never published, so binding there is invisible to the editorial workflow.
+ // The lookup entry -> snapshot is a scan of that page+language folder, which the
+ // MAX_SNAPSHOTS_PER_PAGE_LANGUAGE cap bounds at 500 nodes, and it runs only when a visitor
+ // actually asks for a comparison.
 
 // Container for the snapshot tree, at all three levels
 // (revision-history / <pageUuid> / <language>).
@@ -72,3 +81,10 @@
  - crh:capturedBy (string) mandatory indexed=no nofulltext
  - crh:sourceUrl (string) indexed=no nofulltext
  - crh:markdown (binary) mandatory indexed=no nofulltext
+ // Back-references to the crh:revisionEntry nodes this snapshot is the content for. Set by
+ // RevisionEntryBinder after each capture attempt; see the note on crh:revisionEntry for why
+ // the reference points this way. Multiple, because an editor can author more than one entry
+ // between two captures. WEAK references: an entry may be deleted, and a snapshot must never
+ // block that or be dragged into referential-integrity failures -- the record of what the
+ // page said outlives the editorial description of why it changed.
+ - crh:entryRefs (weakreference) multiple indexed=no nofulltext
