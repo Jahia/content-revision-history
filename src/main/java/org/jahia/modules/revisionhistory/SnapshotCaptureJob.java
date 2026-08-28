@@ -1,0 +1,219 @@
+package org.jahia.modules.revisionhistory;
+
+import org.jahia.services.content.JCRCallback;
+import org.jahia.services.content.JCRNodeWrapper;
+import org.jahia.services.content.JCRTemplate;
+import org.jahia.services.render.filter.cache.ModuleCacheProvider;
+import org.jahia.services.scheduler.BackgroundJob;
+import org.quartz.JobDataMap;
+import org.quartz.JobExecutionContext;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import javax.jcr.ItemNotFoundException;
+import javax.jcr.RepositoryException;
+import java.time.Instant;
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Set;
+
+import static org.jahia.modules.revisionhistory.RevisionHistoryConstants.*;
+
+/**
+ * Does the actual capture work, off the publication thread and off the request path.
+ *
+ * <p>Scheduled by {@link PublicationSnapshotListener} through
+ * {@code SchedulerService.scheduleJobNow(detail, true)} -- RAM scheduler, because this work is
+ * transient: if the node dies mid-capture the right answer is not to replay it later against
+ * content that has since moved on, it is to let the next publication capture the current
+ * state. What must not be lost is the <em>knowledge</em> that a capture was owed, and that is
+ * durable: a missing snapshot always leaves a status on the per-language folder.
+ *
+ * <p>Publication latency is untouched: the listener only enqueues.
+ *
+ * <p><b>Known and accepted:</b> capture is asynchronous, so a snapshot holds the live page as
+ * it stood when the guest render ran, while its name and {@code crh:snapshotDate} carry the
+ * instant of the publication that triggered it. Two publications inside the same second can
+ * therefore collapse: the first job may observe the second publication's text. That is
+ * bounded (the rate limiter refuses the follow-up, and the refusal is recorded on the folder,
+ * so the record says "a capture was skipped" rather than quietly showing one fewer revision)
+ * and it needs a publication rate no human editor reaches. The alternative -- capturing
+ * synchronously on the publication thread -- reintroduces exactly the coupling this design
+ * removes.
+ */
+public class SnapshotCaptureJob extends BackgroundJob {
+
+    private static final Logger logger = LoggerFactory.getLogger(SnapshotCaptureJob.class);
+
+    /** Encoded as {@code uuid:lang[,lang];uuid:lang}. */
+    static final String JOB_PAGES = "crh.pages";
+    static final String JOB_PUBLICATION_TIMESTAMP = "crh.publicationTimestamp";
+
+    private static final CaptureRateLimiter LIMITER = new CaptureRateLimiter(
+            MIN_CAPTURE_INTERVAL_MILLIS, MAX_CAPTURES_PER_WINDOW, RATE_WINDOW_MILLIS);
+
+    /** Lazy: the constructor probes JMX for the container port, which must not run at class load. */
+    private static final class FetcherHolder {
+        private static final GuestMarkdownFetcher INSTANCE = new GuestMarkdownFetcher();
+    }
+
+    private final RevisionSnapshotService snapshotService = new RevisionSnapshotService();
+
+    @Override
+    public void executeJahiaJob(JobExecutionContext context) {
+        // Deregister immediately: once we are running, this job must not be cancelled by
+        // a later module stop, and it records its own outcome durably from here on.
+        PublicationSnapshotListener.jobStarted(context.getJobDetail().getName(),
+                context.getJobDetail().getGroup());
+        JobDataMap data = context.getJobDetail().getJobDataMap();
+        String encoded = data.getString(JOB_PAGES);
+        long timestamp = data.containsKey(JOB_PUBLICATION_TIMESTAMP)
+                ? data.getLong(JOB_PUBLICATION_TIMESTAMP) : System.currentTimeMillis();
+        if (encoded == null || encoded.isEmpty()) {
+            return;
+        }
+        Instant captureInstant = Instant.ofEpochMilli(timestamp);
+        for (String entry : encoded.split(";")) {
+            captureOnePageSafely(entry, captureInstant, timestamp);
+        }
+    }
+
+    private void captureOnePageSafely(String entry, Instant captureInstant, long cacheBuster) {
+        int separator = entry.indexOf(':');
+        if (separator <= 0) {
+            return;
+        }
+        String pageUuid = entry.substring(0, separator);
+        String[] languages = entry.substring(separator + 1).split(",");
+        try {
+            PageRef page = resolvePage(pageUuid);
+            if (page == null) {
+                logger.info("Page {} is gone or no longer publicly revisioned; nothing to capture",
+                        pageUuid);
+                return;
+            }
+            for (String language : languages) {
+                capture(page, language.trim(), captureInstant, cacheBuster);
+            }
+        } catch (RepositoryException | RuntimeException e) {
+            logger.error("Revision snapshot capture failed for page {}", pageUuid, e);
+            for (String language : languages) {
+                snapshotService.recordStatus(siteKeyOrUnknown(pageUuid), pageUuid, language.trim(),
+                        CaptureStatus.FAILED, e.getClass().getSimpleName() + ": " + e.getMessage());
+            }
+        }
+    }
+
+    private void capture(PageRef page, String language, Instant captureInstant, long cacheBuster) {
+        if (!LIMITER.tryAcquire(page.uuid, language, System.currentTimeMillis())) {
+            logger.warn("Capture for page {} [{}] refused by the rate limiter", page.uuid, language);
+            snapshotService.recordStatus(page.siteKey, page.uuid, language,
+                    CaptureStatus.RATE_LIMITED, "Too many capture attempts for this page");
+            return;
+        }
+
+        flushFragmentCache(page.path);
+        GuestMarkdownFetcher.Fetched fetched =
+                FetcherHolder.INSTANCE.fetch(page.path, language, cacheBuster);
+        if (!fetched.isOk()) {
+            logger.warn("No snapshot for page {} [{}]: {} ({})", page.path, language,
+                    fetched.status, fetched.message);
+            snapshotService.recordStatus(page.siteKey, page.uuid, language,
+                    fetched.status, fetched.message);
+            return;
+        }
+
+        try {
+            CaptureStatus status = snapshotService.captureIfChanged(page.siteKey, page.uuid,
+                    language, MarkdownNormalizer.normalize(fetched.body), captureInstant,
+                    CAPTURE_PRINCIPAL, fetched.sourceUrl);
+            logger.info("Revision snapshot for {} [{}]: {}", page.path, language, status);
+        } catch (RepositoryException | RuntimeException e) {
+            logger.error("Storing the revision snapshot for {} [{}] failed", page.path, language, e);
+            snapshotService.recordStatus(page.siteKey, page.uuid, language, CaptureStatus.FAILED,
+                    e.getClass().getSimpleName() + ": " + e.getMessage());
+        }
+    }
+
+    /**
+     * Removes the page's cached fragments before rendering it.
+     *
+     * <p>The cache-busting query parameter only forces a miss on the page-level entry;
+     * per-fragment entries are keyed on node path and template type, not on the URL.
+     * Publication flushes them too, but that flush travels through JCR observation and is
+     * therefore asynchronous -- a capture that raced it would snapshot the pre-publication
+     * text and, because the hash would match the previous snapshot, silently record "no
+     * change" for a change. Flushing here makes the ordering deterministic; it costs nothing
+     * extra, since publication was about to flush exactly these entries anyway.
+     */
+    private void flushFragmentCache(String pagePath) {
+        try {
+            ModuleCacheProvider.getInstance().invalidate(pagePath, true);
+        } catch (RuntimeException e) {
+            logger.warn("Could not flush the fragment cache for {} before capture", pagePath, e);
+        }
+    }
+
+    /** @return the page, or null when it no longer exists or no longer opts in */
+    private PageRef resolvePage(String pageUuid) throws RepositoryException {
+        return JCRTemplate.getInstance().doExecuteWithSystemSessionAsUser(null, WORKSPACE, null, (JCRCallback<PageRef>) session -> {
+                    try {
+                        JCRNodeWrapper node = session.getNodeByIdentifier(pageUuid);
+                        if (!node.isNodeType(REVISIONED_PAGE_MIXIN)) {
+                            return null;
+                        }
+                        return new PageRef(pageUuid, node.getPath(),
+                                node.getResolveSite().getSiteKey());
+                    } catch (ItemNotFoundException gone) {
+                        return null;
+                    }
+                });
+    }
+
+    private String siteKeyOrUnknown(String pageUuid) {
+        try {
+            PageRef page = resolvePage(pageUuid);
+            return page == null ? "unknown" : page.siteKey;
+        } catch (RepositoryException e) {
+            return "unknown";
+        }
+    }
+
+    /** Immutable page coordinates resolved once per job. */
+    private static final class PageRef {
+        private final String uuid;
+        private final String path;
+        private final String siteKey;
+
+        private PageRef(String uuid, String path, String siteKey) {
+            this.uuid = uuid;
+            this.path = path;
+            this.siteKey = siteKey;
+        }
+    }
+
+    /** Builds the {@code uuid:lang,lang;...} payload, capped so one event cannot enqueue the world. */
+    static String encode(List<String> pageUuids, List<Set<String>> languagesPerPage) {
+        StringBuilder encoded = new StringBuilder();
+        int pages = Math.min(pageUuids.size(), MAX_PAGES_PER_PUBLICATION);
+        for (int i = 0; i < pages; i++) {
+            Set<String> languages = new LinkedHashSet<>(languagesPerPage.get(i));
+            if (languages.isEmpty()) {
+                continue;
+            }
+            if (encoded.length() > 0) {
+                encoded.append(';');
+            }
+            encoded.append(pageUuids.get(i)).append(':');
+            List<String> ordered = new ArrayList<>(languages);
+            for (int l = 0; l < ordered.size(); l++) {
+                if (l > 0) {
+                    encoded.append(',');
+                }
+                encoded.append(ordered.get(l));
+            }
+        }
+        return encoded.toString();
+    }
+}

@@ -4,12 +4,14 @@
        xsi:schemaLocation="http://www.springframework.org/schema/beans
                            http://www.springframework.org/schema/beans/spring-beans.xsd">
 
-    <!-- Jahia collects RenderFilter beans from the module Spring context into the render
-         chain, mirroring how core filters are declared in applicationcontext-renderer.xml. -->
-    <bean class="org.jahia.modules.revisionhistory.SnapshotCaptureFilter">
-        <property name="priority" value="98"/>
-        <property name="description"
-                  value="Captures a Markdown revision snapshot of publicly revisioned pages"/>
-    </bean>
+    <!-- Capture is triggered by publication, not by page traffic. The render filter this
+         replaces could not deliver the guarantee: the HTML output cache short-circuits the
+         chain before it, so history existed only for pages somebody happened to visit, and any
+         anonymous request could force unlimited full re-renders plus repository writes.
+
+         The bean registers itself with JCRPublicationService on module start and unregisters
+         on stop, so a module undeploy leaves no dangling listener. -->
+    <bean class="org.jahia.modules.revisionhistory.PublicationSnapshotListener"
+          init-method="start" destroy-method="stop"/>
 
 </beans>

@@ -27,11 +27,14 @@
              (Actions, render filters) is inert while views and CNDs still work fine. -->
         <require-capability>osgi.extender;filter:="(osgi.extender=org.jahia.bundles.blueprint.extender.config)"</require-capability>
         <jahia.version>8.2.3.2</jahia.version>
-        <!-- No git metadata plugin: keeps the build green before the first commit. -->
-        <skip.git.commit.info>true</skip.git.commit.info>
-        <!-- difflib is exported by the platform (see karaf/etc/custom-jahia.system.packages.generated.properties).
-             Import it rather than embedding a fork, to avoid duplicate classes. -->
-        <import-package>difflib,difflib.myers,org.springframework.beans.factory.xml,org.springframework.context.support,*</import-package>
+        <!-- Ship build provenance: a module whose whole purpose is an auditable record has no
+             business being un-auditable itself. -->
+        <skip.git.commit.info>false</skip.git.commit.info>
+        <!-- Wildcard only. Explicit imports here are hard OSGi resolution requirements, so
+             naming a package the code does not use turns an unrelated platform change into a
+             bundle that will not resolve at all. difflib (java-diff-utils 1.3, unmaintained
+             since 2011) was imported for a diff viewer that does not exist yet. -->
+        <import-package>*</import-package>
     </properties>
 
     <dependencies>
@@ -58,6 +61,15 @@
             <artifactId>junit-jupiter</artifactId>
             <version>5.10.2</version>
             <scope>test</scope>
+        </dependency>
+        <!-- Real HTML parser for MarkdownNormalizer: replaces the regex pipeline (ReDoS risk,
+             entity-decoding-order bugs). The platform ships jsoup but does not export
+             org.jsoup, so this must stay compile-scoped and be embedded in the bundle
+             (see the parent pom's embed-dependency instruction). -->
+        <dependency>
+            <groupId>org.jsoup</groupId>
+            <artifactId>jsoup</artifactId>
+            <version>1.21.2</version>
         </dependency>
     </dependencies>
 
