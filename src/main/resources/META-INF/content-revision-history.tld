@@ -24,13 +24,36 @@
 
     <function>
         <description>
-            Compares a revision entry with the previous one in editorial order. The first
-            argument is the rendered revision-history node and is what restricts the second,
-            visitor-supplied, argument to entries of that history.
+            A captured snapshot's Markdown payload, for the jContent preview. Read through the
+            caller's own session, so the preview shows only what the viewer may already see.
+        </description>
+        <name>snapshotMarkdown</name>
+        <function-class>org.jahia.modules.revisionhistory.RevisionHistoryFunctions</function-class>
+        <function-signature>java.lang.String snapshotMarkdown(org.jahia.services.content.JCRNodeWrapper)</function-signature>
+        <example>${crh:snapshotMarkdown(currentNode)}</example>
+    </function>
+
+    <function>
+        <description>
+            A revision history's entries, newest first by revisionDate. The list view and the
+            comparisons both order through this, so a control and the panel it opens can never
+            mean different revisions.
+        </description>
+        <name>orderedEntries</name>
+        <function-class>org.jahia.modules.revisionhistory.RevisionHistoryFunctions</function-class>
+        <function-signature>java.util.List orderedEntries(org.jahia.services.content.JCRNodeWrapper)</function-signature>
+        <example>${crh:orderedEntries(currentNode)}</example>
+    </function>
+
+    <function>
+        <description>
+            Compares two revisions of the same history. The first argument is the rendered
+            revision-history node and is what restricts the two visitor-selected identifiers to
+            entries of that history.
         </description>
         <name>compare</name>
         <function-class>org.jahia.modules.revisionhistory.RevisionHistoryFunctions</function-class>
-        <function-signature>org.jahia.modules.revisionhistory.RevisionDiffView compare(java.lang.String, java.lang.String, java.lang.String)</function-signature>
-        <example>${crh:compare(currentNode.identifier, param.crhDiff, currentResource.locale.language)}</example>
+        <function-signature>org.jahia.modules.revisionhistory.RevisionDiffView compare(java.lang.String, java.lang.String, java.lang.String, java.lang.String)</function-signature>
+        <example>${crh:compare(currentNode.identifier, param.crhFrom, param.crhTo, currentResource.locale.language)}</example>
     </function>
 </taglib>

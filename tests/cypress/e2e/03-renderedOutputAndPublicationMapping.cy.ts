@@ -50,9 +50,6 @@ describe('Rendered output correctness (crh_revisionHistory / crh_revisionEntry v
     const renderPage = (): Cypress.Chainable<string> =>
         cy.request<string>({url: `/cms/render/default/${language}${pagePath}.html`}).then(response => response.body);
 
-    /** Escapes a string for safe use inside a `new RegExp(...)` pattern. */
-    const escapeForRegExp = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-
     before(() => {
         cy.login();
         enableModule('content-revision-history', siteKey);
@@ -191,10 +188,13 @@ describe('Rendered output correctness (crh_revisionHistory / crh_revisionEntry v
             });
     });
 
-    it('renders the oldest (only) entry with the non-interactive message and no Compare button', () => {
-        const containerName = `crh-render-check-oldest-${Date.now()}`;
+    it('offers no comparison selector when there is only one revision', () => {
+        // Replaces a test for a per-entry "this is the earliest revision" message. Comparison is
+        // driven by a selector at the history level now, so that message no longer exists -- but
+        // the rule it protected does: a control that cannot do anything must not be rendered
+        // (SC 4.1.2), and a lone revision has nothing to compare against.
+        const containerName = `crh-render-check-single-${Date.now()}`;
         const marker = Date.now();
-        const onlyLabel = `Only version ${marker}`;
 
         addNode({
             parentPathOrId: areaPath,
@@ -209,7 +209,7 @@ describe('Rendered output correctness (crh_revisionHistory / crh_revisionEntry v
                     primaryNodeType: 'crh:revisionEntry',
                     name: 'entry-only',
                     properties: [
-                        {name: 'revisionLabel', value: onlyLabel},
+                        {name: 'revisionLabel', value: `Only version ${marker}`},
                         {name: 'revisionDate', value: new Date().toISOString(), type: 'DATE'},
                         {name: 'summary', value: 'the only entry', language}
                     ]
@@ -223,12 +223,8 @@ describe('Rendered output correctness (crh_revisionHistory / crh_revisionEntry v
             .then(html => {
                 expect(
                     html,
-                    'the sole/oldest entry must render the explained non-interactive state'
-                ).to.contain(`${onlyLabel} is the earliest recorded revision - there is no earlier version to compare.`);
-                expect(
-                    html,
-                    'an entry with no previous sibling must never render a Compare control'
-                ).to.not.contain('crh-compare-link');
+                    'a lone revision must not be offered a comparison control'
+                ).to.not.contain('crh-compare-form');
 
                 deleteNode(`${areaPath}/${containerName}`).then(null, () => undefined);
             });
@@ -269,86 +265,6 @@ describe('Rendered output correctness (crh_revisionHistory / crh_revisionEntry v
                     'Substantive (meaning changed)'
                 );
                 expect(html, 'no unresolved resource-bundle key may reach the page').to.not.contain('???');
-
-                deleteNode(`${areaPath}/${containerName}`).then(null, () => undefined);
-            });
-    });
-
-    it('walks actual sibling order for a 3-entry history: the middle entry\'s previous is its real next sibling', () => {
-        const containerName = `crh-render-check-siblings-${Date.now()}`;
-        const marker = Date.now();
-        const newestLabel = `v3-${marker}`;
-        const middleLabel = `v2-${marker}`;
-        const oldestLabel = `v1-${marker}`;
-
-        const entryProps = (label: string, daysAgo: number) => [
-            {name: 'revisionLabel', value: label},
-            {name: 'revisionDate', value: new Date(Date.now() - (daysAgo * 86400000)).toISOString(), type: 'DATE'},
-            {name: 'summary', value: `summary for ${label}`, language}
-        ];
-
-        addNode({
-            parentPathOrId: areaPath,
-            primaryNodeType: 'crh:revisionHistory',
-            name: containerName
-        })
-            .then((container: ApolloResult<AddNodeQueryData>) => {
-                expect(container.errors, 'the revision history container must be creatable').to.be.undefined;
-
-                // Added newest-first, matching the editorial order revisionEntry.jsp assumes.
-                return addNode({
-                    parentPathOrId: `${areaPath}/${containerName}`,
-                    primaryNodeType: 'crh:revisionEntry',
-                    name: 'entry-newest',
-                    properties: entryProps(newestLabel, 0)
-                });
-            })
-            .then((entry: ApolloResult<AddNodeQueryData>) => {
-                expect(entry.errors, 'the newest entry must be creatable').to.be.undefined;
-
-                return addNode({
-                    parentPathOrId: `${areaPath}/${containerName}`,
-                    primaryNodeType: 'crh:revisionEntry',
-                    name: 'entry-middle',
-                    properties: entryProps(middleLabel, 1)
-                });
-            })
-            .then((entry: ApolloResult<AddNodeQueryData>) => {
-                expect(entry.errors, 'the middle entry must be creatable').to.be.undefined;
-
-                return addNode({
-                    parentPathOrId: `${areaPath}/${containerName}`,
-                    primaryNodeType: 'crh:revisionEntry',
-                    name: 'entry-oldest',
-                    properties: entryProps(oldestLabel, 2)
-                });
-            })
-            .then((entry: ApolloResult<AddNodeQueryData>) => {
-                expect(entry.errors, 'the oldest entry must be creatable').to.be.undefined;
-
-                return renderPage();
-            })
-            .then(html => {
-                const correctPattern = new RegExp(
-                    `Compare ${escapeForRegExp(middleLabel)} \\([^)]*\\) with the previous revision, ${escapeForRegExp(oldestLabel)} \\(`
-                );
-                const wrongPreviousPattern = new RegExp(
-                    `Compare ${escapeForRegExp(middleLabel)} \\([^)]*\\) with the previous revision, ${escapeForRegExp(newestLabel)} \\(`
-                );
-                const selfReferencePattern = new RegExp(
-                    `Compare ${escapeForRegExp(middleLabel)} \\([^)]*\\) with the previous revision, ${escapeForRegExp(middleLabel)} \\(`
-                );
-
-                expect(
-                    html,
-                    'the middle entry\'s previous must be its actual next sibling (the oldest entry), proving real sibling-walking rather than a hardcoded reference -- a 2-entry fixture cannot tell these apart'
-                ).to.match(correctPattern);
-                expect(html, 'the middle entry must not point at the newest entry as its previous').to.not.match(
-                    wrongPreviousPattern
-                );
-                expect(html, 'the middle entry must not point at itself as its previous').to.not.match(
-                    selfReferencePattern
-                );
 
                 deleteNode(`${areaPath}/${containerName}`).then(null, () => undefined);
             });

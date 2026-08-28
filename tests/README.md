@@ -90,6 +90,12 @@ capture cannot race the publication's own asynchronous cache flush.
 **Snapshots live in the `default` workspace and are never published**, so all assertions query
 `jcr(workspace: EDIT)` and require `cy.login()`.
 
+**ESLint is the formatter here, not Prettier.** `yarn lint` / `yarn lint:fix` own formatting; the
+rules come from `@jahia/eslint-config` (which extends `xo`). Prettier is deliberately made inert
+by a `.prettierignore` of `*` -- see the reasoning in that file. It cannot be aligned to this
+ruleset (its `indent` and quote-escaping behaviour have no setting that matches), and left active
+it silently reformatted a spec by 262 lines and broke `yarn lint` on every one of them.
+
 **A scratch page must use a template the site actually has.** `digitall` ships `home`, `news`
 and `2-column`; there is no `default`. A page created with `j:templateName: 'default'` still
 publishes, and its `.markdown` render still works -- that path uses this module's own views and no
@@ -120,9 +126,17 @@ than a null.
 | a revision entry binds to the snapshot of its publication | the join between the editorial and captured halves |
 | an already-bound entry is never rebound | binding is append-only; a public revision's evidence cannot be rewritten |
 | a word-level comparison renders between two revisions | the diff viewer, including `<ins>`/`<del>` and text alternatives |
-| a foreign or malformed `?crhDiff=` is refused | the containment check that stops a system session reading an arbitrary node |
+| a stray `?crhDiff=` changes nothing | the visitor-supplied identifier surface is gone, not merely guarded |
+| the popup opens, and Escape / Close dismiss it | popover behaviour a raw HTML fetch cannot see |
+| focus returns to the button that opened the popup | keyboard users are not stranded in the page |
 | the earliest revision is explained, not compared | no dead controls and no silently blank panel |
 | the revision list stays out of the snapshots | without a markdown view the changelog is captured into the record it describes |
+| the list starts collapsed and reports its count | a history must not push the page it describes off the screen |
+| a requested comparison forces the list open | otherwise the panel names revisions the visitor cannot see |
+| `collapsedByDefault=false` renders the list open | the editor's choice is honoured |
+| a revision appended last still renders in date order | Content Editor appends at the end, which was the oldest position; the reported bug |
+| a captured snapshot is displayable and previews | jContent needs a jnt:contentTemplate for the type, not just a view |
+| snapshots stay out of live when an ancestor is published | jmix:nolive, enforced by JCRPublicationService |
 | `summary` renders as sanitised HTML | formatting survives; scripts and `javascript:` URLs do not |
 
 Unit tests for the pure Markdown logic live in `src/test/java` and run with `mvn test` —

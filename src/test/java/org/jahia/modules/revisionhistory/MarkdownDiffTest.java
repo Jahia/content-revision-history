@@ -249,6 +249,101 @@ class MarkdownDiffTest {
         assertFalse(rendered.contains("<span"), "no generated markup may leak into the model");
     }
 
+    // ------------------------------------------------------------------ side by side
+
+    @Test
+    @DisplayName("pairs a changed line with its replacement, older left and newer right")
+    void pairsChangedLines() {
+        MarkdownDiff.Result result = MarkdownDiff.compare(
+                "Support lasts twelve months.", "Support lasts eighteen months.");
+
+        List<MarkdownDiff.Row> changed = result.getRows().stream()
+                .filter(r -> !r.isUnchanged() && !r.isGap())
+                .collect(Collectors.toList());
+
+        assertEquals(1, changed.size(), "one line replaced by one line is one row, not two");
+        assertEquals("Support lasts twelve months.", changed.get(0).getLeft().getText());
+        assertEquals("Support lasts eighteen months.", changed.get(0).getRight().getText());
+    }
+
+    @Test
+    @DisplayName("puts an unchanged line on both sides as the same object")
+    void unchangedLinesAppearOnBothSides() {
+        // Two columns are two views of ONE document, not two documents: the shared reference is
+        // what lets the view render an unchanged row once and know the sides cannot diverge.
+        MarkdownDiff.Result result = MarkdownDiff.compare("same\nold\n", "same\nnew\n");
+
+        MarkdownDiff.Row first = result.getRows().get(0);
+        assertTrue(first.isUnchanged());
+        assertSame(first.getLeft(), first.getRight());
+    }
+
+    @Test
+    @DisplayName("leaves the opposite side empty for a pure insertion or deletion")
+    void pureInsertionHasNoLeftSide() {
+        MarkdownDiff.Result inserted = MarkdownDiff.compare("one\n", "one\ntwo\n");
+        MarkdownDiff.Row addedRow = inserted.getRows().stream()
+                .filter(r -> !r.isUnchanged() && !r.isGap()).findFirst().orElseThrow();
+        assertNull(addedRow.getLeft(), "nothing was there before");
+        assertEquals("two", addedRow.getRight().getText());
+
+        MarkdownDiff.Result deleted = MarkdownDiff.compare("one\ntwo\n", "one\n");
+        MarkdownDiff.Row removedRow = deleted.getRows().stream()
+                .filter(r -> !r.isUnchanged() && !r.isGap()).findFirst().orElseThrow();
+        assertEquals("two", removedRow.getLeft().getText());
+        assertNull(removedRow.getRight(), "nothing is there after");
+    }
+
+    @Test
+    @DisplayName("zips uneven blocks rather than dropping the surplus")
+    void unevenBlocksKeepEveryLine() {
+        // Two lines replaced by one: the second removed line still needs a row, with nothing
+        // opposite it. Losing it would silently drop content from the record.
+        MarkdownDiff.Result result = MarkdownDiff.compare("first\nsecond\n", "merged\n");
+
+        List<MarkdownDiff.Row> changed = result.getRows().stream()
+                .filter(r -> !r.isUnchanged() && !r.isGap())
+                .collect(Collectors.toList());
+
+        assertEquals(2, changed.size());
+        assertEquals("first", changed.get(0).getLeft().getText());
+        assertEquals("merged", changed.get(0).getRight().getText());
+        assertEquals("second", changed.get(1).getLeft().getText());
+        assertNull(changed.get(1).getRight());
+    }
+
+    @Test
+    @DisplayName("carries a collapsed run through as a single gap row")
+    void gapsSurvivePairing() {
+        StringBuilder before = new StringBuilder();
+        for (int i = 0; i < 40; i++) {
+            before.append("line ").append(i).append('\n');
+        }
+        MarkdownDiff.Result result =
+                MarkdownDiff.compare(before.toString(), before.toString().replace("line 39", "changed"));
+
+        List<MarkdownDiff.Row> gaps = result.getRows().stream()
+                .filter(MarkdownDiff.Row::isGap).collect(Collectors.toList());
+        assertEquals(1, gaps.size());
+        assertEquals(36, gaps.get(0).getGapSize());
+        assertNull(gaps.get(0).getLeft());
+    }
+
+    @Test
+    @DisplayName("says the same thing as the unified view about what changed")
+    void rowsAgreeWithLines() {
+        // Both presentations must come from one diff; if the row model ever ran its own
+        // comparison the two views could disagree about what changed on the same page.
+        MarkdownDiff.Result result = MarkdownDiff.compare(
+                "alpha\nbeta\ngamma\n", "alpha\nBETA\ngamma\ndelta\n");
+
+        long addedRows = result.getRows().stream().filter(r -> r.getRight() != null && !r.isUnchanged()).count();
+        long removedRows = result.getRows().stream().filter(r -> r.getLeft() != null && !r.isUnchanged()).count();
+
+        assertEquals(result.getAddedCount(), addedRows);
+        assertEquals(result.getRemovedCount(), removedRows);
+    }
+
     @Test
     @DisplayName("tokenizes into alternating whitespace and word runs that rejoin exactly")
     void tokenizesReversibly() {
