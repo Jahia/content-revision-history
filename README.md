@@ -332,6 +332,48 @@ jsoup but does not export `org.jsoup` to modules.
 - `mvn test` — unit tests for the Markdown pipeline (the pure, rule-bearing part).
 - `tests/` — Docker-based Cypress e2e. See [tests/README.md](tests/README.md).
 
+## Backfilling pages that predate the module
+
+`src/main/resources/META-INF/groovyConsole/backfill-revision-snapshots.groovy` reconstructs
+snapshots for pages that already existed, from JCR version storage. Run it from **Tools > Groovy
+console**; it is a one-shot migration, not a feature, so it ships as a script rather than as
+module surface.
+
+**How it can work.** `JCRSessionWrapper.setVersionDate(Date)` pins an entire session to an instant:
+every node read through it, including nodes reached by walking down from the page, resolves to its
+state then. The render chain does *not* do the same — `?v=<millis>` on a URL renders one content
+node historically, but a container or a page renders its children at current content. So the
+script walks the pinned session for structure and fetches each leaf's own `.markdown?v=` render,
+which is the real view rather than a reimplementation of it.
+
+**It validates itself before writing.** It reconstructs every instant for which a real captured
+snapshot exists and compares byte for byte, sorting the results into three outcomes: exact,
+date-skewed (the rebuilt text matches a *different* snapshot), and unexplained. It aborts on
+unexplained unless `ALLOW_UNEXPLAINED` is set, because a migration that writes a subtly wrong
+record is worse than one that refuses to run.
+
+That gate cannot fire on a page with no snapshots at all — which is exactly the page you want to
+backfill. Run it first on a page that *does* have captured history to establish that the
+composition is faithful for your content types.
+
+**What it cannot do.** Deleted components are unrecoverable: `?v=` needs an addressable node, so a
+component removed since then has no current path. Coverage is bounded by version purging. And
+`crh:capturedBy` is written as `reconstructed`, never `guest` — live snapshots are captured over
+HTTP *as guest*, which is what guarantees they hold only what the public could see, and
+retroactive reconstruction has no such guarantee.
+
+Measured on a page with 11 captured snapshots: 57 candidate instants, 10 of 11 reproduced exactly,
+16 snapshots written and 41 collapsed by content-hash dedupe. The single difference was not
+composition drift but a captured snapshot whose date and content disagree — its neighbour's
+capture had been refused by the rate limiter and never stored, so the record carried a later
+publication's text under an earlier instant. The reconstruction was right and the stored record
+was the inexact one.
+
+The script saves and restores the folder's `crh:latestHash` / `crh:latestSnapshot` pointers around
+the run: `captureIfChanged` assumes it is always storing the newest snapshot, and leaving those
+aimed at a backfilled instant would make the next live capture compare against the wrong baseline.
+Verified by publishing a real change afterwards and confirming the capture was `STORED`.
+
 ## Retention
 
 Snapshots are kept indefinitely and are **not** pruned by age. That is deliberate: the record
