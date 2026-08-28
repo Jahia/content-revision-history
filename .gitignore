@@ -3,3 +3,7 @@ target/
 # Never commit local env files: they carry the Jahia license
 .env
 .env.local
+
+# Written by the Jahia module build beside src/main/import/repository.xml (the comments are
+# stripped and the XML normalised). It is a build output, not a source file.
+src/main/import/*.generated

@@ -1,20 +1,63 @@
 /*
- * Content Revision History -- public revision list and comparison panel.
+ * Content Revision History -- public revision list, comparison, and snapshot preview.
  *
  * Scoped entirely under .crh-* class names: this stylesheet loads into whatever site the
  * component was dropped on, so it must not restyle anything it does not own. No element
  * selectors, no resets.
  *
+ * PALETTE -- adapted from the Jahia store (store.jahia.com / store-template), with one
+ * deliberate departure that is worth reading before "correcting" it back.
+ *
+ *   The store's brand blue is #03a9f4. Measured against white it is 2.63:1, which fails WCAG AA
+ *   for text (4.5:1), fails AAA (7:1), and fails even the 3:1 threshold for non-text contrast.
+ *   #00a0e3 is 2.94:1 and fails the same way. The store's muted grey #777 is 4.48:1: AA, but not
+ *   AAA. This module targets AAA, and its output is the evidentiary part of a public page, so the
+ *   palette is matched in FAMILY rather than in hex:
+ *
+ *     - anything that carries meaning (text, links, headings, state borders) uses --crh-accent,
+ *       #01579b: the same blue, darkened to 7.40:1. Recognisably the store's colour, readable.
+ *     - the exact brand blue survives as --crh-accent-bright, used ONLY as decoration where
+ *       nothing depends on seeing it -- currently the notice rule. Never for text, never for a
+ *       focus ring, never as the only carrier of state.
+ *
  * Colour is never the only carrier of meaning (WCAG 1.4.1): every added or removed line also
- * carries a +/- marker and a visually-hidden text label, so the diff is still readable in
+ * carries a +/- marker and a visually-hidden text label, so the diff stays readable in
  * monochrome, in forced-colours mode, and with this stylesheet absent altogether.
  *
  * Foreground AND background are always set together. Setting only one leaves the pair at the
- * mercy of the host site's theme, which is how a "green on white" rule becomes green on dark
- * grey on someone else's page.
- *
- * Contrast targets WCAG 2.2 AAA (>= 7:1 for normal text); the pairs below sit near 11:1.
+ * mercy of the host site's theme, which is how a "green on white" rule becomes green on dark grey
+ * on someone else's page.
  */
+
+.crh-revision-history,
+.crh-snapshot-preview {
+    /* Store palette, contrast-corrected. Tokens rather than repeated literals so the departure
+       above lives in exactly one place. */
+    --crh-accent: #01579b;
+    --crh-accent-bright: #03a9f4;
+    --crh-text: #212121;
+    --crh-text-muted: #4a4a4a;
+    --crh-surface: #ffffff;
+    --crh-surface-sunken: #eeeeee;
+    --crh-rule: #767676;
+
+    --crh-added-bg: #dff5e5;
+    --crh-added-text: #0b3d1f;
+    --crh-removed-bg: #fde8ea;
+    --crh-removed-text: #5a0b14;
+    --crh-notice-bg: #fff4d6;
+    --crh-notice-text: #4a3200;
+
+    /*
+     * Lato is the store's typeface. Listed first so the module matches wherever the host already
+     * loads it, with a system stack behind it rather than a bare `sans-serif` -- no webfont is
+     * fetched by this module, and a host with its own typography can override this single scoped
+     * rule.
+     */
+    font-family: 'Lato', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial,
+        sans-serif;
+    color: var(--crh-text);
+}
 
 /* ------------------------------------------------------------------ revision list */
 
@@ -24,91 +67,320 @@
     padding: 0;
 }
 
-.crh-entry {
-    padding: 0.75rem 0;
-    border-bottom: 1px solid #767676; /* 4.5:1 against white -- a border, not text */
+/*
+ * The disclosure control. Native <summary>, so it needs no role, no tabindex and no script; the
+ * padding is what carries it to the 44x44 CSS px target, expressed in rem so the target grows
+ * with the text rather than clipping when a visitor enlarges fonts.
+ */
+.crh-revision-toggle {
+    padding: 0.6rem 0.4rem;
+    min-height: 44px;
+    box-sizing: border-box;
+    cursor: pointer;
+    font-weight: 700;
+    color: var(--crh-accent);
 }
 
+.crh-revision-disclosure {
+    margin-top: 0.5rem;
+}
+
+.crh-entry {
+    padding: 0.6rem 0;
+    border-bottom: 1px solid var(--crh-rule);
+}
+
+.crh-entry > h3 {
+    margin: 0 0 0.3rem;
+    font-size: 1.05rem;
+    color: var(--crh-accent);
+}
+
+/* The date beside the version number: lighter and smaller so the version still reads as the
+   heading, and the pair reads as one line rather than two competing ones. */
+.crh-entry-date {
+    margin-left: 0.5rem;
+    font-weight: 400;
+    font-size: 0.85em;
+    color: var(--crh-text-muted);
+}
+
+/*
+ * Label/value pairs on ONE row each instead of two. A <dl> in default block layout spends six
+ * lines on three facts, so a history of any length buried the page it belongs to. Grid keeps the
+ * list semantics -- and the visible labels, which are not hidden away -- while halving the
+ * height: dt and dd pair up automatically because there is exactly one dd per dt here.
+ */
 .crh-entry-facts {
-    margin: 0.5rem 0;
+    display: grid;
+    grid-template-columns: max-content minmax(0, 1fr);
+    column-gap: 1rem;
+    row-gap: 0.15rem;
+    margin: 0.35rem 0;
 }
 
 .crh-entry-facts dt {
     font-weight: 700;
-    margin-top: 0.5rem;
+    margin: 0;
+    color: var(--crh-text-muted);
 }
 
 .crh-entry-facts dd {
-    margin: 0 0 0 1rem;
+    margin: 0;
+}
+
+.crh-entry-facts dd > p {
+    margin: 0 0 0.4rem;
+}
+
+.crh-entry-facts dd > p:last-child {
+    margin-bottom: 0;
 }
 
 /*
- * Standalone (non-inline) control, so WCAG 2.2 SC 2.5.8 target-size applies: 44x44 CSS px,
- * reached through padding rather than a fixed height so the target grows with the text when a
- * visitor zooms or enlarges fonts.
+ * Below this width a two-column grid squeezes the value column to a few characters, so the pairs
+ * stack -- the one place where the taller layout is the correct one (SC 1.4.10 Reflow).
  */
-.crh-compare-link {
-    display: inline-block;
-    min-height: 44px;
-    padding: 0.6rem 0.75rem;
-    box-sizing: border-box;
+@media (max-width: 30rem) {
+    .crh-entry-facts {
+        grid-template-columns: minmax(0, 1fr);
+        row-gap: 0;
+    }
+
+    .crh-entry-facts dd {
+        margin: 0 0 0.45rem;
+    }
 }
 
-.crh-compare-unavailable {
-    color: #3a3a3a;
-    margin: 0.5rem 0;
+/* ------------------------------------------------------------------ comparison selector */
+
+/*
+ * The selector is deliberately unstyled: no box, no borders, no colours of its own. It reads as
+ * one line -- Compare [older] with [newer] [button] -- and the controls stay native so they
+ * inherit whatever the host site already uses for form fields.
+ *
+ * The fieldset is zeroed rather than removed: it still groups the controls for assistive
+ * technology (its legend is visually hidden), it just contributes nothing visual.
+ *
+ * The ONE thing kept is the 44x44 CSS px target on the interactive controls. A native select is
+ * around 24-30px tall, and dropping to that would be a real accessibility regression rather than
+ * a cosmetic change, so it stays and is called out here instead of being removed quietly.
+ */
+.crh-compare-form {
+    margin-bottom: 0.75rem;
 }
 
-/* Visible, thick, offset focus ring on every interactive element this module renders. */
-.crh-compare-link:focus-visible,
-.crh-diff-close:focus-visible,
+.crh-compare-form fieldset {
+    border: 0;
+    padding: 0;
+    margin: 0;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.4rem 0.5rem;
+}
+
+/*
+ * The selects match the rest of the module rather than the operating system: same typeface (a
+ * native select otherwise renders in the OS font, which is the most visible mismatch), same
+ * border and radius as the panel and the entry rules, same surface and text colours.
+ *
+ * 32px to sit level with the Compare button beside them. Two controls on one line at different
+ * heights read as an accident; matching them is why this is 32 rather than the 44 it once was.
+ * It still clears the WCAG 2.2 AA target size (SC 2.5.8, 24x24), the same trade the button makes
+ * and for the same reason.
+ */
+.crh-compare-form select {
+    min-height: 32px;
+    max-width: 100%;
+    padding: 0.25rem 0.4rem;
+    font: inherit;
+    color: var(--crh-text);
+    background: var(--crh-surface);
+    border: 1px solid var(--crh-rule);
+    border-radius: 3px;
+}
+
+.crh-compare-form select:hover {
+    border-color: var(--crh-accent);
+}
+
+/* The two words that read as one sentence with the controls: "Compare [x] with [y]". Muted, so
+   the revision labels in the selects stay the thing the eye lands on. */
+.crh-compare-form label {
+    color: var(--crh-text-muted);
+}
+
+/*
+ * Small primary icon button, matching the store's _iconBtn_ treatment: a filled square with a
+ * 16px stroked glyph, no text.
+ *
+ * 32x32 clears the WCAG 2.2 AA target size (SC 2.5.8, 24x24) but not the AAA enhanced size
+ * (SC 2.5.5, 44x44) the rest of this module holds to. That is a deliberate, requested trade for a
+ * compact control, and it is written down here rather than left to be discovered.
+ */
+.crh-compare-btn {
+    min-width: 32px;
+    min-height: 32px;
+    padding: 0.4rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    color: #ffffff;
+    background: var(--crh-accent);
+    border: 1px solid var(--crh-accent);
+    border-radius: 3px;
+}
+
+.crh-compare-btn:hover {
+    color: var(--crh-accent);
+    background: var(--crh-surface);
+}
+
+/* The glyph inherits currentColor, so it follows the button through hover and forced-colours
+   mode instead of staying a hardcoded shade. */
+.crh-compare-btn > svg {
+    display: block;
+}
+
+/* Visible, thick, offset focus ring on every interactive element this module renders. Uses the
+   accent, which at 7.40:1 clears the 3:1 non-text contrast threshold with room to spare -- the
+   store's brand blue would not have. */
+.crh-compare-form select:focus-visible,
+.crh-compare-btn:focus-visible,
+.crh-revision-toggle:focus-visible,
 .crh-diff-panel:focus-visible {
-    outline: 3px solid currentColor;
+    outline: 3px solid var(--crh-accent);
     outline-offset: 2px;
 }
 
-/* ------------------------------------------------------------------ diff panel */
+/* ------------------------------------------------------------------ comparison result */
 
 .crh-diff-panel {
-    margin-top: 2rem;
-    padding: 1rem;
-    background: #ffffff;
-    color: #1a1a1a;
-    border: 2px solid #1a1a1a;
+    /* Anchors the close cross in both states. */
+    position: relative;
+    margin-top: 1rem;
+    /* Right padding reserves room for the cross so a long heading cannot slide under it. */
+    padding: 1rem 3rem 1rem 1rem;
+    background: var(--crh-surface);
+    color: var(--crh-text);
+    border: 1px solid var(--crh-rule);
+    border-top: 4px solid var(--crh-accent);
+    border-radius: 3px;
+}
+
+/*
+ * Popup state. Applied only when the panel has actually been upgraded, so a browser without the
+ * Popover API -- or a visitor without JavaScript -- keeps the inline panel above, which is a
+ * complete rendering in its own right rather than a degraded one.
+ *
+ * :popover-open is an unknown selector to browsers lacking the API, which drops the whole rule.
+ * That is the desired outcome here, not a hazard: those browsers never get the attribute either.
+ */
+/*
+ * Hide the panel while it is a CLOSED popover.
+ *
+ * The browser already does this, from its UA stylesheet: [popover]:not(:popover-open){display:none}.
+ * But author rules beat UA rules whatever their specificity, and virtually every site normalizes
+ * `section { display: block }` (Bootstrap's reboot does, and so does the Jahia demo template set).
+ * That one host rule defeated the popover's own hiding, so dismissing the popup -- with Escape,
+ * or by clicking outside -- dropped the comparison back into the page flow as an inline panel
+ * instead of closing it.
+ *
+ * So the rule is restated here as an author rule of our own, with enough specificity to win.
+ * Browsers without the Popover API do not understand :popover-open and drop this entirely, which
+ * is exactly right: they never get the attribute either, and their inline panel is the intended
+ * fallback rather than a bug.
+ */
+.crh-diff-panel[popover]:not(:popover-open) {
+    display: none;
+}
+
+.crh-diff-panel:popover-open {
+    position: fixed;
+    margin: auto;
+    max-width: min(70rem, 92vw);
+    max-height: 85vh;
+    overflow-y: auto;
+    padding: 1.25rem 3.25rem 1.25rem 1.25rem;
+}
+
+.crh-diff-panel::backdrop {
+    background: rgba(0, 0, 0, 0.45);
+}
+
+/*
+ * The cross, top right. Absolute inside the panel, which is position:relative inline and
+ * position:fixed as a popup -- absolute positioning resolves against either, so one rule covers
+ * both states.
+ *
+ * Sized to the AA target (SC 2.5.8) like the other controls here. The panel reserves padding on
+ * the right so the heading can never run underneath it.
+ */
+.crh-diff-close {
+    position: absolute;
+    top: 0.5rem;
+    right: 0.5rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 32px;
+    min-height: 32px;
+    color: var(--crh-text-muted);
+    border-radius: 3px;
+    text-decoration: none;
+}
+
+.crh-diff-close:hover {
+    color: var(--crh-accent);
+    background: var(--crh-surface-sunken);
+}
+
+.crh-diff-close:focus-visible {
+    outline: 3px solid var(--crh-accent);
+    outline-offset: 2px;
+}
+
+.crh-diff-panel > h3 {
+    margin: 0 0 0.75rem;
+    color: var(--crh-accent);
 }
 
 .crh-diff-notice {
-    background: #fff4d6;
-    color: #4a3200;
+    background: var(--crh-notice-bg);
+    color: var(--crh-notice-text);
     padding: 0.5rem 0.75rem;
-    border-left: 4px solid #4a3200;
+    /* The one place the store's exact brand blue is used: a decorative rule beside text that is
+       already legible without it. Nothing depends on seeing this colour. */
+    border-left: 4px solid var(--crh-accent-bright);
     margin: 0.5rem 0;
 }
 
 .crh-diff-stats {
     font-weight: 700;
+    color: var(--crh-text-muted);
 }
 
 .crh-diff-lines {
     list-style: none;
     margin: 1rem 0 0;
     padding: 0;
-    /*
-     * Wide content scrolls inside its own container rather than pushing the page sideways:
-     * a Markdown line can be long, and SC 1.4.10 (Reflow) forbids two-dimensional scrolling
-     * of the page itself at 320px / 400% zoom.
-     */
+    /* Wide content scrolls inside its own container rather than pushing the page sideways: a
+       Markdown line can be long, and SC 1.4.10 forbids two-dimensional scrolling of the page
+       itself at 320px / 400% zoom. */
     overflow-x: auto;
+    background: var(--crh-surface-sunken);
+    border-radius: 3px;
 }
 
 .crh-diff-line {
-    /* pre-wrap keeps the record verbatim: Markdown leading spaces and blank lines are
-       structure, and HTML would otherwise collapse them out of the evidence. */
+    /* pre-wrap keeps the record verbatim: Markdown leading spaces and blank lines are structure,
+       and HTML would otherwise collapse them out of the evidence. */
     white-space: pre-wrap;
     font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
     padding: 0.1rem 0.4rem;
-    background: #ffffff;
-    color: #1a1a1a;
+    color: var(--crh-text);
 }
 
 .crh-diff-marker {
@@ -118,24 +390,23 @@
 }
 
 .crh-diff-added {
-    background: #dff5e5;
-    color: #0b3d1f;
+    background: var(--crh-added-bg);
+    color: var(--crh-added-text);
 }
 
 .crh-diff-removed {
-    background: #fde8ea;
-    color: #5a0b14;
+    background: var(--crh-removed-bg);
+    color: var(--crh-removed-text);
 }
 
 .crh-diff-gap {
-    background: #f0f0f0;
-    color: #3a3a3a;
+    color: var(--crh-text-muted);
     font-style: italic;
 }
 
-/* ins/del carry the semantics; the underline/strikethrough defaults are removed because the
-   row already reads as added or removed and the extra decoration hurts legibility in
-   monospace. The elements themselves stay, for assistive technology. */
+/* ins/del carry the semantics; the underline and strikethrough defaults are removed because the
+   row already reads as added or removed and the extra decoration hurts legibility in monospace.
+   The elements themselves stay, for assistive technology. */
 .crh-diff-line ins,
 .crh-diff-line del {
     text-decoration: none;
@@ -143,7 +414,7 @@
     color: inherit;
 }
 
-/* Word-level highlight inside a changed line. Underline as well as tint, so the distinction
+/* Word-level highlight inside a changed line. Underline as well as weight, so the distinction
    survives without colour. */
 .crh-diff-line mark {
     background: transparent;
@@ -153,20 +424,41 @@
     text-decoration-thickness: 2px;
 }
 
-.crh-diff-close {
-    display: inline-block;
-    min-height: 44px;
-    padding: 0.6rem 0.75rem;
-    box-sizing: border-box;
-    margin-top: 1rem;
+/* ------------------------------------------------------------------ snapshot preview */
+
+/*
+ * Shown in jContent's preview panel, which is narrow, so the payload scrolls inside its own box
+ * rather than widening the panel. pre-wrap keeps the record verbatim: leading spaces and blank
+ * lines are structure in Markdown, and collapsing them would alter the evidence being inspected.
+ */
+.crh-snapshot-markdown {
+    white-space: pre-wrap;
+    overflow-x: auto;
+    max-height: 60vh;
+    margin: 0;
+    padding: 0.75rem;
+    background: var(--crh-surface-sunken);
+    color: var(--crh-text);
+    border: 1px solid var(--crh-rule);
+    border-radius: 3px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+}
+
+.crh-snapshot-preview h2,
+.crh-snapshot-preview h3 {
+    color: var(--crh-accent);
+}
+
+.crh-snapshot-hash {
+    word-break: break-all;
 }
 
 /* ------------------------------------------------------------------ utility */
 
 /*
- * Text for assistive technology only. If this stylesheet fails to load, the labels simply
- * become visible -- degraded appearance, never lost meaning. That is the correct direction for
- * a fallback to fail in.
+ * Text for assistive technology only. If this stylesheet fails to load, the labels simply become
+ * visible -- degraded appearance, never lost meaning. That is the correct direction for a
+ * fallback to fail in.
  */
 .crh-visually-hidden {
     position: absolute;

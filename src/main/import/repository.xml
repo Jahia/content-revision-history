@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<content xmlns:j="http://www.jahia.org/jahia/1.0" xmlns:jcr="http://www.jcp.org/jcr/1.0">
+   <modules jcr:primaryType="jnt:modules">
+      <content-revision-history j:dependencies="default"
+                                j:installedModules="default"
+                                j:modulePriority="0"
+                                j:moduleType="module"
+                                j:title="Content Revision History"
+                                jcr:primaryType="jnt:module">
+         <files jcr:primaryType="jnt:folder"/>
+         <contents jcr:primaryType="jnt:contentFolder"/>
+         <templates j:rootTemplatePath="/base" jcr:primaryType="jnt:templatesFolder">
+            <files jcr:primaryType="jnt:folder"/>
+            <contents jcr:primaryType="jnt:contentFolder"/>
+            <revision-snapshot-template j:applyOn="crh:revisionSnapshot"
+                                        j:defaultTemplate="true"
+                                        j:priority="100"
+                                        jcr:primaryType="jnt:contentTemplate">
+               <pagecontent jcr:primaryType="jnt:contentList">
+                  <row column="1col16" jcr:primaryType="jnt:row"/>
+               </pagecontent>
+               <row-col1 jcr:primaryType="jnt:contentList">
+                  <mainResourceDisplay jcr:primaryType="jnt:mainResourceDisplay"/>
+               </row-col1>
+            </revision-snapshot-template>
+         </templates>
+      </content-revision-history>
+   </modules>
+</content>

@@ -55,6 +55,16 @@ describe('Revision comparison (entry binding + diff viewer)', () => {
 
     const nodeUuidQuery = gql`query($path: String!) { jcr { nodeByPath(path: $path) { uuid } } }`;
 
+    const setBooleanMutation = gql`
+        mutation($path: String!, $name: String!, $value: String!) {
+            jcr {
+                mutateNode(pathOrId: $path) {
+                    mutateProperty(name: $name) { setValue(value: $value, type: BOOLEAN) }
+                }
+            }
+        }
+    `;
+
     const reorderMutation = gql`
         mutation($path: String!, $names: [String]!) {
             jcr { mutateNode(pathOrId: $path) { reorderChildren(names: $names) } }
@@ -79,6 +89,7 @@ describe('Revision comparison (entry binding + diff viewer)', () => {
     let pageUuid = '';
     let firstEntryUuid = '';
     let secondEntryUuid = '';
+    let thirdEntryUuid = '';
     let lastPublishAt = 0;
 
     const folderPath = () => `${historyRoot}/${pageUuid}/${language}`;
@@ -132,14 +143,24 @@ describe('Revision comparison (entry binding + diff viewer)', () => {
     const renderLive = (query = ''): Cypress.Chainable<string> =>
         cy.request<string>({url: `/cms/render/live/${language}${pagePath}.html${query}`}).then(r => r.body);
 
+    const setCollapsedByDefault = (value: boolean) =>
+        cy
+            .apollo({
+                mutation: setBooleanMutation,
+                variables: {path: historyPath, name: 'collapsedByDefault', value: String(value)}
+            })
+            .then((result: ApolloResult<unknown>) => {
+                expect(result.errors, 'collapsedByDefault must be settable').to.be.undefined;
+            });
+
     /**
-     * Puts the history in the newest-first order both views document and depend on.
+     * Regression test for `orderable` on crh:revisionHistory, kept as a helper because it is the
+     * exact call Jackrabbit rejected before the CND declared it: "child node ordering not
+     * supported". Extending jmix:list does NOT confer orderability.
      *
-     * Entries are authored oldest-first over time, so this is the real editorial gesture, not
-     * test scaffolding -- and it doubles as the regression test for `orderable` on
-     * crh:revisionHistory. Extending jmix:list does NOT make a type orderable; while the CND
-     * lacked the keyword, Jackrabbit rejected this outright with "child node ordering not
-     * supported", which meant editors could not honour the convention at all.
+     * Rendered order no longer depends on this -- it is derived from revisionDate now -- but
+     * document order is still the tie-breaker for revisions sharing a date, so the capability has
+     * to keep working.
      */
     const reorderNewestFirst = (names: string[]) =>
         cy
@@ -279,71 +300,409 @@ describe('Revision comparison (entry binding + diff viewer)', () => {
             });
     });
 
-    // ---------------------------------------------------------------- diff viewer
+    it('binds a third revision, giving the selector a non-adjacent pair to compare', () => {
+        // Three revisions is the smallest history where "compare any two" differs from "compare
+        // with the previous one", so the tests below need one more than binding alone requires.
+        setNodeProperty(textPath, 'text', '<p>Support lasts eighteen calendar months after release.</p>', language)
+            .then(() => addEntry('rev-c', '1.2', '<p>Clarified that the months are calendar months.</p>'))
+            .then((result: ApolloResult<AddNodeQueryData>) => {
+                expect(result.errors, 'the third entry must be creatable').to.be.undefined;
+                thirdEntryUuid = result.data?.jcr.addNode.uuid as string;
 
-    it('renders a word-level comparison between the two revisions', () => {
-        renderLive(`?crhDiff=${secondEntryUuid}`).then(html => {
-            // The id is qualified with the history node's identifier: the component is droppable,
-            // so a page may carry more than one and a fixed id would be emitted twice.
-            expect(html, 'the comparison panel must render').to.contain('id="crh-diff-panel-');
-            // The change was one word, so exactly one word must be highlighted on each side.
-            // Whole-line highlighting here would mean the word diff silently degraded.
-            expect(html, 'the removed word must be marked').to.contain('<mark>twelve</mark>');
-            expect(html, 'the added word must be marked').to.contain('<mark>eighteen</mark>');
-            // Semantics, not colour (SC 1.4.1), plus text labels for assistive technology.
+                return publishTriggeringCapture();
+            })
+            .then(() =>
+                pollUntil(
+                    bindings,
+                    map => Boolean(map[thirdEntryUuid]),
+                    `expected the third entry to be bound within ${captureTimeoutMs}ms`
+                )
+            )
+            .then(map => {
+                expect(map[thirdEntryUuid], 'the third entry must bind to its own snapshot').to.not.equal(
+                    map[secondEntryUuid]
+                );
+                expect(map[firstEntryUuid], 'earlier bindings must still stand').to.not.be.undefined;
+            });
+    });
+
+    // ---------------------------------------------------------------- comparison selector
+
+    /** Builds the comparison URL the selector form produces on submit. */
+    const comparisonUrl = (from: string, to: string) =>
+        `?crhFrom=${from}&crhTo=${to}`;
+
+    it('renders a selector offering every revision, defaulting to the two newest', () => {
+        renderLive().then(html => {
+            expect(html, 'the selector must render').to.contain('class="crh-compare-form"');
+            expect(html, 'both ends of the comparison must be selectable').to.contain('name="crhFrom"');
+            expect(html, 'both ends of the comparison must be selectable').to.contain('name="crhTo"');
+            // The selector carries no styling of its own, but it must keep its semantics: the
+            // fieldset groups the controls and the legend gives the group a purpose, because the
+            // visible labels alone are "Compare" and "with" and "with" is not a usable accessible
+            // name on its own. The legend is visually hidden, not removed.
+            expect(html, 'the controls must still be grouped').to.contain('<fieldset>');
+            expect(html, 'the group must keep a name, hidden from view').to.contain(
+                '<legend class="crh-visually-hidden">'
+            );
+            expect(html, 'each select must have a label').to.contain('<label for="crh-from-');
+
+            // Every revision appears in each select.
+            const fromBlock = html.slice(html.indexOf('name="crhFrom"'), html.indexOf('name="crhTo"'));
+            expect(
+                (fromBlock.match(/<option /g) ?? []).length,
+                'every revision must be selectable as the older end'
+            ).to.equal(3);
+        });
+    });
+
+    it('places the selector, and any result, above the list of revisions', () => {
+        renderLive().then(html => {
+            const section = html.slice(html.indexOf('<section class="crh-revision-history"'));
+            expect(
+                section.indexOf('crh-compare-form'),
+                'the selector must come before the list it filters'
+            ).to.be.lessThan(section.indexOf('crh-revision-list'));
+        });
+    });
+
+    it('renders no em dash anywhere on the page', () => {
+        renderLive().then(html => {
+            const section = html.slice(html.indexOf('<section class="crh-revision-history"'));
+            expect(section, 'no literal em dash').to.not.contain('\u2014');
+            expect(section, 'and none as an entity either').to.not.contain('&#8212;');
+        });
+    });
+
+    it('uses a small icon button that still carries an accessible name', () => {
+        // An icon-only button with no text alternative announces as just "button". The name comes
+        // from aria-label (the store's own pattern), and the SVG is aria-hidden so exactly one
+        // name reaches the accessibility tree rather than two competing ones.
+        renderLive().then(html => {
+            const button = html.slice(html.indexOf('<button type="submit"'));
+            const markup = button.slice(0, button.indexOf('</button>'));
+
+            expect(markup, 'the control must be an icon, not text').to.contain('<svg');
+            expect(markup, 'the graphic must not be announced separately').to.contain(
+                'aria-hidden="true"'
+            );
+            expect(markup, 'the button must have an accessible name').to.contain(
+                'aria-label="Compare"'
+            );
+            expect(markup, 'and a native tooltip, since this feature ships no script').to.contain(
+                'title="Compare"'
+            );
+            // The module's own class, not the store's: store-btn lives in the store's stylesheet
+            // and would style this control on exactly one site.
+            expect(markup, 'the control must use this module\'s own class').to.contain(
+                'class="crh-compare-btn"'
+            );
+        });
+    });
+
+    it('compares two NON-ADJACENT revisions, which is the point of the selector', () => {
+        // The per-revision controls this replaced could only ever answer about adjacent pairs.
+        // "What changed between the version I agreed to and today" is almost never adjacent.
+        renderLive(comparisonUrl(firstEntryUuid, thirdEntryUuid)).then(html => {
+            expect(html, 'the comparison panel must render').to.contain('id="crh-comparison-');
+            // The cumulative change across the whole span, not just the last step.
+            expect(html, 'the word removed two revisions ago must be marked').to.contain(
+                '<mark>twelve</mark>'
+            );
+            expect(html, 'the word present in the newest revision must be marked').to.contain(
+                '<mark>eighteen</mark>'
+            );
             expect(html, 'removals must use <del>').to.contain('<del>');
             expect(html, 'additions must use <ins>').to.contain('<ins>');
-            expect(html, 'a text alternative to the +/- markers must be present').to.contain('Removed line:');
-            // The active link is marked so a visitor returning to the list can tell which of N
-            // identically-shaped links produced the panel. This also guards a bug that failed
-            // silently: the entry view is a nested <template:module> render, and ${param.crhDiff}
-            // does not survive into it, so reading the parameter there yielded an empty value and
-            // simply omitted the attribute with no error anywhere.
-            expect(
-                (html.match(/aria-current="true"/g) ?? []).length,
-                'exactly one Compare link must be marked as current'
-            ).to.equal(1);
+            expect(html, 'a text alternative to the +/- markers must be present').to.contain(
+                'Removed line:'
+            );
         });
     });
 
-    it('renders no comparison panel at all when no revision was asked for', () => {
-        renderLive().then(html => {
-            expect(html, 'the revision list must still render').to.contain('crh-revision-list');
-            expect(html, 'the panel must appear only on request').to.not.contain('id="crh-diff-panel-');
-            expect(html, 'no link may claim to be current when nothing was requested').to.not.contain('aria-current');
+    it('serves the comparison as a plain panel, so it survives without scripting', () => {
+        // The popover attribute is added by script, never written into the markup: a browser
+        // keeps [popover] hidden until something shows it, so shipping it would make the
+        // comparison invisible to anyone with JavaScript off rather than merely un-popped.
+        renderLive(comparisonUrl(firstEntryUuid, thirdEntryUuid)).then(html => {
+            const panel = html.slice(html.indexOf('<section id="crh-comparison-'));
+            const openTag = panel.slice(0, panel.indexOf('>') + 1);
+
+            expect(openTag, 'the served panel must not carry popover').to.not.contain('popover');
+            expect(openTag, 'nor claim to be a dialog before it is one').to.not.contain('role="dialog"');
+            expect(html, 'and the comparison itself must be present in the response').to.contain(
+                '<mark>'
+            );
         });
     });
 
-    it('refuses an identifier that is not an entry of this history', () => {
-        // The containment check is the access control: the service reads with a SYSTEM session,
-        // so without it a crafted identifier would render an arbitrary node's content on a
-        // public page. The page's own uuid is a real, readable node -- and not an entry here.
-        renderLive(`?crhDiff=${pageUuid}`).then(html => {
-            expect(html, 'the panel must report the refusal rather than render nothing').to.contain(
-                'That revision could not be found in this history.'
+    it('upgrades that panel into a popup when scripting is available', () => {
+        cy.visit(
+            `/cms/render/live/${language}${pagePath}.html${comparisonUrl(firstEntryUuid, thirdEntryUuid)}`
+        );
+
+        cy.get('.crh-diff-panel')
+            .should('be.visible')
+            .and('have.attr', 'popover', 'auto')
+            .and('have.attr', 'role', 'dialog');
+
+        // NOT aria-modal: an auto popover does not trap focus or inert the page behind it, and
+        // claiming otherwise would misdescribe it to assistive technology.
+        cy.get('.crh-diff-panel').should('not.have.attr', 'aria-modal');
+
+        // The comparison is inside the popup, not left behind on the page.
+        // invoke('text') over the matched set rather than have.text: a word-level diff marks
+        // EVERY changed word, so this pair carries two marks ("eighteen" and "calendar") and an
+        // equality assertion was comparing against their concatenation.
+        cy.get('.crh-diff-panel').within(() => {
+            cy.get('del mark').invoke('text').should('contain', 'twelve');
+            cy.get('ins mark').invoke('text').should('contain', 'eighteen');
+        });
+    });
+
+    it('disappears when dismissed, rather than falling back into the page', () => {
+        // Regression test for a real defect: the host site's normalize sets
+        // `section { display: block }`, an AUTHOR rule, and author rules beat the UA rule that
+        // hides a closed popover ([popover]:not(:popover-open){display:none}) whatever their
+        // specificity. Dismissing the popup therefore dropped the comparison back into the page
+        // as an inline panel instead of closing it.
+        //
+        // hidePopover() is used rather than Escape or a click outside because it is a script
+        // call, not a user-agent gesture: Cypress's synthetic events cannot drive light dismiss,
+        // but they can call this, and the state it produces is the same one those gestures reach.
+        cy.visit(
+            `/cms/render/live/${language}${pagePath}.html${comparisonUrl(firstEntryUuid, thirdEntryUuid)}`
+        );
+        cy.get('.crh-diff-panel').should('be.visible');
+
+        cy.get('.crh-diff-panel').then($panel => {
+            ($panel[0] as unknown as {hidePopover: () => void}).hidePopover();
+        });
+
+        cy.get('.crh-diff-panel').should('not.be.visible');
+    });
+
+    it('closes with a cross in the corner, in either state', () => {
+        // A link, not a popovertarget button: as a popup, following it navigates away and the
+        // popup goes with it; inline, it simply clears the comparison. A popovertarget button
+        // would be a dead control on the inline fallback.
+        cy.visit(
+            `/cms/render/live/${language}${pagePath}.html${comparisonUrl(firstEntryUuid, thirdEntryUuid)}`
+        );
+        cy.get('.crh-diff-panel').should('be.visible');
+
+        // Icon-only, so the name has to come from aria-label or it announces as just "link".
+        cy.get('a.crh-diff-close')
+            .should('have.attr', 'aria-label', 'Close the comparison')
+            .find('svg')
+            .should('have.attr', 'aria-hidden', 'true');
+
+        cy.get('a.crh-diff-close').click();
+
+        cy.location('search').should('not.contain', 'crhFrom');
+        cy.get('.crh-diff-panel').should('not.exist');
+    });
+
+    it('is an "auto" popover, which is what dismisses it on Escape and on a click outside', () => {
+        // Asserted through the attribute rather than by simulating either gesture, and that is
+        // MEASURED, not assumed: a real Escape keypress and a real click-outside were each tried
+        // here and both left the popup open. Light dismiss is user-agent behaviour gated on
+        // TRUSTED events, and Cypress dispatches synthetic ones (isTrusted=false), so the
+        // browser's own handler ignores them. Such a test asserts Chrome's implementation, not
+        // this module's, and fails for a reason that says nothing about the code.
+        // (Ordinary clicks on links DO work -- element activation is not gated the same way --
+        // which is why the close-cross test above clicks for real.)
+        //
+        // What IS this module's choice is "auto" over "manual": a manual popover has no light
+        // dismiss at all, so a visitor could only close it by finding the cross.
+        cy.visit(
+            `/cms/render/live/${language}${pagePath}.html${comparisonUrl(firstEntryUuid, thirdEntryUuid)}`
+        );
+
+        cy.get('.crh-diff-panel')
+            .should('be.visible')
+            .and('have.attr', 'popover', 'auto');
+    });
+
+    it('normalises the pair chronologically however the visitor picked them', () => {
+        // Selecting newest-then-oldest must not invert the diff, or every addition would be
+        // reported as a removal and the record would read backwards.
+        renderLive(comparisonUrl(firstEntryUuid, thirdEntryUuid)).then(forwards => {
+            renderLive(comparisonUrl(thirdEntryUuid, firstEntryUuid)).then(backwards => {
+                const panel = (html: string) =>
+                    html.slice(html.indexOf('id="crh-comparison-'), html.indexOf('</section>', html.indexOf('id="crh-comparison-')));
+                expect(panel(backwards), 'the order of selection must not change the result').to.equal(
+                    panel(forwards)
+                );
+            });
+        });
+    });
+
+    it('explains rather than compares when the same revision is chosen twice', () => {
+        renderLive(comparisonUrl(firstEntryUuid, firstEntryUuid)).then(html => {
+            expect(html, 'the panel must say why there is nothing to compare').to.contain(
+                'Those are the same revision'
+            );
+            expect(html, 'nothing may be compared against itself').to.not.contain('<mark>');
+        });
+    });
+
+    it('refuses an identifier that is not a revision of this history', () => {
+        // The containment check IS the access control: the service reads with a SYSTEM session,
+        // so without it a crafted selection would render an arbitrary node on a public page.
+        // The page's own uuid is a real, readable node -- and not an entry here.
+        renderLive(comparisonUrl(firstEntryUuid, pageUuid)).then(html => {
+            expect(html, 'the refusal must be stated, not rendered blank').to.contain(
+                'not part of this history'
             );
             expect(html, 'no comparison may be produced for a foreign node').to.not.contain('<mark>');
         });
     });
 
     it('refuses a malformed identifier without erroring the page', () => {
-        renderLive('?crhDiff=not-a-uuid%27%20or%201%3D1').then(html => {
-            expect(html, 'a malformed identifier must be refused like any other').to.contain(
-                'That revision could not be found in this history.'
+        renderLive('?crhFrom=not-a-uuid%27%20or%201%3D1&crhTo=also-not-a-uuid').then(html => {
+            expect(html, 'a malformed selection must be refused like any other').to.contain(
+                'not part of this history'
             );
             expect(html, 'the rest of the page must still render').to.contain('crh-revision-list');
         });
     });
 
-    it('explains, rather than compares, when the requested revision is the earliest one', () => {
-        renderLive(`?crhDiff=${firstEntryUuid}`).then(html => {
-            expect(html, 'the earliest revision must be explained, not silently blank').to.contain(
-                'This is the earliest recorded revision'
+    it('renders no comparison panel until one is asked for', () => {
+        renderLive().then(html => {
+            expect(html, 'the revision list must still render').to.contain('crh-revision-list');
+            expect(html, 'the panel must appear only on request').to.not.contain('id="crh-comparison-');
+        });
+    });
+
+    // ---------------------------------------------------------------- collapsing
+
+    it('renders the revision list inside a disclosure that starts closed', () => {
+        // A revision history is supporting evidence for the page, not the page. Left open, a
+        // long one pushes the content it describes off the screen.
+        renderLive().then(html => {
+            expect(html, 'the list must be wrapped in a native <details>').to.contain(
+                '<details class="crh-revision-disclosure">'
             );
-            expect(html, 'nothing may be compared against a revision that has no predecessor').to.not.contain(
-                '<mark>'
+            expect(html, 'and must start closed').to.not.contain('crh-revision-disclosure" open');
+            // The count has to be computed before the summary that reports it: JSTL has no
+            // hoisting, and a <c:set> after its reader yields an empty value silently.
+            // Derived from what actually rendered rather than hardcoded, so adding a revision to
+            // an earlier test does not break this one for an unrelated reason.
+            const rendered = (html.match(/<article class="crh-entry"/g) ?? []).length;
+            expect(rendered, 'the list must have rendered some revisions').to.be.greaterThan(0);
+            expect(html, 'the toggle must report how many revisions are hidden').to.contain(
+                `${rendered} recorded revision(s)`
+            );
+            // Closed hides from view, not from the document: the record stays reachable by
+            // search engines, find-in-page and assistive technology.
+            expect(html, 'the entries must still be present in the DOM when closed').to.contain(
+                'crh-revision-list'
             );
         });
+    });
+
+    it('honours an editor who turns the collapsed default off', () => {
+        setCollapsedByDefault(false)
+            .then(() => publishTriggeringCapture())
+            .then(() => renderLive())
+            .then(html => {
+                expect(html, 'an expanded list must render open').to.contain(
+                    '<details class="crh-revision-disclosure" open>'
+                );
+
+                // Restored so the ordering-dependent tests in this file see the default state.
+                return setCollapsedByDefault(true);
+            });
+    });
+
+    // ---------------------------------------------------------------- ordering
+
+    it('puts a revision added at the end of the list into its correct place by date', () => {
+        // THE regression test for the reported bug. Content Editor appends a new child at the
+        // END, which under a newest-first reading is the OLDEST position -- so simply adding a
+        // revision used to render the newest one last, as "the earliest recorded revision" with
+        // no compare control, while the entry beside it compared against the wrong revision.
+        // Order is derived from revisionDate now, so appending must no longer matter.
+        const newestLabel = `2.0-${Date.now()}`;
+
+        addEntry('rev-newest', newestLabel, '<p>Added last, dated newest.</p>')
+            .then((result: ApolloResult<AddNodeQueryData>) => {
+                expect(result.errors, 'the entry must be creatable').to.be.undefined;
+
+                // Dated a day ahead of the others, and deliberately NOT reordered.
+                return cy.apollo({
+                    mutation: gql`
+                        mutation($path: String!, $value: String!) {
+                            jcr { mutateNode(pathOrId: $path) {
+                                mutateProperty(name: "revisionDate") { setValue(value: $value, type: DATE) }
+                            } }
+                        }
+                    `,
+                    variables: {
+                        path: `${historyPath}/rev-newest`,
+                        value: new Date(Date.now() + 86400000).toISOString()
+                    }
+                });
+            })
+            .then(() => publishTriggeringCapture())
+            .then(() => renderLive())
+            .then(html => {
+                const order = [...html.matchAll(/<h3 id="crh-entry-heading-[^"]*">\s*([^<]+)/g)]
+                    .map(m => m[1].trim());
+
+                expect(order[0], 'the newest revision by date must render first').to.equal(newestLabel);
+                expect(order[order.length - 1], 'the oldest must render last').to.equal('1.0');
+
+                // The selector must offer the revisions in that same order, or the list and the
+                // control would disagree about which revision is which.
+                const fromBlock = html.slice(html.indexOf('name="crhFrom"'), html.indexOf('name="crhTo"'));
+                const optionOrder = [...fromBlock.matchAll(/<option [^>]*>([^(]+)\(/g)]
+                    .map(m => m[1].trim());
+                expect(optionOrder, 'the selector must list revisions in the rendered order').to.deep.equal(order);
+            });
+    });
+
+    // ---------------------------------------------------------------- jContent preview
+
+    it('makes a captured snapshot displayable, so jContent can preview it', () => {
+        // A node is displayable only when a jnt:contentTemplate declares j:applyOn for its type;
+        // jContent previews by asking for displayableNode and rendering whatever comes back.
+        // Without the template this module ships, displayableNode was null and every render URL
+        // answered 404 -- regardless of views, mixins or permissions.
+        const snapshotQuery = gql`
+            query($path: String!) {
+                jcr(workspace: EDIT) {
+                    nodeByPath(path: $path) {
+                        children { nodes { path displayableNode { path } } }
+                    }
+                }
+            }
+        `;
+
+        cy.apollo({query: snapshotQuery, variables: {path: folderPath()}}).then(
+            (result: ApolloResult<{jcr: {nodeByPath?: {children: {nodes: Array<{path: string, displayableNode?: {path: string}}>}}}}>) => {
+                const snapshots = result.data?.jcr?.nodeByPath?.children.nodes ?? [];
+                expect(snapshots.length, 'the earlier tests must have captured snapshots').to.be.greaterThan(0);
+
+                const snapshot = snapshots[0];
+                expect(
+                    snapshot.displayableNode?.path,
+                    'a snapshot must be displayable in its own right, not via an ancestor'
+                ).to.equal(snapshot.path);
+
+                cy.request({url: `/cms/render/default/${language}${snapshot.path}.html`}).then(response => {
+                    expect(response.status, 'the preview must render').to.equal(200);
+                    expect(response.body, 'it must show the capture metadata').to.contain('Captured snapshot');
+                    // Always guest: the guarantee the whole capture design rests on.
+                    expect(response.body, 'it must show which principal captured it').to.contain('guest');
+                    // Preformatted, never re-rendered as HTML: the snapshot is the evidence.
+                    expect(response.body, 'the payload must be shown verbatim').to.contain(
+                        'crh-snapshot-markdown'
+                    );
+                });
+            }
+        );
     });
 
     // ---------------------------------------------------------------- snapshot hygiene
@@ -358,7 +717,12 @@ describe('Revision comparison (entry binding + diff viewer)', () => {
             expect(response.body, 'entry summaries must not appear in the captured Markdown').to.not.contain(
                 'Extended the support window'
             );
-            expect(response.body, 'the page content itself must still be captured').to.contain('eighteen months');
+            expect(response.body, 'the page content itself must still be captured').to.contain(
+                // Matched on a word every revision keeps, not a whole phrase: asserting
+                // "eighteen months" broke the day a test above changed the sentence to
+                // "eighteen calendar months", for a reason unrelated to what this checks.
+                'eighteen'
+            );
         });
     });
 });

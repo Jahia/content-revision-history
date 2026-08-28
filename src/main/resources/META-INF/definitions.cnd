@@ -18,6 +18,12 @@
  orderable
  itemtype = content
  - historyTitle (string) i18n
+ // Whether the list starts closed. Defaults to true: a revision history is supporting
+ // evidence for the page, not the page, and a policy that has been revised twenty times
+ // otherwise pushes its own content off the screen. The entries stay in the DOM either way --
+ // <details> hides them from view, not from search engines, find-in-page or assistive
+ // technology -- so nothing about the public record depends on this being open.
+ - collapsedByDefault (boolean) = true
  + * (crh:revisionEntry)
 
 // One public revision. Authored by an editor; publishing it is what makes it public.

@@ -7,176 +7,187 @@ import org.jahia.services.content.JCRTemplate;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import javax.jcr.Binary;
 import javax.jcr.RepositoryException;
 import javax.jcr.Value;
-import java.io.ByteArrayOutputStream;
-import java.io.IOException;
-import java.io.InputStream;
-import java.nio.charset.StandardCharsets;
 import java.util.Calendar;
+import java.util.Collections;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.regex.Pattern;
 
 import static org.jahia.modules.revisionhistory.RevisionHistoryConstants.*;
 
 /**
- * Answers "what changed in this revision" for the public page.
+ * Compares any two revisions of a page.
  *
  * <p>Reads snapshots from the {@code default} workspace with a system session, deliberately.
  * Snapshots are never published, so nothing in {@code live} could serve this. That is defensible
- * and worth stating plainly, because it looks wrong at a glance: the snapshot is not a draft
- * that has escaped review, it is an immutable record <em>generated from the live page</em> --
- * captured over HTTP as {@code guest}, which is exactly the content the visitor asking for the
- * comparison was already entitled to see.
+ * and worth stating plainly, because it looks wrong at a glance: the snapshot is not a draft that
+ * has escaped review, it is an immutable record <em>generated from the live page</em> -- captured
+ * over HTTP as {@code guest}, which is exactly the content the visitor reading the comparison was
+ * already entitled to see.
+ *
+ * <p><b>One comparison, on request.</b> An earlier design pre-rendered every adjacent comparison
+ * so a popup could open with no round trip. That cannot extend to arbitrary pairs -- ten revisions
+ * have forty-five of them, twenty have a hundred and ninety -- and a visitor asking "what changed
+ * between the version I signed and today" is asking about a pair that is usually not adjacent. So
+ * exactly one comparison is built, only when one is asked for, which also costs less than the
+ * pre-rendering it replaced.
+ *
+ * <p><b>The selection is visitor input.</b> Both identifiers arrive from a form, and this service
+ * reads with a session that bypasses ACLs, so both are proven to be children of the
+ * <em>server-supplied</em> history node before anything is read. Without that check a crafted
+ * value would render an arbitrary node onto a public page.
  *
  * <p>Failure is always a message, never an exception reaching the page. A revision history whose
- * comparison link produces a stack trace is worse than one that says why it cannot compare.
+ * comparison produces a stack trace is worse than one that says why it cannot compare.
  */
 public class RevisionDiffService {
 
     private static final Logger logger = LoggerFactory.getLogger(RevisionDiffService.class);
 
-    /** Matches a JCR identifier. Applied before any lookup, since this value is user-supplied. */
+    /** Matches a JCR identifier. */
     private static final Pattern IDENTIFIER = Pattern.compile(
             "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$");
 
     /**
      * Why no comparison is shown. Resource-bundle key suffixes, resolved by the view, so the
-     * reason is always stated to the visitor in their language instead of the panel silently
-     * rendering empty.
+     * reason is always stated to the visitor in their language instead of the panel rendering
+     * empty.
      */
     public static final String REASON_NOT_FOUND = "notFound";
-    public static final String REASON_NO_PREVIOUS = "noPrevious";
+    public static final String REASON_SAME_REVISION = "sameRevision";
     public static final String REASON_NO_SNAPSHOT = "noSnapshot";
     public static final String REASON_NO_PREVIOUS_SNAPSHOT = "noPreviousSnapshot";
 
     /**
+     * Compares two revisions of the same history.
+     *
+     * <p>The pair is ordered by {@code revisionDate} before diffing, so additions and removals are
+     * always reported in chronological order no matter which way round the visitor picked them.
+     *
      * @param historyIdentifier the {@code crh:revisionHistory} being rendered; server-supplied
-     * @param entryIdentifier   the entry to compare; <b>visitor-supplied, never trusted</b>
+     * @param oneIdentifier     one selected revision; <b>visitor-supplied, never trusted</b>
+     * @param otherIdentifier   the other selected revision; likewise untrusted
      * @param language          the rendering language, selecting the snapshot partition
+     * @return always a view; ask {@link RevisionDiffView#isAvailable()} before reading the diff
      */
-    public RevisionDiffView compare(String historyIdentifier, String entryIdentifier, String language) {
-        if (entryIdentifier == null || !IDENTIFIER.matcher(entryIdentifier).matches()
-                || historyIdentifier == null || !IDENTIFIER.matcher(historyIdentifier).matches()) {
+    public RevisionDiffView compare(String historyIdentifier, String oneIdentifier,
+                                    String otherIdentifier, String language) {
+        if (!isIdentifier(historyIdentifier) || !isIdentifier(oneIdentifier)
+                || !isIdentifier(otherIdentifier)) {
             return RevisionDiffView.unavailable(REASON_NOT_FOUND, null);
+        }
+        if (oneIdentifier.equals(otherIdentifier)) {
+            return RevisionDiffView.unavailable(REASON_SAME_REVISION, null);
         }
         try {
             return JCRTemplate.getInstance().doExecuteWithSystemSessionAsUser(null, WORKSPACE, null,
                     (JCRCallback<RevisionDiffView>) session ->
-                            resolve(session, historyIdentifier, entryIdentifier, language));
+                            resolve(session, historyIdentifier, oneIdentifier, otherIdentifier,
+                                    language));
         } catch (RepositoryException | RuntimeException e) {
-            logger.error("Could not build the revision comparison for entry {}", entryIdentifier, e);
+            logger.error("Could not compare revisions {} and {}", oneIdentifier, otherIdentifier, e);
             return RevisionDiffView.unavailable(REASON_NOT_FOUND, null);
         }
     }
 
     private RevisionDiffView resolve(JCRSessionWrapper session, String historyIdentifier,
-                             String entryIdentifier, String language) throws RepositoryException {
+                                     String oneIdentifier, String otherIdentifier, String language)
+            throws RepositoryException {
 
-        JCRNodeWrapper entry = nodeOrNull(session, entryIdentifier);
         JCRNodeWrapper history = nodeOrNull(session, historyIdentifier);
-        if (entry == null || history == null
-                || !entry.isNodeType(ENTRY_TYPE) || !history.isNodeType(HISTORY_TYPE)
-                // The containment check is the access control. Without it, any visitor could
-                // put an arbitrary identifier in the query string and have this service read a
-                // node -- with a SYSTEM session, which bypasses ACLs -- and render its content.
-                // The history node itself is server-supplied, so proving the entry belongs to it
-                // is what keeps a rendered comparison inside the page it was requested from.
-                || !history.getIdentifier().equals(entry.getParent().getIdentifier())) {
+        if (history == null || !history.isNodeType(HISTORY_TYPE)) {
             return RevisionDiffView.unavailable(REASON_NOT_FOUND, null);
         }
 
-        String currentLabel = stringOrNull(entry, PROP_REVISION_LABEL);
-
-        JCRNodeWrapper previous = previousSibling(history, entryIdentifier);
-        if (previous == null) {
-            return RevisionDiffView.unavailable(REASON_NO_PREVIOUS, currentLabel);
+        // Newest first, and the SAME ordering the list view renders, because both go through
+        // RevisionEntryOrder. The list also decides which of the two selections is the older.
+        List<JCRNodeWrapper> entries = RevisionEntryOrder.newestFirst(history);
+        int newerIndex = indexOf(entries, oneIdentifier);
+        int olderIndex = indexOf(entries, otherIdentifier);
+        // Containment IS the access control: an identifier that is not an entry of THIS history
+        // never reaches a repository read.
+        if (newerIndex < 0 || olderIndex < 0) {
+            return RevisionDiffView.unavailable(REASON_NOT_FOUND, null);
         }
-
-        JCRNodeWrapper page = enclosingPage(history);
-        if (page == null) {
-            return RevisionDiffView.unavailable(REASON_NO_SNAPSHOT, currentLabel);
+        if (newerIndex > olderIndex) {
+            int swap = newerIndex;
+            newerIndex = olderIndex;
+            olderIndex = swap;
         }
-        String siteKey = page.getResolveSite().getSiteKey();
-        RevisionSnapshotService.validate(siteKey, page.getIdentifier(), language);
+        JCRNodeWrapper newer = entries.get(newerIndex);
+        JCRNodeWrapper older = entries.get(olderIndex);
 
-        Map<String, JCRNodeWrapper> byEntry =
-                snapshotsByEntry(session, siteKey, page.getIdentifier(), language);
+        String newerLabel = stringOrNull(newer, PROP_REVISION_LABEL);
+        String olderLabel = stringOrNull(older, PROP_REVISION_LABEL);
 
-        JCRNodeWrapper currentSnapshot = byEntry.get(entryIdentifier);
-        if (currentSnapshot == null) {
-            return RevisionDiffView.unavailable(REASON_NO_SNAPSHOT, currentLabel);
+        Map<String, JCRNodeWrapper> snapshotByEntry = snapshotsFor(session, history, language);
+        JCRNodeWrapper newerSnapshot = snapshotByEntry.get(newer.getIdentifier());
+        JCRNodeWrapper olderSnapshot = snapshotByEntry.get(older.getIdentifier());
+        if (newerSnapshot == null) {
+            return RevisionDiffView.unavailable(REASON_NO_SNAPSHOT, newerLabel);
         }
-        JCRNodeWrapper previousSnapshot = byEntry.get(previous.getIdentifier());
-        if (previousSnapshot == null) {
-            return RevisionDiffView.unavailable(REASON_NO_PREVIOUS_SNAPSHOT, currentLabel);
+        if (olderSnapshot == null) {
+            return RevisionDiffView.unavailable(REASON_NO_PREVIOUS_SNAPSHOT, olderLabel);
         }
 
         MarkdownDiff.Result diff = MarkdownDiff.compare(
-                readMarkdown(previousSnapshot), readMarkdown(currentSnapshot));
+                SnapshotPayload.read(olderSnapshot), SnapshotPayload.read(newerSnapshot));
 
         boolean mismatch = !equalStrings(
-                stringOrNull(previousSnapshot, PROP_GENERATOR_VERSION),
-                stringOrNull(currentSnapshot, PROP_GENERATOR_VERSION));
+                stringOrNull(olderSnapshot, PROP_GENERATOR_VERSION),
+                stringOrNull(newerSnapshot, PROP_GENERATOR_VERSION));
 
-        return new RevisionDiffView(null, currentLabel, stringOrNull(previous, PROP_REVISION_LABEL),
-                dateOrNull(entry), dateOrNull(previous), diff, mismatch);
+        return new RevisionDiffView(null, newerLabel, olderLabel,
+                dateOrNull(newer), dateOrNull(older), diff, mismatch);
+    }
+
+    private static boolean isIdentifier(String value) {
+        return value != null && IDENTIFIER.matcher(value).matches();
+    }
+
+    private static int indexOf(List<JCRNodeWrapper> entries, String identifier)
+            throws RepositoryException {
+        for (int i = 0; i < entries.size(); i++) {
+            if (entries.get(i).getIdentifier().equals(identifier)) {
+                return i;
+            }
+        }
+        return -1;
     }
 
     // ------------------------------------------------------------------ internals
 
     /**
-     * The entry immediately after this one in editorial order, i.e. the older revision.
-     *
-     * <p>Positional, not sorted by {@code revisionDate}, matching what the list view renders and
-     * documents: {@code crh:revisionHistory} extends {@code jmix:list}, so editors order entries
-     * by drag-and-drop and the convention is newest-first. Sorting by date here while the view
-     * sorts by position would let the two disagree about which revision "previous" means, and
-     * the comparison would silently describe a different pair than the link that opened it.
-     */
-    private JCRNodeWrapper previousSibling(JCRNodeWrapper history, String entryIdentifier)
-            throws RepositoryException {
-        boolean found = false;
-        for (JCRNodeWrapper sibling : history.getNodes()) {
-            if (found && sibling.isNodeType(ENTRY_TYPE)) {
-                return sibling;
-            }
-            if (sibling.getIdentifier().equals(entryIdentifier)) {
-                found = true;
-            }
-        }
-        return null;
-    }
-
-    /** Nearest ancestor page. The history component may sit several containers deep in a page. */
-    private JCRNodeWrapper enclosingPage(JCRNodeWrapper node) throws RepositoryException {
-        JCRNodeWrapper current = node;
-        while (current != null && !"/".equals(current.getPath())) {
-            if (current.isNodeType(PAGE_TYPE)) {
-                return current;
-            }
-            current = current.getParent();
-        }
-        return null;
-    }
-
-    /**
      * Inverts {@code crh:entryRefs} into entry identifier -&gt; snapshot, in one folder scan.
      *
-     * <p>Bounded by {@code MAX_SNAPSHOTS_PER_PAGE_LANGUAGE} (500) and runs only when a visitor
-     * explicitly asks for a comparison, so the scan is cheaper than maintaining an index that
-     * could fall out of step with the snapshots themselves.
+     * <p>Bounded by {@code MAX_SNAPSHOTS_PER_PAGE_LANGUAGE} (500) and run only when a visitor
+     * actually asks for a comparison, so the scan is cheaper than maintaining an index that could
+     * fall out of step with the snapshots themselves.
      */
-    private Map<String, JCRNodeWrapper> snapshotsByEntry(JCRSessionWrapper session, String siteKey,
-                                                         String pageUuid, String language)
+    private Map<String, JCRNodeWrapper> snapshotsFor(JCRSessionWrapper session,
+                                                     JCRNodeWrapper history, String language)
             throws RepositoryException {
+        JCRNodeWrapper page = enclosingPage(history);
+        if (page == null) {
+            return Collections.emptyMap();
+        }
+        String siteKey = page.getResolveSite().getSiteKey();
+        try {
+            RevisionSnapshotService.validate(siteKey, page.getIdentifier(), language);
+        } catch (IllegalArgumentException rejected) {
+            logger.warn("Refusing to look for snapshots of {} [{}]: {}",
+                    page.getPath(), language, rejected.getMessage());
+            return Collections.emptyMap();
+        }
+
         Map<String, JCRNodeWrapper> byEntry = new HashMap<>();
         JCRNodeWrapper folder;
         try {
             folder = session.getNode("/sites/" + siteKey + "/contents/" + ROOT_FOLDER_NAME
-                    + '/' + pageUuid + '/' + language);
+                    + '/' + page.getIdentifier() + '/' + language);
         } catch (RepositoryException noHistoryYet) {
             return byEntry;
         }
@@ -191,36 +202,16 @@ public class RevisionDiffService {
         return byEntry;
     }
 
-    /**
-     * Reads a snapshot's Markdown payload.
-     *
-     * <p>The cap is re-applied on read even though capture enforces it on write: this is a
-     * public request path, and it must not become a way to pull an arbitrarily large binary
-     * into heap because something else wrote one.
-     */
-    private String readMarkdown(JCRNodeWrapper snapshot) throws RepositoryException {
-        if (!snapshot.hasProperty(PROP_MARKDOWN)) {
-            return "";
-        }
-        Binary binary = snapshot.getProperty(PROP_MARKDOWN).getBinary();
-        try (InputStream in = binary.getStream()) {
-            ByteArrayOutputStream buffer = new ByteArrayOutputStream();
-            byte[] chunk = new byte[8192];
-            int read;
-            while ((read = in.read(chunk)) != -1) {
-                if (buffer.size() + read > MAX_MARKDOWN_BYTES) {
-                    logger.warn("Snapshot {} exceeds the {} byte cap on read; comparison truncated",
-                            snapshot.getPath(), MAX_MARKDOWN_BYTES);
-                    break;
-                }
-                buffer.write(chunk, 0, read);
+    /** Nearest ancestor page. The history component may sit several containers deep in a page. */
+    private JCRNodeWrapper enclosingPage(JCRNodeWrapper node) throws RepositoryException {
+        JCRNodeWrapper current = node;
+        while (current != null && !"/".equals(current.getPath())) {
+            if (current.isNodeType(PAGE_TYPE)) {
+                return current;
             }
-            return new String(buffer.toByteArray(), StandardCharsets.UTF_8);
-        } catch (IOException e) {
-            throw new RepositoryException("Could not read snapshot " + snapshot.getPath(), e);
-        } finally {
-            binary.dispose();
+            current = current.getParent();
         }
+        return null;
     }
 
     private static boolean equalStrings(String a, String b) {

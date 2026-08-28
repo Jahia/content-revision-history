@@ -100,18 +100,55 @@ capture would silently rewrite what an existing public revision claims the page 
 
 ## The comparison
 
-Each entry renders a "Compare with the previous revision" link. It is a plain link to the same
-page with a `?crhDiff=<entry uuid>` query, so:
+The list itself sits in a native `<details>` disclosure and **starts closed** (editors override
+this per component with `collapsedByDefault`). A history is supporting evidence for the page, not
+the page; left open, twenty revisions push the content they describe off the screen. Closing hides
+the entries from view, not from the document — they stay in the DOM, so search engines,
+find-in-page and assistive technology still reach them, and the disclosure is keyboard operable
+with no script and no ARIA of our own. A requested comparison always forces the list open, or the
+panel would name two revisions while the list that produced it stayed hidden.
 
-- it works with **no JavaScript** — the comparison is computed and rendered server-side, and
-  there is no client-side code path that could handle snapshot content unsafely;
-- the URL is shareable and the browser Back button behaves;
-- the accessible name is the full visible text, naming both revisions and both dates, so a screen
-  reader user scanning a list of links gets N distinct names rather than N copies of "Compare".
+The history carries a **selector**: two dropdowns listing every revision, and a Compare button.
+It is a plain `GET` form, so:
 
-"Previous" is **positional** — the next sibling in editorial order — matching what the list view
-renders. `crh:revisionHistory` is declared `orderable` so editors control that order by
-drag-and-drop; keep the list newest-first.
+- **The comparison is computed and rendered server-side.** A small script upgrades the rendered
+  panel into a popup (`popover="auto"`, so Escape and click-outside dismiss it and focus returns
+  to where it was); with scripting unavailable the same panel renders inline, complete and
+  readable. The script only toggles the visibility of markup the server already produced, so the
+  property that matters holds either way: **no client-side code path ever handles snapshot
+  content**.
+  The `popover` attribute is added by that script rather than written into the markup, because a
+  browser keeps `[popover]` hidden until something shows it: shipping it would make the comparison
+  invisible without JavaScript rather than merely un-popped.
+- **Any two revisions**, not just adjacent ones. "What changed between the version I agreed to and
+  today" is almost never a question about consecutive revisions, and that is the question a
+  support policy or an advisory actually gets asked.
+- The result is a **shareable URL**, and the browser Back button behaves.
+- The pair is **normalised chronologically** before diffing, so picking newest-then-oldest gives
+  the same answer as oldest-then-newest rather than reporting every addition as a removal.
+
+This replaced one "compare with the previous revision" popup per revision. Those opened instantly
+because every adjacent comparison was pre-rendered — which is exactly why they could not answer
+about arbitrary pairs: ten revisions have forty-five of them, twenty have a hundred and ninety.
+Building one comparison on request is both more capable and cheaper than pre-rendering N−1 of them
+on every render.
+
+The selector renders only when there is more than one revision, since a control that cannot do
+anything is the dead-control failure (SC 4.1.2) this component has already had once. The form's
+action carries a fragment, so submitting moves focus to the result instead of leaving the visitor
+at the top of a reloaded page.
+
+**Both selected identifiers are visitor input**, and the service reads with a session that
+bypasses ACLs, so both are proven to be entries of the *server-supplied* history node before
+anything is read. Without that containment check a crafted value would render an arbitrary node
+onto a public page.
+
+Revisions are ordered **newest first by `revisionDate`**, with document order as the tie-breaker
+so drag-and-drop still settles same-day revisions. Order used to be purely positional, which was
+unkeepable: Content Editor appends a new child at the *end*, i.e. the oldest position, so simply
+adding a revision rendered the newest one last with no comparison offered, while its neighbour
+compared against the wrong revision. `RevisionEntryOrder` is the single definition, used by both
+the rendered list and the comparison, so a control and its result can never disagree.
 
 Diffing is line-based over the Markdown, with word-level highlighting inside changed lines.
 Because `MarkdownNormalizer` breaks text at sentence boundaries, a one-word edit produces a
@@ -124,16 +161,17 @@ the text being diffed is page content and can contain anything an editor typed, 
 mixes generated markup with text-to-be-escaped has no safe rendering. `MarkdownDiff` carries text
 only; the view escapes every piece of it.
 
-The panel is served from the `default` workspace with a system session, because snapshots are
+The panels are built from the `default` workspace with a system session, because snapshots are
 never published. That is safe by construction rather than by permission check: the snapshot was
-captured over HTTP **as guest**, so it contains only what the visitor asking for the comparison
-could already see. The visitor-supplied entry identifier is constrained to entries of the
-*rendered* history node — without that containment check, a crafted identifier would have a
-system session read an arbitrary node onto a public page.
+captured over HTTP **as guest**, so it contains only what the visitor reading the comparison could
+already see.
 
-The revision-history view opts out of the HTML cache (`revisionHistory.properties`,
-`cache.expiration=0`): Jahia keys fragments on node, template type, user and locale — not on the
-query string — so a cached fragment would serve one visitor's comparison to everyone else.
+The revision-history view still opts out of the HTML cache (`revisionHistory.properties`,
+`cache.expiration=0`), now for a different reason: it renders comparisons built from snapshots
+under `/sites/<site>/contents`, and Jahia's fragment-dependency tracking does not see those, so a
+cached fragment would keep showing an out-of-date history after a new revision was captured.
+Restoring caching needs the capture job to flush the page's fragments *after* binding rather than
+before it.
 
 ## Rich-text summaries
 
@@ -147,6 +185,38 @@ that already owns an `<h3>`, so an editor-supplied `<h2>` would break the page's
 hierarchy — that exclusion is an accessibility decision as much as a security one. Unknown
 elements are unwrapped rather than dropped, so the text an editor wrote always survives even when
 its markup does not.
+
+## Previewing a snapshot in jContent
+
+`crh:revisionSnapshot` has an html view, and the module ships a **content template** for it
+(`src/main/import/repository.xml`), so a snapshot can be selected in jContent and previewed like
+any other content.
+
+The template is the part that matters, and it is not obvious: jContent previews a node by asking
+for its `displayableNode` and rendering that, and a node is displayable **only when a
+`jnt:contentTemplate` declares `j:applyOn` for its type**. Without one, a snapshot returned a null
+`displayableNode` and every render URL answered 404 — regardless of views, of `jmix:renderable`,
+of `jmix:mainResource`, or of permissions. (`jnt:person` previews in the demo site for exactly
+this reason: `dx-base-demo-templates` ships `person-bio-content-template` for it.)
+
+The preview shows the capture metadata — including `crh:capturedBy`, which is always `guest` and
+is the guarantee the whole design rests on — and the Markdown itself as **preformatted text**.
+Deliberately not rendered as HTML: this module generates Markdown and never parses it, so
+rendering would mean adding a parser to turn an archived record back into markup, and any
+difference between that parser and the original page would make the preview quietly unfaithful.
+The snapshot is the evidence; the preview shows the stored bytes.
+
+Two constraints worth knowing:
+
+- **It resolves for administrators only.** The revision-history tree has ACL inheritance broken
+  and grants nobody, so only server administrators (who bypass ACLs) can reach a snapshot at all.
+  That is the storage design working as intended, not an oversight — widening it is an ACL
+  decision, not a view one.
+- **The site's template set must have a `/base` template** (`j:rootTemplatePath`), following the
+  convention of the shipped `news` module. A template set without one will not render the preview.
+
+Initial JCR content is imported **once per module version**, so changing `repository.xml` requires
+a version bump to take effect.
 
 ## Storage layout
 
@@ -175,7 +245,7 @@ its markup does not.
 | Type | Purpose |
 |---|---|
 | `jmix:publiclyRevisioned` | Opt-in marker on `jnt:page`. Only tagged pages are captured. |
-| `crh:revisionHistory` | The editorial container dropped on a page; holds revision entries. |
+| `crh:revisionHistory` | The editorial container dropped on a page; holds revision entries. `collapsedByDefault` controls whether the list starts closed. |
 | `crh:revisionEntry` | One public revision: label, date, summary, change type. |
 | `crh:snapshotFolder` | System container; carries dedupe state and last-capture status. |
 | `crh:revisionSnapshot` | One immutable Markdown snapshot; `crh:entryRefs` links it to the revisions it is evidence for. |
@@ -211,9 +281,9 @@ mvn clean package
 # in Util.getBundleKey when Jahia's artifact installer handles the jar)
 curl -u root:root -H "Origin: http://localhost:8080" \
   -F "script=@-;type=application/yaml" \
-  -F "file=@target/content-revision-history-1.0.0-SNAPSHOT.jar" \
+  -F "file=@target/content-revision-history-1.1.0-SNAPSHOT.jar" \
   http://localhost:8080/modules/api/provisioning <<'YAML'
-- installBundle: "content-revision-history-1.0.0-SNAPSHOT.jar"
+- installBundle: "content-revision-history-1.1.0-SNAPSHOT.jar"
   autoStart: true
 YAML
 ```
