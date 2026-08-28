@@ -1,0 +1,278 @@
+package org.jahia.modules.revisionhistory;
+
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+
+import javax.jcr.InvalidItemStateException;
+import javax.jcr.ItemExistsException;
+import javax.jcr.RepositoryException;
+import java.lang.reflect.Field;
+import java.lang.reflect.Method;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.regex.Pattern;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+/**
+ * {@link RevisionSnapshotService#withConcurrencyRetry} is the module's entire concurrent-write
+ * correctness guarantee: telling a benign same-content name collision ({@link ItemExistsException})
+ * apart from a genuinely lost write ({@link InvalidItemStateException}) is the one thing standing
+ * between "nothing changed" and "a real revision silently vanished". It is driven here directly
+ * with lambdas; no JCR session is needed since the method only depends on the two functional
+ * interfaces it is given.
+ *
+ * <p>The pure helpers (the siteKey/pageUuid/language validation regexes and {@code truncate}) are
+ * private, so they are reached through reflection rather than by widening visibility -- no
+ * production change is authorized or needed for this class.
+ */
+class RevisionSnapshotServiceTest {
+
+    // ------------------------------------------------------------ withConcurrencyRetry
+
+    @Test
+    @DisplayName("a first-try success returns its result and never resets the session")
+    void firstTrySuccessNeverResets() throws RepositoryException {
+        // Arrange
+        List<String> resetCalls = new ArrayList<>();
+        List<String> failuresRecorded = new ArrayList<>();
+
+        // Act
+        CaptureStatus result = RevisionSnapshotService.withConcurrencyRetry(
+                () -> CaptureStatus.STORED,
+                () -> resetCalls.add("reset"),
+                failuresRecorded::add,
+                "11111111-1111-1111-1111-111111111111", "en");
+
+        // Assert
+        assertEquals(CaptureStatus.STORED, result);
+        assertTrue(resetCalls.isEmpty(), "a clean first attempt must never touch the session");
+        assertTrue(failuresRecorded.isEmpty());
+    }
+
+    @Test
+    @DisplayName("ItemExistsException once returns UNCHANGED, resets exactly once, records no failure")
+    void itemExistsExceptionIsBenignAndUnchanged() throws RepositoryException {
+        // Arrange -- same deterministic name means same content for the same publication: this
+        // is the "nothing was lost" branch, and must never be confused with a real conflict.
+        List<String> resetCalls = new ArrayList<>();
+        List<String> failuresRecorded = new ArrayList<>();
+        RevisionSnapshotService.CaptureAttempt attempt = () -> {
+            throw new ItemExistsException("node already exists under the same name");
+        };
+
+        // Act
+        CaptureStatus result = RevisionSnapshotService.withConcurrencyRetry(
+                attempt, () -> resetCalls.add("reset"), failuresRecorded::add,
+                "11111111-1111-1111-1111-111111111111", "en");
+
+        // Assert
+        assertEquals(CaptureStatus.UNCHANGED, result,
+                "a same-name collision proves identical content, never a lost write");
+        assertEquals(1, resetCalls.size(), "the transient session state must be discarded exactly once");
+        assertTrue(failuresRecorded.isEmpty(), "a benign collision is not a failure");
+    }
+
+    @Test
+    @DisplayName("InvalidItemStateException twice returns FAILED, resets twice, records a failure naming the exception")
+    void invalidItemStateExceptionTwiceIsARealFailure() throws RepositoryException {
+        // Arrange -- the generic optimistic-concurrency failure; if it recurs after one retry
+        // against a refreshed session, the write was genuinely lost and must never be silently
+        // reported as UNCHANGED.
+        List<String> resetCalls = new ArrayList<>();
+        List<String> failuresRecorded = new ArrayList<>();
+        RevisionSnapshotService.CaptureAttempt attempt = () -> {
+            throw new InvalidItemStateException("stale item state");
+        };
+
+        // Act
+        CaptureStatus result = RevisionSnapshotService.withConcurrencyRetry(
+                attempt, () -> resetCalls.add("reset"), failuresRecorded::add,
+                "11111111-1111-1111-1111-111111111111", "en");
+
+        // Assert
+        assertEquals(CaptureStatus.FAILED, result);
+        assertEquals(2, resetCalls.size(), "both the initial and the retried session must be reset");
+        assertEquals(1, failuresRecorded.size());
+        assertTrue(failuresRecorded.get(0).contains("InvalidItemStateException"),
+                "the durable failure record must name the exception that caused it, for operators");
+    }
+
+    @Test
+    @DisplayName("InvalidItemStateException once, then success on retry, resets once and returns the retry's outcome")
+    void invalidItemStateExceptionThenSuccessRetriesOnce() throws RepositoryException {
+        // Arrange -- the common real-world case: the refreshed session's second attempt succeeds
+        // once the winner's write is visible.
+        List<String> resetCalls = new ArrayList<>();
+        List<String> failuresRecorded = new ArrayList<>();
+        int[] callCount = {0};
+        RevisionSnapshotService.CaptureAttempt attempt = () -> {
+            callCount[0]++;
+            if (callCount[0] == 1) {
+                throw new InvalidItemStateException("stale item state");
+            }
+            return CaptureStatus.UNCHANGED;
+        };
+
+        // Act
+        CaptureStatus result = RevisionSnapshotService.withConcurrencyRetry(
+                attempt, () -> resetCalls.add("reset"), failuresRecorded::add,
+                "11111111-1111-1111-1111-111111111111", "en");
+
+        // Assert
+        assertEquals(CaptureStatus.UNCHANGED, result);
+        assertEquals(1, resetCalls.size(), "only the failed first attempt requires a reset");
+        assertTrue(failuresRecorded.isEmpty(), "a retry that succeeds is not a failure");
+        assertEquals(2, callCount[0]);
+    }
+
+    @Test
+    @DisplayName("InvalidItemStateException then a same-name collision on retry is still benign, not FAILED")
+    void invalidItemStateExceptionThenItemExistsIsStillBenign() throws RepositoryException {
+        // Arrange -- covers the nested branch: the retry itself can also hit the benign
+        // same-name-same-content case, and that must not be conflated with the FAILED branch.
+        List<String> resetCalls = new ArrayList<>();
+        List<String> failuresRecorded = new ArrayList<>();
+        int[] callCount = {0};
+        RevisionSnapshotService.CaptureAttempt attempt = () -> {
+            callCount[0]++;
+            if (callCount[0] == 1) {
+                throw new InvalidItemStateException("stale item state");
+            }
+            throw new ItemExistsException("node already exists under the same name");
+        };
+
+        // Act
+        CaptureStatus result = RevisionSnapshotService.withConcurrencyRetry(
+                attempt, () -> resetCalls.add("reset"), failuresRecorded::add,
+                "11111111-1111-1111-1111-111111111111", "en");
+
+        // Assert
+        assertEquals(CaptureStatus.UNCHANGED, result);
+        assertEquals(2, resetCalls.size(),
+                "the outer InvalidItemStateException catch and the nested benign-collision handler each reset once");
+        assertTrue(failuresRecorded.isEmpty());
+    }
+
+    // ------------------------------------------------------------ validation regexes
+
+    @Test
+    @DisplayName("SITE_KEY pattern accepts alphanumerics, underscore and hyphen, up to 100 chars")
+    void siteKeyPatternAcceptsValidValues() throws Exception {
+        Pattern siteKey = fieldPattern("SITE_KEY");
+
+        assertTrue(siteKey.matcher("digitall").matches());
+        assertTrue(siteKey.matcher("my-site_123").matches());
+        assertTrue(siteKey.matcher("A").matches());
+        assertTrue(siteKey.matcher(repeat('a', 100)).matches(), "100 chars is the documented upper bound");
+    }
+
+    @Test
+    @DisplayName("SITE_KEY pattern rejects empty, oversized, path-traversal-shaped and separator-bearing values")
+    void siteKeyPatternRejectsInvalidValues() throws Exception {
+        Pattern siteKey = fieldPattern("SITE_KEY");
+
+        assertFalse(siteKey.matcher("").matches(), "empty must be rejected");
+        assertFalse(siteKey.matcher(repeat('a', 101)).matches(), "101 chars exceeds the cap");
+        assertFalse(siteKey.matcher("my site").matches(), "spaces are not permitted");
+        assertFalse(siteKey.matcher("../../etc/passwd").matches(),
+                "path-traversal-shaped input must never reach the JCR path concatenation");
+        assertFalse(siteKey.matcher("..").matches());
+        assertFalse(siteKey.matcher("site/name").matches(), "path separators are not permitted");
+    }
+
+    @Test
+    @DisplayName("UUID pattern accepts only canonical 8-4-4-4-12 hex form")
+    void uuidPatternAcceptsValidValues() throws Exception {
+        Pattern uuid = fieldPattern("UUID");
+
+        assertTrue(uuid.matcher("11111111-1111-1111-1111-111111111111").matches());
+        assertTrue(uuid.matcher("aAbBcC12-aAbB-cC12-aAbB-aAbBcC12aAbB").matches(), "mixed-case hex is allowed");
+    }
+
+    @Test
+    @DisplayName("UUID pattern rejects malformed, path-traversal-shaped and wrong-length values")
+    void uuidPatternRejectsInvalidValues() throws Exception {
+        Pattern uuid = fieldPattern("UUID");
+
+        assertFalse(uuid.matcher("not-a-uuid").matches());
+        assertFalse(uuid.matcher("11111111-1111-1111-1111-11111111111").matches(), "one hex digit short");
+        assertFalse(uuid.matcher("11111111-1111-1111-1111-1111111111111").matches(), "one hex digit long");
+        assertFalse(uuid.matcher("../../../etc/passwd").matches());
+        assertFalse(uuid.matcher("g1111111-1111-1111-1111-111111111111").matches(), "g is not hex");
+    }
+
+    @Test
+    @DisplayName("LANGUAGE pattern accepts ISO-shaped codes, with or without region/script subtag")
+    void languagePatternAcceptsValidValues() throws Exception {
+        Pattern language = fieldPattern("LANGUAGE");
+
+        assertTrue(language.matcher("en").matches());
+        assertTrue(language.matcher("eng").matches());
+        assertTrue(language.matcher("en_US").matches());
+        assertTrue(language.matcher("zh_Hans").matches(), "up to an 8-char subtag is allowed");
+    }
+
+    @Test
+    @DisplayName("LANGUAGE pattern rejects uppercase primary tags, too-short/long codes and path-traversal-shaped values")
+    void languagePatternRejectsInvalidValues() throws Exception {
+        Pattern language = fieldPattern("LANGUAGE");
+
+        assertFalse(language.matcher("EN").matches(), "the primary subtag must be lowercase");
+        assertFalse(language.matcher("e").matches(), "one letter is too short");
+        assertFalse(language.matcher("english").matches(), "more than 3 letters is not ISO-shaped");
+        assertFalse(language.matcher("../en").matches());
+        assertFalse(language.matcher("en/../..").matches());
+    }
+
+    // ------------------------------------------------------------ truncate
+
+    @Test
+    @DisplayName("truncate returns an empty string for null input")
+    void truncateHandlesNull() throws Exception {
+        assertEquals("", invokeTruncate(null));
+    }
+
+    @Test
+    @DisplayName("truncate leaves messages of 500 chars or fewer untouched")
+    void truncateLeavesShortMessagesUntouched() throws Exception {
+        String short500 = repeat('x', 500);
+        assertEquals(short500, invokeTruncate(short500), "exactly 500 chars is the documented boundary, not yet truncated");
+        assertEquals("short message", invokeTruncate("short message"));
+    }
+
+    @Test
+    @DisplayName("truncate cuts messages over 500 chars down to exactly 500")
+    void truncateCutsLongMessages() throws Exception {
+        String long501 = repeat('y', 501);
+
+        String result = invokeTruncate(long501);
+
+        assertEquals(500, result.length());
+        assertEquals(repeat('y', 500), result);
+    }
+
+    // ------------------------------------------------------------ reflection helpers
+
+    private static Pattern fieldPattern(String name) throws Exception {
+        Field field = RevisionSnapshotService.class.getDeclaredField(name);
+        field.setAccessible(true);
+        return (Pattern) field.get(null);
+    }
+
+    private static String invokeTruncate(String message) throws Exception {
+        Method method = RevisionSnapshotService.class.getDeclaredMethod("truncate", String.class);
+        method.setAccessible(true);
+        return (String) method.invoke(null, (Object) message);
+    }
+
+    private static String repeat(char c, int times) {
+        StringBuilder sb = new StringBuilder(times);
+        for (int i = 0; i < times; i++) {
+            sb.append(c);
+        }
+        return sb.toString();
+    }
+}

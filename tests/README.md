@@ -42,11 +42,23 @@ the module *after* the manifest runs, so a provisioning `enable` step silently n
 operation cannot find a module that is not installed yet). The spec's `before()` calls
 `enableModule('content-revision-history', 'digitall')` instead.
 
-**Specs force a cache miss on purpose.** The capture filter runs late in the render chain, and
-Jahia's HTML output cache short-circuits that chain, so a cached page produces no capture at
-all. `renderLive()` appends a unique query string. Without it the suite would pass vacuously —
-asserting "no new snapshot" while the filter never ran. This is a real limitation of the
-render-filter trigger, not a test artefact.
+**Capture is triggered by publication, not by rendering.** There is no capture render filter
+any more — `PublicationSnapshotListener` enqueues an asynchronous `SnapshotCaptureJob`, which
+fetches the page over HTTP loopback as guest. Rendering a page captures nothing, and the suite
+asserts exactly that: anonymous requests with random cache-busting query strings must produce
+**zero** snapshots.
+
+Two consequences for writing specs:
+
+- **Poll, don't sleep.** Capture completes some time after the publish call returns, so wait on
+  the expected state with `cypress-wait-until` rather than a fixed delay.
+- **Pace publications.** Capture is rate limited to one per second per page+language; a publish
+  that lands inside that window is recorded `RATE_LIMITED` instead of `STORED`. The
+  `publishTriggeringCapture` helper handles the pacing.
+
+The cache-busting that *does* still exist is internal: `GuestMarkdownFetcher` appends its own
+`?crhCapture=<publicationTimestamp>` and flushes the fragment cache before fetching, so the
+capture cannot race the publication's own asynchronous cache flush.
 
 **Snapshots live in the `default` workspace and are never published**, so all assertions query
 `jcr(workspace: EDIT)` and require `cy.login()`.

@@ -141,7 +141,11 @@ final class GuestMarkdownFetcher {
         }
     }
 
-    private String buildUrl(String pagePath, String language, long cacheBuster) throws IOException {
+    // Package-private (was private) so RevisionSnapshotServiceTest-sibling tests in this package
+    // can exercise the URL-building/validation logic directly, without standing up an HTTP
+    // server. This is the ONE approved production visibility change for the test-coverage
+    // remediation task; behavior is unchanged.
+    String buildUrl(String pagePath, String language, long cacheBuster) throws IOException {
         if (pagePath == null || !pagePath.startsWith("/sites/")) {
             throw new IllegalArgumentException("not a site path: " + pagePath);
         }

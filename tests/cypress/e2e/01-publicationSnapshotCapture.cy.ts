@@ -727,7 +727,7 @@ describe('Publication-triggered revision snapshot capture', () => {
                 expect(html, 'the older entry label must appear in the rendered page').to.contain(plainLabel);
                 // Two spaces: that is exactly what an empty {0} produces in
                 // "Compare {0} ({1}) with ...". Do not relax this to one space.
-                expect(html, 'the Compare button must not be blank').to.not.contain('Compare  () with')
+                expect(html, 'the Compare button must not be blank').to.not.contain('Compare  () with');
                 expect(html, 'no unresolved resource-bundle key may reach the page').to.not.contain('???');
 
                 // ...and the XSS payload must arrive escaped, never as live markup.
