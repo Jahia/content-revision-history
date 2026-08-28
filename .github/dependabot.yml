@@ -73,11 +73,10 @@ updates:
       - dependency-name: "eslint-config-*"
         update-types: ["version-update:semver-major"]
 
-  - package-ecosystem: "docker"
-    directory: "/tests"
-    schedule:
-      interval: "weekly"
-    open-pull-requests-limit: 3
+# No "docker" ecosystem: tests/Dockerfile was dead and has been removed. The test image is
+# built by @jahia/cypress from its OWN env.Dockerfile inside node_modules
+# (ci.build.sh: docker build -f $BASEDIR/env.Dockerfile ... .), so its base image is not
+# ours to bump -- it moves when the pinned @jahia/cypress version moves.
 
 # Note: no "github-actions" entry. This repository ships no workflows of its own -- CodeQL and
 # the CLA check come from org-level configuration -- so there is nothing here for Dependabot to

@@ -29,6 +29,14 @@ yarn run e2e:debug
 
 ## Module-specific notes
 
+**There is no Dockerfile in this directory, by design.** The test image is built by
+`@jahia/cypress` from its own `env.Dockerfile` inside `node_modules`
+(`ci.build.sh` runs `docker build -f $BASEDIR/env.Dockerfile ... .`), so the base image
+(`cypress/browsers:node-…`) is not ours to choose — it moves when the pinned `@jahia/cypress`
+version moves. A local `Dockerfile` here would look authoritative while having no effect on
+anything, which is exactly why the inherited one was removed.
+
+
 **Use Yarn Classic locally, not the machine default.** `package.json` declares
 `packageManager: yarn@1.22.22`, the test image runs Yarn Classic 1.22.19, and `yarn.lock` is
 Classic v1 format. If your global `yarn` is Berry (v2+), running it here **silently rewrites
