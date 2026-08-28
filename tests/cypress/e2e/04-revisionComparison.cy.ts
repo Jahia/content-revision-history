@@ -55,6 +55,14 @@ describe('Revision comparison (entry binding + diff viewer)', () => {
 
     const nodeUuidQuery = gql`query($path: String!) { jcr { nodeByPath(path: $path) { uuid } } }`;
 
+    const liveChildrenQuery = gql`
+        query($path: String!) {
+            jcr(workspace: LIVE) {
+                nodeByPath(path: $path) { children { nodes { name } } }
+            }
+        }
+    `;
+
     const setBooleanMutation = gql`
         mutation($path: String!, $name: String!, $value: String!) {
             jcr {
@@ -420,6 +428,79 @@ describe('Revision comparison (entry binding + diff viewer)', () => {
         });
     });
 
+    it('shows the comparison without putting anything in the address bar', () => {
+        // The comparison used to arrive by navigation, so ?crhFrom=&crhTo=&#crh-comparison-
+        // ended up in the URL of a page the visitor was only reading.
+        cy.visit(`/cms/render/live/${language}${pagePath}.html`);
+
+        cy.get('select[name="crhFrom"]').select(firstEntryUuid);
+        cy.get('select[name="crhTo"]').select(thirdEntryUuid);
+        cy.get('button.crh-compare-btn').click();
+
+        cy.get('.crh-diff-panel').should('be.visible');
+        cy.location('search').should('be.empty');
+        cy.location('hash').should('be.empty');
+    });
+
+    it('never paints the panel inline while the comparison is in flight', () => {
+        // The handler used to create the panel -- bordered, padded and empty -- BEFORE starting
+        // the request, so it painted inline for the length of the round trip, filled with the
+        // comparison, and only then jumped into the top layer. It read as a flip on every first
+        // comparison. Delaying the response widens that window enough to assert on; without the
+        // delay the bug would slip through between two commands.
+        cy.intercept({method: 'GET', url: '**/crh-e2e-compare.html?crhFrom=*'}, request => {
+            request.on('response', response => {
+                response.setDelay(700);
+            });
+        }).as('comparison');
+
+        cy.visit(`/cms/render/live/${language}${pagePath}.html`);
+        cy.get('select[name="crhFrom"]').select(firstEntryUuid);
+        cy.get('select[name="crhTo"]').select(thirdEntryUuid);
+        cy.get('button.crh-compare-btn').click();
+
+        // Mid-flight: the panel exists, and must not be on screen.
+        cy.get('.crh-diff-panel').should('exist').and('not.be.visible');
+
+        cy.wait('@comparison');
+        cy.get('.crh-diff-panel').should('be.visible');
+    });
+
+    it('can be opened again after being dismissed', () => {
+        // Regression test. The form action carries a fragment, so once the URL equalled
+        // action + query + fragment, submitting the same pair again navigated to an IDENTICAL
+        // URL -- a same-document fragment navigation, which never reloads. The page did not
+        // re-run, the script did not re-fire, and the popup could not be reopened.
+        cy.visit(`/cms/render/live/${language}${pagePath}.html`);
+
+        cy.get('select[name="crhFrom"]').select(firstEntryUuid);
+        cy.get('select[name="crhTo"]').select(thirdEntryUuid);
+        cy.get('button.crh-compare-btn').click();
+        cy.get('.crh-diff-panel').should('be.visible');
+
+        // Dismiss the way Escape or a click outside would leave it.
+        cy.get('.crh-diff-panel').then($panel => {
+            ($panel[0] as unknown as {hidePopover: () => void}).hidePopover();
+        });
+        cy.get('.crh-diff-panel').should('not.be.visible');
+
+        // The same pair again: the case that used to be a no-op.
+        cy.get('button.crh-compare-btn').click();
+        cy.get('.crh-diff-panel').should('be.visible');
+
+        // Dismiss before touching the form again. An open popover sits in the browser's top
+        // layer and covers the page beneath it, including the selector -- which is ordinary
+        // popup behaviour, not a defect, and is what a visitor does too.
+        cy.get('.crh-diff-panel').then($panel => {
+            ($panel[0] as unknown as {hidePopover: () => void}).hidePopover();
+        });
+
+        // A different pair, to prove the content is refetched rather than merely reshown.
+        cy.get('select[name="crhFrom"]').select(secondEntryUuid);
+        cy.get('button.crh-compare-btn').click();
+        cy.get('.crh-diff-panel').should('be.visible').and('contain.text', 'Comparing');
+    });
+
     it('serves the comparison as a plain panel, so it survives without scripting', () => {
         // The popover attribute is added by script, never written into the markup: a browser
         // keeps [popover] hidden until something shows it, so shipping it would make the
@@ -482,6 +563,69 @@ describe('Revision comparison (entry binding + diff viewer)', () => {
         cy.get('.crh-diff-panel').should('not.be.visible');
     });
 
+    it('can be resized, and toggled to full screen, once it is a popup', () => {
+        cy.visit(
+            `/cms/render/live/${language}${pagePath}.html${comparisonUrl(firstEntryUuid, thirdEntryUuid)}`
+        );
+        cy.get('.crh-diff-panel').should('be.visible');
+
+        // Native drag-to-resize, no script: it needs a non-visible overflow to work at all.
+        cy.get('.crh-diff-panel').should('have.css', 'resize', 'both');
+
+        // The two tools must line up. They are different elements -- the close is an <a>, the
+        // toggle a <button> -- and an <a> is display:inline by default, where min-width,
+        // min-height and the flex centring are all inert. That is what pulled them out of
+        // alignment, so the geometry is asserted rather than the declaration that fixes it.
+        cy.get('a.crh-diff-close').then($close => {
+            cy.get('button.crh-diff-expand').then($expand => {
+                const close = $close[0].getBoundingClientRect();
+                const expand = $expand[0].getBoundingClientRect();
+
+                expect(close.height, 'both tools must be the same height').to.equal(expand.height);
+                expect(close.top, 'and sit on the same line').to.equal(expand.top);
+                expect(close.height, 'and keep the AA target size').to.be.at.least(32);
+            });
+        });
+
+        // The toggle is server-rendered but only meaningful as a popup, so it is CSS-hidden on
+        // the inline fallback where there is nothing to maximise.
+        cy.get('button.crh-diff-expand')
+            .should('be.visible')
+            .and('have.attr', 'aria-pressed', 'false')
+            .and('have.attr', 'aria-label', 'Full screen');
+
+        cy.get('button.crh-diff-expand').click();
+
+        // State is carried by aria-pressed, so one stable label serves both directions.
+        cy.get('button.crh-diff-expand').should('have.attr', 'aria-pressed', 'true');
+        cy.get('.crh-diff-panel').should('have.class', 'crh-diff-panel--full');
+        // Maximised, the resize grip goes: the two would fight over the same inline size.
+        cy.get('.crh-diff-panel').should('have.css', 'resize', 'none');
+
+        cy.get('button.crh-diff-expand').click();
+        cy.get('.crh-diff-panel').should('not.have.class', 'crh-diff-panel--full');
+        cy.get('button.crh-diff-expand').should('have.attr', 'aria-pressed', 'false');
+    });
+
+    it('colours changed lines, without colour being the only signal', () => {
+        renderLive(comparisonUrl(firstEntryUuid, thirdEntryUuid)).then(html => {
+            const panel = html.slice(html.indexOf('id="crh-comparison-'));
+
+            // The row tint. These were silently dropped once by a refactor and only an unused
+            // CSS-token check caught it, so they are asserted here too.
+            expect(panel, 'a removed line must be marked as such').to.contain('crh-diff-removed');
+            expect(panel, 'an added line must be marked as such').to.contain('crh-diff-added');
+
+            // Non-colour carriers keep it readable in monochrome, in forced-colours
+            // mode, and with the stylesheet absent altogether (WCAG 1.4.1).
+            expect(panel, 'a text alternative for the removed side').to.contain('Removed line:');
+            expect(panel, 'a text alternative for the added side').to.contain('Added line:');
+            expect(panel, 'semantic markup, not just colour').to.contain('<del>');
+            expect(panel, 'semantic markup, not just colour').to.contain('<ins>');
+            expect(panel, 'and the word-level highlight itself').to.contain('<mark>');
+        });
+    });
+
     it('closes with a cross in the corner, in either state', () => {
         // A link, not a popovertarget button: as a popup, following it navigates away and the
         // popup goes with it; inline, it simply clears the comparison. A popovertarget button
@@ -522,6 +666,63 @@ describe('Revision comparison (entry binding + diff viewer)', () => {
         cy.get('.crh-diff-panel')
             .should('be.visible')
             .and('have.attr', 'popover', 'auto');
+    });
+
+    it('shows the older revision on the left and the newer on the right', () => {
+        renderLive(comparisonUrl(firstEntryUuid, thirdEntryUuid)).then(html => {
+            const panel = html.slice(html.indexOf('id="crh-comparison-'));
+
+            // Column headings name which side is which, using the revision labels themselves.
+            const heads = [...panel.matchAll(/crh-diff-head">([^<]*)/g)].map(m => m[1].trim());
+            expect(heads[0], 'the older revision heads the left column').to.equal('1.0');
+            expect(heads[1], 'and the newer heads the right').to.equal('1.2');
+
+            // A replaced line is ONE row carrying both sides, not two stacked rows.
+            const changedRow = [...panel.matchAll(/<li class="crh-diff-row">([\s\S]*?)<\/li>/g)]
+                .map(m => m[1])
+                .find(row => row.includes('crh-diff-removed'));
+
+            expect(changedRow, 'a changed line must produce a row').to.not.be.undefined;
+            expect(
+                (changedRow as string).indexOf('crh-diff-removed'),
+                'the removed side must come before the added side in the DOM, so it renders left'
+            ).to.be.lessThan((changedRow as string).indexOf('crh-diff-added'));
+
+            // Both sides still carry their own semantics and text alternative.
+            expect(changedRow, 'the old side uses <del>').to.contain('<del>');
+            expect(changedRow, 'the new side uses <ins>').to.contain('<ins>');
+        });
+    });
+
+    it('repeats an unchanged line identically on both sides', () => {
+        // Asserted as a property, not against a known sentence: an earlier version matched the
+        // page heading from a hand-tested site, which does not exist on the harness's scratch
+        // page, so the test failed for a reason unrelated to what it checks.
+        renderLive(comparisonUrl(firstEntryUuid, thirdEntryUuid)).then(html => {
+            const panel = html.slice(html.indexOf('id="crh-comparison-'));
+            const rows = [...panel.matchAll(/<li class="crh-diff-row">([\s\S]*?)<\/li>/g)]
+                .map(m => m[1]);
+
+            const unchanged = rows.find(
+                row =>
+                    !row.includes('crh-diff-removed') &&
+                    !row.includes('crh-diff-added') &&
+                    row.replace(/<[^>]+>/g, '').trim().length > 0
+            );
+
+            expect(unchanged, 'the comparison must contain an unchanged line to compare').to.not.be
+                .undefined;
+
+            const sides = [
+                ...(unchanged as string).matchAll(/<span class="crh-diff-side">([\s\S]*?)<\/span>/g)
+            ].map(m => m[1].trim());
+
+            expect(sides.length, 'an unchanged row must fill both columns').to.equal(2);
+            expect(
+                sides[0],
+                'and carry the same text in each: two views of one document, not two documents'
+            ).to.equal(sides[1]);
+        });
     });
 
     it('normalises the pair chronologically however the visitor picked them', () => {
@@ -706,6 +907,34 @@ describe('Revision comparison (entry binding + diff viewer)', () => {
     });
 
     // ---------------------------------------------------------------- snapshot hygiene
+
+    it('keeps snapshots out of the live workspace even when an ancestor is published', () => {
+        // The mixin jmix:nolive sits on crh:snapshotFolder and crh:revisionSnapshot, and
+        // JCRPublicationService honours it directly (the platform applies it to jnt:role, jnt:permission, jnt:component --
+        // types that must never exist in live at all).
+        //
+        // Without it, publishing /sites/<site>/contents drags the whole evidentiary tree into
+        // live: a second permanent copy of the same record, with no answer to which is
+        // authoritative if they diverge, and an editorial gate these deliberately never had.
+        // The comparison never needs them there -- it is computed server-side from `default`,
+        // and a snapshot only ever contains what a guest could already see, because that is the
+        // principal it was captured as.
+        //
+        // Work-in-progress would also skip publication and was rejected: it is an editorial
+        // "not finished yet" badge that any editor can clear, so it states something untrue
+        // about an immutable record and does not hold.
+        publishAndWaitJobEnding(`/sites/${siteKey}/contents`, [language]);
+
+        cy.apollo({query: liveChildrenQuery, variables: {path: `/sites/${siteKey}/contents`}}).then(
+            (result: ApolloResult<{jcr: {nodeByPath?: {children: {nodes: Array<{name: string}>}}}}>) => {
+                const names = (result.data?.jcr?.nodeByPath?.children.nodes ?? []).map(n => n.name);
+
+                expect(names, 'the snapshot tree must never reach live').to.not.include(
+                    'revision-history'
+                );
+            }
+        );
+    });
 
     it('keeps the revision list itself out of the snapshots it describes', () => {
         // Without a dedicated markdown view, crh:revisionHistory falls through to the generic

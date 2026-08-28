@@ -150,6 +150,14 @@ adding a revision rendered the newest one last with no comparison offered, while
 compared against the wrong revision. `RevisionEntryOrder` is the single definition, used by both
 the rendered list and the comparison, so a control and its result can never disagree.
 
+The comparison renders **side by side**, older revision left and newer right, with column
+headings naming each. Both columns come from one diff (`MarkdownDiff.Result.getRows()` is derived
+from the same line list the counts are taken from), so the two presentations cannot disagree about
+what changed. It is a CSS grid rather than a `<table>`: a table carries row/column semantics but
+cannot reflow, and two fixed columns at 320px or 400% zoom force horizontal page scrolling, which
+SC 1.4.10 forbids. Below 48rem the columns collapse to one and each row reads as "before" above
+"after" — the unified view, reached by layout rather than a second template.
+
 Diffing is line-based over the Markdown, with word-level highlighting inside changed lines.
 Because `MarkdownNormalizer` breaks text at sentence boundaries, a one-word edit produces a
 one-sentence diff rather than "this whole paragraph changed". Long unchanged runs collapse to a
@@ -229,8 +237,24 @@ a version bump to take effect.
 
 - **Site-local** so the history travels with site export, backup and migration (`/settings`
   does not), and outlives the pages it describes.
-- **`default` workspace only, never published** — the diff/read path is server-side, so public
-  visibility never required publishing the snapshots.
+- **`default` workspace only, never published**, and now enforced rather than assumed: the
+  snapshot types carry **`jmix:nolive`**, which `JCRPublicationService` honours directly (the
+  platform applies it to `jnt:role`, `jnt:permission` and `jnt:component` — types that must not
+  exist in live at all). Publishing an ancestor such as `/sites/<site>/contents` therefore cannot
+  drag the tree across.
+
+  The comparison never needs them in `live`: it is computed server-side with a system session on
+  `default`, so the visitor never reads the repository at all. That is safe by construction rather
+  than by permission check — every snapshot was captured over HTTP **as `guest`**, so it can only
+  contain what an anonymous visitor could already see.
+
+  Publishing them would be worse than pointless: two permanent copies of the same record with no
+  answer to which is authoritative, and an editorial gate these deliberately do not have.
+
+  Work-in-progress (`j:workInProgressStatus`) would also skip publication and was rejected. It is
+  an *editorial* signal meaning "not finished yet", shown as a badge in jContent and clearable by
+  any editor on any node — so it states something untrue about an immutable record, and does not
+  hold. `jmix:nolive` is declared on the type; there is no per-node flag to clear.
 - **Keyed on UUID, not path**, so history survives a page rename or move.
 - **UTC, fixed-width names** including a content-hash suffix. Local time broke the dedupe
   invariant (`newestHash` relies on lexicographic order being chronological) across DST and

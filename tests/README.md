@@ -136,6 +136,7 @@ than a null.
 | `collapsedByDefault=false` renders the list open | the editor's choice is honoured |
 | a revision appended last still renders in date order | Content Editor appends at the end, which was the oldest position; the reported bug |
 | a captured snapshot is displayable and previews | jContent needs a jnt:contentTemplate for the type, not just a view |
+| snapshots stay out of live when an ancestor is published | jmix:nolive, enforced by JCRPublicationService |
 | `summary` renders as sanitised HTML | formatting survives; scripts and `javascript:` URLs do not |
 
 Unit tests for the pure Markdown logic live in `src/test/java` and run with `mvn test` —

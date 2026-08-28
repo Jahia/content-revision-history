@@ -85,7 +85,16 @@
          The action carries a fragment so that submitting moves focus to the result rather than
          leaving the visitor at the top of a reloaded page. --%>
     <c:if test="${entryCount > 1}">
+        <%-- data-crh-panel tells the enhancement script which panel this form fills, so it can
+             fetch a comparison and show it without navigating. Without the script the form
+             submits normally and the server renders the comparison inline.
+
+             The action keeps its fragment for that no-script path, where it is what moves focus
+             to the result on a fresh page load. The script strips it when building its fetch URL:
+             it was also the reason a repeat submission became a no-op, since navigating to a URL
+             that differs only by fragment is a same-document navigation and never reloads. --%>
         <form class="crh-compare-form" method="get"
+              data-crh-panel="crh-comparison-${currentNode.identifier}"
               action="${fn:escapeXml(url.base)}${fn:escapeXml(renderContext.mainResource.node.path)}.html#crh-comparison-${currentNode.identifier}">
             <%-- The fieldset/legend is kept in the markup but carries no visual styling at all
                  (see the stylesheet: border, padding and margin are all zeroed). It is what tells
@@ -164,27 +173,38 @@
              not (SC 2.4.3). --%>
         <section id="crh-comparison-${currentNode.identifier}" class="crh-diff-panel" tabindex="-1"
                  aria-labelledby="crh-diff-heading-${currentNode.identifier}">
-            <%-- Still a LINK rather than a popovertarget button, because it has to work in both
-                 states: as a popup, following it navigates away and the popup goes with it;
-                 inline, it simply clears the comparison. A popovertarget button would be a dead
-                 control on the inline fallback, which is the failure this component has had once
-                 already.
+            <%-- Panel tools, top right, first in the DOM so keyboard order matches what the eye
+                 sees (SC 2.4.3).
 
-                 First in the DOM as well as first visually (top right), so keyboard order matches
-                 reading order (SC 2.4.3). The cross is aria-hidden and the name comes from
-                 aria-label, exactly as on the Compare control.
+                 The full-screen toggle is server-rendered but CSS-hidden unless the panel is
+                 actually a popup (:popover-open). Without JavaScript the comparison renders
+                 inline, where "full screen" means nothing -- and a control that cannot do
+                 anything is the dead-control failure this component has had once already.
 
-                 Escape and clicking outside also dismiss the popup. Both come from
-                 popover="auto"; neither is reimplemented here. --%>
-            <a class="crh-diff-close"
-               href="${fn:escapeXml(url.base)}${fn:escapeXml(renderContext.mainResource.node.path)}.html"
-               aria-label="<fmt:message key="crh_diff.close"/>"
-               title="<fmt:message key="crh_diff.close"/>">
-                <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" focusable="false">
-                    <path d="M4 4l8 8M12 4l-8 8" fill="none" stroke="currentColor"
-                          stroke-width="1.3" stroke-linecap="round"/>
-                </svg>
-            </a>
+                 The close control is a LINK, not a popovertarget button, because it must work in
+                 both states: as a popup, following it navigates away and the popup goes with it;
+                 inline, it simply clears the comparison. Escape and clicking outside also dismiss
+                 the popup, both from popover="auto". --%>
+            <div class="crh-diff-tools">
+                <button type="button" class="crh-diff-expand" aria-pressed="false"
+                        aria-label="<fmt:message key="crh_diff.fullscreen"/>"
+                        title="<fmt:message key="crh_diff.fullscreen"/>">
+                    <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" focusable="false">
+                        <path d="M6 2H2v4M10 2h4v4M6 14H2v-4M10 14h4v-4" fill="none"
+                              stroke="currentColor" stroke-width="1.3" stroke-linecap="round"
+                              stroke-linejoin="round"/>
+                    </svg>
+                </button>
+                <a class="crh-diff-close"
+                   href="${fn:escapeXml(url.base)}${fn:escapeXml(renderContext.mainResource.node.path)}.html"
+                   aria-label="<fmt:message key="crh_diff.close"/>"
+                   title="<fmt:message key="crh_diff.close"/>">
+                    <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" focusable="false">
+                        <path d="M4 4l8 8M12 4l-8 8" fill="none" stroke="currentColor"
+                              stroke-width="1.3" stroke-linecap="round"/>
+                    </svg>
+                </a>
+            </div>
             <c:choose>
                 <c:when test="${view.available}">
                     <fmt:formatDate var="diffCurrentDate" value="${view.currentDate.time}" dateStyle="long"/>
@@ -222,41 +242,74 @@
                                     <fmt:param value="${view.diff.removedCount}"/>
                                 </fmt:message>
                             </p>
-                            <ol class="crh-diff-lines">
-                                <c:forEach items="${view.diff.lines}" var="line">
+                            <%-- Side by side: the older revision on the left, the newer on the
+                                 right, which is what a reader expects a diff to look like.
+
+                                 Rows come from MarkdownDiff.Result.getRows(), derived from the
+                                 same line list the counts above are taken from -- one diff behind
+                                 both, so the two can never disagree about what changed.
+
+                                 Grid rather than a table. A <table> would carry row/column
+                                 semantics but cannot reflow: at 320px or 400% zoom two fixed
+                                 columns force horizontal scrolling of the page, which SC 1.4.10
+                                 forbids. The grid collapses to a single column below 48rem, where
+                                 each row reads as "before" above "after" -- the unified view,
+                                 arrived at by layout rather than by a second template. --%>
+                            <p class="crh-diff-heads" aria-hidden="true">
+                                <span class="crh-diff-head"><c:out value="${view.previousLabel}"/></span><span
+                                      class="crh-diff-head"><c:out value="${view.currentLabel}"/></span>
+                            </p>
+                            <ol class="crh-diff-rows">
+                                <c:forEach items="${view.diff.rows}" var="row">
                                     <c:choose>
-                                        <c:when test="${line.gap}">
-                                            <li class="crh-diff-line crh-diff-gap">
+                                        <c:when test="${row.gap}">
+                                            <li class="crh-diff-row crh-diff-gap">
                                                 <fmt:message key="crh_diff.gap">
-                                                    <fmt:param value="${line.gapSize}"/>
+                                                    <fmt:param value="${row.gapSize}"/>
                                                 </fmt:message>
                                             </li>
                                         </c:when>
-                                        <c:when test="${line.added}">
-                                            <li class="crh-diff-line crh-diff-added">
-                                                <span class="crh-visually-hidden"><fmt:message key="crh_diff.added"/></span><span
-                                                    class="crh-diff-marker" aria-hidden="true">+</span><ins><%--
-                                                --%><c:choose>
-                                                        <c:when test="${empty line.segments}"><c:out value="${line.text}"/></c:when>
-                                                        <c:otherwise><c:forEach items="${line.segments}" var="segment"><c:choose><c:when test="${segment.changed}"><mark><c:out value="${segment.text}"/></mark></c:when><c:otherwise><c:out value="${segment.text}"/></c:otherwise></c:choose></c:forEach></c:otherwise>
-                                                    </c:choose><%--
-                                                --%></ins>
-                                            </li>
-                                        </c:when>
-                                        <c:when test="${line.removed}">
-                                            <li class="crh-diff-line crh-diff-removed">
-                                                <span class="crh-visually-hidden"><fmt:message key="crh_diff.removed"/></span><span
-                                                    class="crh-diff-marker" aria-hidden="true">-</span><del><%--
-                                                --%><c:choose>
-                                                        <c:when test="${empty line.segments}"><c:out value="${line.text}"/></c:when>
-                                                        <c:otherwise><c:forEach items="${line.segments}" var="segment"><c:choose><c:when test="${segment.changed}"><mark><c:out value="${segment.text}"/></mark></c:when><c:otherwise><c:out value="${segment.text}"/></c:otherwise></c:choose></c:forEach></c:otherwise>
-                                                    </c:choose><%--
-                                                --%></del>
-                                            </li>
-                                        </c:when>
                                         <c:otherwise>
-                                            <li class="crh-diff-line">
-                                                <span class="crh-diff-marker" aria-hidden="true">&nbsp;</span><c:out value="${line.text}"/>
+                                            <li class="crh-diff-row">
+                                                <%-- OLDER revision, left --%>
+                                                <c:choose>
+                                                    <c:when test="${empty row.left}">
+                                                        <span class="crh-diff-side crh-diff-absent" aria-hidden="true"></span>
+                                                    </c:when>
+                                                    <c:when test="${row.unchanged}">
+                                                        <span class="crh-diff-side"><c:out value="${row.left.text}"/></span>
+                                                    </c:when>
+                                                    <c:otherwise>
+                                                        <span class="crh-diff-side crh-diff-removed"><span
+                                                            class="crh-visually-hidden"><fmt:message key="crh_diff.removed"/></span><span
+                                                            class="crh-diff-marker" aria-hidden="true">-</span><del><%--
+                                                        --%><c:choose>
+                                                                <c:when test="${empty row.left.segments}"><c:out value="${row.left.text}"/></c:when>
+                                                                <c:otherwise><c:forEach items="${row.left.segments}" var="segment"><c:choose><c:when test="${segment.changed}"><mark><c:out value="${segment.text}"/></mark></c:when><c:otherwise><c:out value="${segment.text}"/></c:otherwise></c:choose></c:forEach></c:otherwise>
+                                                            </c:choose><%--
+                                                        --%></del></span>
+                                                    </c:otherwise>
+                                                </c:choose>
+
+                                                <%-- NEWER revision, right --%>
+                                                <c:choose>
+                                                    <c:when test="${empty row.right}">
+                                                        <span class="crh-diff-side crh-diff-absent" aria-hidden="true"></span>
+                                                    </c:when>
+                                                    <c:when test="${row.unchanged}">
+                                                        <span class="crh-diff-side"><c:out value="${row.right.text}"/></span>
+                                                    </c:when>
+                                                    <c:otherwise>
+                                                        <span class="crh-diff-side crh-diff-added"><span
+                                                            class="crh-visually-hidden"><fmt:message key="crh_diff.added"/></span><span
+                                                            class="crh-diff-marker" aria-hidden="true">+</span><ins><%--
+                                                        --%><c:choose>
+                                                                <c:when test="${empty row.right.segments}"><c:out value="${row.right.text}"/></c:when>
+                                                                <c:otherwise><c:forEach items="${row.right.segments}" var="segment"><c:choose><c:when test="${segment.changed}"><mark><c:out value="${segment.text}"/></mark></c:when><c:otherwise><c:out value="${segment.text}"/></c:otherwise></c:choose></c:forEach></c:otherwise>
+                                                            </c:choose><%--
+                                                        --%></ins></span>
+                                                    </c:otherwise>
+                                                </c:choose>
                                             </li>
                                         </c:otherwise>
                                     </c:choose>

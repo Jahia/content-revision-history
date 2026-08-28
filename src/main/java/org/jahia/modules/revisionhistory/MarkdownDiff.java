@@ -174,6 +174,53 @@ public final class MarkdownDiff {
         }
     }
 
+    /**
+     * One row of a side-by-side comparison: the older revision on the left, the newer on the
+     * right, either of which may be absent.
+     *
+     * <p>Built from the same {@link Line} list the unified view uses, rather than from a second
+     * diff. The flat list emits a change as every removed line followed by every added line; a
+     * side-by-side view needs them paired, and pairing after the fact keeps one diff algorithm
+     * and one set of word-level segments behind both presentations.
+     *
+     * <p>An unchanged line appears on BOTH sides, referencing the same object: the two columns
+     * are two views of one document, not two documents.
+     */
+    public static final class Row {
+        private final Line left;
+        private final Line right;
+        private final int gapSize;
+
+        Row(Line left, Line right, int gapSize) {
+            this.left = left;
+            this.right = right;
+            this.gapSize = gapSize;
+        }
+
+        /** The older revision's line, or null where this row is an insertion. */
+        public Line getLeft() {
+            return left;
+        }
+
+        /** The newer revision's line, or null where this row is a deletion. */
+        public Line getRight() {
+            return right;
+        }
+
+        public int getGapSize() {
+            return gapSize;
+        }
+
+        public boolean isGap() {
+            return gapSize > 0;
+        }
+
+        /** True when both sides carry the same unchanged line. */
+        public boolean isUnchanged() {
+            return left != null && left == right;
+        }
+    }
+
     /** The complete comparison. */
     public static final class Result {
         private final List<Line> lines;
@@ -181,8 +228,11 @@ public final class MarkdownDiff {
         private final int removedCount;
         private final boolean truncated;
 
+        private final List<Row> rows;
+
         Result(List<Line> lines, int addedCount, int removedCount, boolean truncated) {
             this.lines = Collections.unmodifiableList(lines);
+            this.rows = Collections.unmodifiableList(pair(lines));
             this.addedCount = addedCount;
             this.removedCount = removedCount;
             this.truncated = truncated;
@@ -190,6 +240,16 @@ public final class MarkdownDiff {
 
         public List<Line> getLines() {
             return lines;
+        }
+
+        /**
+         * The same comparison as side-by-side rows, older revision left, newer right.
+         *
+         * <p>Derived from {@link #getLines()}, so both presentations are the same diff and cannot
+         * disagree about what changed.
+         */
+        public List<Row> getRows() {
+            return rows;
         }
 
         public int getAddedCount() {
@@ -256,6 +316,52 @@ public final class MarkdownDiff {
                 !deltas.isEmpty(), false);
 
         return new Result(out, counter.added, counter.removed, truncated);
+    }
+
+    /**
+     * Pairs a unified line list into side-by-side rows.
+     *
+     * <p>A change arrives as a run of removed lines followed by a run of added lines, so the runs
+     * are buffered and then zipped: row i takes removed[i] on the left and added[i] on the right.
+     * When the runs are different lengths the shorter side simply runs out and those rows carry a
+     * null, which is what a pure insertion or deletion looks like.
+     */
+    private static List<Row> pair(List<Line> lines) {
+        List<Row> rows = new ArrayList<>();
+        List<Line> removed = new ArrayList<>();
+        List<Line> added = new ArrayList<>();
+
+        for (Line line : lines) {
+            if (line.isRemoved()) {
+                removed.add(line);
+                continue;
+            }
+            if (line.isAdded()) {
+                added.add(line);
+                continue;
+            }
+            flush(rows, removed, added);
+            if (line.isGap()) {
+                rows.add(new Row(null, null, line.getGapSize()));
+            } else {
+                // The same object on both sides: two views of one document.
+                rows.add(new Row(line, line, 0));
+            }
+        }
+        flush(rows, removed, added);
+        return rows;
+    }
+
+    private static void flush(List<Row> rows, List<Line> removed, List<Line> added) {
+        int pairs = Math.max(removed.size(), added.size());
+        for (int i = 0; i < pairs; i++) {
+            rows.add(new Row(
+                    i < removed.size() ? removed.get(i) : null,
+                    i < added.size() ? added.get(i) : null,
+                    0));
+        }
+        removed.clear();
+        added.clear();
     }
 
     // ------------------------------------------------------------------ internals
