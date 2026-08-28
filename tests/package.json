@@ -41,7 +41,7 @@
     "jahia-reporter": "^0.4.2",
     "mocha": "^10.0.0",
     "mocha-junit-reporter": "^2.2.0",
-    "mochawesome": "^7.1.4",
+    "mochawesome": "^8.0.1",
     "mochawesome-merge": "^4.2.0",
     "mochawesome-report-generator": "^6.3.2",
     "prettier": "^2.0.0",
