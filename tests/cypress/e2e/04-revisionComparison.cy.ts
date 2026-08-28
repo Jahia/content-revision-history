@@ -703,19 +703,29 @@ describe('Revision comparison (entry binding + diff viewer)', () => {
             const rows = [...panel.matchAll(/<li class="crh-diff-row">([\s\S]*?)<\/li>/g)]
                 .map(m => m[1]);
 
+            // Reads the two cells directly rather than stripping tags with a regex. The strip
+            // was flagged by CodeQL as js/incomplete-multi-character-sanitization, and correctly
+            // so: a single pass over `<[^>]+>` collapses `<scr<script>ipt>` INTO `<script`. There
+            // is no injection path in a test that never renders its input, but a tag-stripping
+            // helper is exactly the kind of thing that gets copied somewhere that does render.
+            // Reading the cells is also more precise about what the test means.
+            const sidesOf = (row: string) =>
+                [...row.matchAll(/<span class="crh-diff-side">([\s\S]*?)<\/span>/g)].map(m =>
+                    m[1].trim()
+                );
+
             const unchanged = rows.find(
                 row =>
                     !row.includes('crh-diff-removed') &&
                     !row.includes('crh-diff-added') &&
-                    row.replace(/<[^>]+>/g, '').trim().length > 0
+                    sidesOf(row).length === 2 &&
+                    sidesOf(row)[0].length > 0
             );
 
             expect(unchanged, 'the comparison must contain an unchanged line to compare').to.not.be
                 .undefined;
 
-            const sides = [
-                ...(unchanged as string).matchAll(/<span class="crh-diff-side">([\s\S]*?)<\/span>/g)
-            ].map(m => m[1].trim());
+            const sides = sidesOf(unchanged as string);
 
             expect(sides.length, 'an unchanged row must fill both columns').to.equal(2);
             expect(
