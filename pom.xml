@@ -18,6 +18,13 @@
     <description>Public, curated revision history for Jahia pages: Markdown snapshots taken on
         publication, promoted by editors into named public revisions, with a diff viewer.
     </description>
+    <licenses>
+        <license>
+            <name>MIT License</name>
+            <url>https://opensource.org/licenses/MIT</url>
+            <distribution>repo</distribution>
+        </license>
+    </licenses>
 
     <properties>
         <jahia-depends>default</jahia-depends>
@@ -94,6 +101,10 @@
                         <!-- Suppress dev-mode source mounting: it makes
                              ModulesSourceSpringInitializer take over Spring handling. -->
                         <Jahia-Source-Folders/>
+                        <!-- Ship the licence inside the bundle: neither the parent pom nor bnd
+                             does this automatically, and sibling Jahia modules carry
+                             META-INF/LICENSE.txt. -->
+                        <Include-Resource>META-INF/LICENSE.txt=LICENSE.txt</Include-Resource>
                     </instructions>
                 </configuration>
             </plugin>

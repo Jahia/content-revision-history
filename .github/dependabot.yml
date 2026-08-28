@@ -1,11 +1,65 @@
-# To get started with Dependabot version updates, you'll need to specify which
-# package ecosystems to update and where the package manifests are located.
-# Please see the documentation for all configuration options:
+# Dependabot version updates.
 # https://docs.github.com/code-security/dependabot/dependabot-version-updates/configuration-options-for-the-dependabot.yml-file
-
+#
+# This repository has three distinct dependency surfaces:
+#   - Maven at the root (the OSGi module itself)
+#   - Yarn at /tests (the @jahia/cypress e2e harness; Dependabot handles Yarn under "npm")
+#   - a Dockerfile at /tests (the Cypress base image)
 version: 2
 updates:
-  - package-ecosystem: "" # See documentation for possible values
-    directory: "/" # Location of package manifests
+  - package-ecosystem: "maven"
+    directory: "/"
     schedule:
       interval: "weekly"
+    open-pull-requests-limit: 5
+    groups:
+      # Test-only dependencies are low risk; review them together rather than one PR each.
+      test-dependencies:
+        patterns:
+          - "org.junit*"
+          - "org.mockito*"
+          - "org.jacoco*"
+    ignore:
+      # The Jahia platform artifacts are PROVIDED and must match the target Jahia version.
+      # Bumping them independently produces a module that compiles but fails at runtime, so
+      # these belong to a deliberate platform upgrade, never to an automated PR.
+      - dependency-name: "org.jahia.modules:jahia-modules"
+      - dependency-name: "org.jahia.server:*"
+      # jsoup is EMBEDDED in the bundle and deliberately pinned to the version the platform
+      # ships (1.21.2). Letting Dependabot drift it away from the platform reintroduces exactly
+      # the duplicate-class risk that embedding was chosen to avoid, so bump it only when the
+      # target Jahia does.
+      - dependency-name: "org.jsoup:jsoup"
+
+  - package-ecosystem: "npm"
+    directory: "/tests"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    groups:
+      # Cypress and its plugins move together; a split bump usually fails to resolve.
+      cypress:
+        patterns:
+          - "cypress"
+          - "cypress-*"
+          - "@cypress/*"
+      linting:
+        patterns:
+          - "eslint*"
+          - "@typescript-eslint/*"
+          - "prettier"
+    ignore:
+      # The harness resolves @jahia/cypress at run time from this range and the shipped
+      # ci.*/env.run scripts are versioned with it; upgrading is a harness migration, not a
+      # dependency bump.
+      - dependency-name: "@jahia/cypress"
+
+  - package-ecosystem: "docker"
+    directory: "/tests"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 3
+
+# Note: no "github-actions" entry. This repository ships no workflows of its own -- CodeQL and
+# the CLA check come from org-level configuration -- so there is nothing here for Dependabot to
+# update. Add that ecosystem if and when .github/workflows/ gains a workflow.
