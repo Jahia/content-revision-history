@@ -308,15 +308,19 @@ jsoup but does not export `org.jsoup` to modules.
 - `mvn test` — unit tests for the Markdown pipeline (the pure, rule-bearing part).
 - `tests/` — Docker-based Cypress e2e. See [tests/README.md](tests/README.md).
 
+## Retention
+
+Snapshots are kept indefinitely and are **not** pruned by age. That is deliberate: the record
+exists to answer "what did this page say on that date", and a retention window is a window in
+which that question stops having an answer. The only bound is
+`MAX_SNAPSHOTS_PER_PAGE_LANGUAGE` (500 per page and language); when it is reached the oldest are
+dropped and the running total is written to `crh:prunedCount`, so history that was discarded is
+visible as discarded rather than indistinguishable from history that never existed.
+
 ## Not yet implemented
 
-- **Retention / erasure policy.** Snapshots are permanent full-text copies of page content.
-  Before this stores production data, decide the retention rule and the GDPR erasure path — it is
-  cheap now and expensive after go-live.
-- **Comparing across languages, or against an arbitrary revision.** The comparison is always
-  "this revision versus the one before it", within one language. Snapshots are partitioned per
-  language and the model supports any pair; only the UI is fixed.
-- **Ordering is a convention, not a constraint.** The views treat the next sibling as the older
-  revision. The type is `orderable` so editors can honour that, but nothing enforces it: a list
-  ordered oldest-first will compare pairs in the wrong direction. Sorting by `revisionDate`
-  instead would need a Java helper, and would then disagree with the order editors see.
+- **Comparing across languages.** Snapshots are partitioned per language and a comparison is
+  always within one of them. The model supports a cross-language pair; only the UI does not offer
+  it.
+- **Paging the comparison selector.** Every revision is listed in both dropdowns. That is fine for
+  the dozens of revisions these pages accumulate and would not be for hundreds.

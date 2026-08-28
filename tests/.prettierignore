@@ -1,0 +1,25 @@
+# ESLint is the formatter in this project, not Prettier.
+#
+# Everything here is formatted and enforced by `yarn lint` / `yarn lint:fix`, whose rules come
+# from @jahia/eslint-config (which extends xo): semi always, single quotes, no trailing comma,
+# 4-space indent, no object-curly spacing. All committed sources already satisfy them.
+#
+# Prettier cannot be aligned to that ruleset. It was tried: matching semi, trailingComma,
+# arrowParens and bracketSpacing to the resolved ESLint config takes a spec file from 262
+# violations down to 10, but two disagreements have no setting that resolves them --
+#   * `indent`: Prettier and ESLint's indent rule differ on nested/chained expressions;
+#   * `quotes`: Prettier emits double quotes for strings containing an apostrophe, and
+#     ESLint's quotes rule here is `single` with no avoidEscape.
+# The usual escape hatch (eslint-config-prettier, which switches formatting authority to
+# Prettier) would relax rules this project does enforce, and leave already-committed files in a
+# different style from anything Prettier later touches.
+#
+# So Prettier is made inert instead. This matters because nothing here ever ran it deliberately:
+# no npm script invokes it, and .eslintrc.json does not extend plugin:prettier/recommended. The
+# only way it ran was an editor "format on save" -- which silently reformatted a spec by 262
+# lines and left `yarn lint` failing on every one of them, for a change nobody asked for.
+#
+# If you genuinely want Prettier to own formatting, that is a deliberate migration: add
+# eslint-config-prettier to .eslintrc.json's extends, reformat every source in one commit, and
+# delete this file. Do not do it by half.
+*

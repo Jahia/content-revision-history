@@ -90,6 +90,12 @@ capture cannot race the publication's own asynchronous cache flush.
 **Snapshots live in the `default` workspace and are never published**, so all assertions query
 `jcr(workspace: EDIT)` and require `cy.login()`.
 
+**ESLint is the formatter here, not Prettier.** `yarn lint` / `yarn lint:fix` own formatting; the
+rules come from `@jahia/eslint-config` (which extends `xo`). Prettier is deliberately made inert
+by a `.prettierignore` of `*` -- see the reasoning in that file. It cannot be aligned to this
+ruleset (its `indent` and quote-escaping behaviour have no setting that matches), and left active
+it silently reformatted a spec by 262 lines and broke `yarn lint` on every one of them.
+
 **A scratch page must use a template the site actually has.** `digitall` ships `home`, `news`
 and `2-column`; there is no `default`. A page created with `j:templateName: 'default'` still
 publishes, and its `.markdown` render still works -- that path uses this module's own views and no
