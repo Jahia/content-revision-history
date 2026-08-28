@@ -8,6 +8,7 @@ import java.util.Locale;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -462,6 +463,51 @@ class MarkdownNormalizerTest {
 
         String[] lines = md.trim().split("\n");
         assertEquals(2, lines.length, md);
+    }
+
+    @Test
+    @DisplayName("localeFor parses the underscore language codes Jahia actually uses")
+    void localeForParsesJahiaLanguageCodes() {
+        // Arrange/Act/Assert -- Jahia language codes are underscore-separated, not BCP-47.
+        assertEquals("en", MarkdownNormalizer.localeFor("en").getLanguage());
+        assertEquals("", MarkdownNormalizer.localeFor("en").getCountry());
+
+        Locale ptBr = MarkdownNormalizer.localeFor("pt_BR");
+        assertEquals("pt", ptBr.getLanguage(), "the primary subtag must survive");
+        assertEquals("BR", ptBr.getCountry(), "and so must the region, which is the whole point");
+    }
+
+    @Test
+    @DisplayName("localeFor does not fall back to ROOT the way Locale.forLanguageTag silently would")
+    void localeForBeatsForLanguageTagOnUnderscoreCodes() {
+        // Arrange -- forLanguageTag wants a hyphen; given "pt_BR" it returns ROOT rather than
+        // failing, which is why it must not be used here. This test pins that reasoning so the
+        // next person to "simplify" this method finds out immediately.
+        assertEquals("", Locale.forLanguageTag("pt_BR").getLanguage(),
+                "precondition: forLanguageTag really does silently yield ROOT for this input");
+
+        assertEquals("pt", MarkdownNormalizer.localeFor("pt_BR").getLanguage());
+    }
+
+    @Test
+    @DisplayName("localeFor falls back to the default locale for null or blank, never throwing")
+    void localeForHandlesMissingInput() {
+        assertNotNull(MarkdownNormalizer.localeFor(null));
+        assertNotNull(MarkdownNormalizer.localeFor("  "));
+    }
+
+    @Test
+    @DisplayName("A CJK page normalised via localeFor splits per sentence, as the capture path now does")
+    void localeForWiresUpSentenceSplittingForCjk() {
+        // Arrange -- this is the behaviour the production path was missing. The existing CJK test
+        // passes Locale.CHINESE by hand, so it passed while the only real caller used the
+        // locale-less overload. Going through localeFor("zh") is what capture actually does now.
+        String html = "<p>\u4eca\u5929\u5929\u6c14\u5f88\u597d\u3002\u6211\u4eec\u53bb\u516c\u56ed\u3002</p>";
+
+        String md = MarkdownNormalizer.normalize(html, MarkdownNormalizer.localeFor("zh"));
+
+        assertEquals(2, md.trim().split("\n").length,
+                "one line per sentence, or a one-word edit yields a whole-paragraph diff: " + md);
     }
 
     @Test

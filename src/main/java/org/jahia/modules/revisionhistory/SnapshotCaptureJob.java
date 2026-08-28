@@ -137,7 +137,13 @@ public class SnapshotCaptureJob extends BackgroundJob {
 
         try {
             CaptureStatus status = snapshotService.captureIfChanged(page.siteKey, page.uuid,
-                    language, MarkdownNormalizer.normalize(fetched.body), captureInstant,
+                    // The locale-aware overload exists precisely so that languages which do
+                    // not start a sentence with a Latin capital still get one-sentence-per-line
+                    // output. Calling the locale-less one here left it inert on the only
+                    // production path, so a one-word edit to a CJK page produced a
+                    // whole-paragraph diff -- the exact thing semanticLineBreaks prevents.
+                    language, MarkdownNormalizer.normalize(fetched.body,
+                            MarkdownNormalizer.localeFor(language)), captureInstant,
                     CAPTURE_PRINCIPAL, fetched.sourceUrl);
             logger.info("Revision snapshot for {} [{}]: {}", page.path, language, status);
             // Only these two statuses mean the newest snapshot matches the live page, which is

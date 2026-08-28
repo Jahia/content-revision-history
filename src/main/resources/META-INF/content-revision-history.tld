@@ -54,6 +54,6 @@
         <name>compare</name>
         <function-class>org.jahia.modules.revisionhistory.RevisionHistoryFunctions</function-class>
         <function-signature>org.jahia.modules.revisionhistory.RevisionDiffView compare(java.lang.String, java.lang.String, java.lang.String, java.lang.String)</function-signature>
-        <example>${crh:compare(currentNode.identifier, param.crhFrom, param.crhTo, currentResource.locale.language)}</example>
+        <example>${crh:compare(currentNode.identifier, selectedFrom, selectedTo, currentResource.locale)}</example>
     </function>
 </taglib>

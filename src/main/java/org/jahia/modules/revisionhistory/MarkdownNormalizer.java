@@ -121,6 +121,33 @@ public final class MarkdownNormalizer {
         return s.trim() + "\n";
     }
 
+    /**
+     * Turns a Jahia language code into a {@link Locale} for sentence-boundary detection.
+     *
+     * <p>Jahia language codes are underscore-separated ({@code en}, {@code pt_BR}), not BCP-47.
+     * {@link Locale#forLanguageTag} cannot read them -- it wants a hyphen and, for anything it
+     * fails to parse, silently returns the ROOT locale rather than failing. Using it here would
+     * therefore look like it worked while reintroducing exactly the defect this method exists to
+     * remove, which is why the parse is done by hand.
+     *
+     * <p>The platform's own converter is not an option: {@code org.jahia.utils} is not in the
+     * packages exported to modules, so importing it yields a bundle that builds cleanly and then
+     * fails to resolve at deploy time.
+     */
+    public static Locale localeFor(String languageCode) {
+        if (languageCode == null || languageCode.trim().isEmpty()) {
+            return DEFAULT_LOCALE;
+        }
+        String[] parts = languageCode.trim().split("_", 3);
+        if (parts.length == 1) {
+            return new Locale(parts[0]);
+        }
+        if (parts.length == 2) {
+            return new Locale(parts[0], parts[1]);
+        }
+        return new Locale(parts[0], parts[1], parts[2]);
+    }
+
     private static String capInputSize(String input) {
         return input.length() > MAX_INPUT_CHARS ? input.substring(0, MAX_INPUT_CHARS) : input;
     }

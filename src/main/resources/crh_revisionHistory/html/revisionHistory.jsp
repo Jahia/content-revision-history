@@ -161,7 +161,12 @@
     </c:if>
 
     <c:if test="${comparisonRequested}">
-        <c:set var="view" value="${crh:compare(currentNode.identifier, selectedFrom, selectedTo, currentResource.locale.language)}"/>
+        <%-- currentResource.locale, NOT locale.language: EL coerces the Locale with
+             toString(), which yields the underscore form Jahia uses for language codes and for
+             the snapshot folder name ("pt_BR"). locale.language returns only the primary subtag
+             ("pt"), so on any region-qualified site the lookup missed the folder capture had
+             written and every comparison answered "no snapshot recorded" forever. --%>
+        <c:set var="view" value="${crh:compare(currentNode.identifier, selectedFrom, selectedTo, currentResource.locale)}"/>
 
         <%-- A plain section, deliberately. revision-history.js adds popover="auto" and
              role="dialog" at runtime; writing them here would hide the comparison outright from
