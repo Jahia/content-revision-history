@@ -58,6 +58,20 @@ updates:
       # ci.*/env.run scripts are versioned with it; upgrading is a harness migration, not a
       # dependency bump.
       - dependency-name: "@jahia/cypress"
+      # The eslint stack is pinned by @jahia/eslint-config@2.2.0, which has a hard DEPENDENCY
+      # (not just a peer range) on eslint ^8.39.0. Bumping eslint to 9/10 fails the install
+      # outright: "could not find a copy of eslint to link in node_modules/@jahia/eslint-config".
+      # eslint 9+ also replaces .eslintrc.json with flat config and drops --ext, both of which
+      # this harness's lint script uses. Unblocking these needs @jahia/eslint-config to move
+      # first, so block majors and keep receiving minor/patch updates.
+      - dependency-name: "eslint"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@typescript-eslint/*"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "eslint-plugin-*"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "eslint-config-*"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: "docker"
     directory: "/tests"
