@@ -740,11 +740,15 @@ describe('Publication-triggered revision snapshot capture', () => {
             });
     });
 
-    it('allows creating a crh:revisionEntry without a snapshotRef', () => {
-        // SnapshotRef used to be an editor-visible mandatory string holding an internally
-        // generated key no editor could know -- a revisionEntry could not be saved at all.
-        // It is now system-set, hidden and optional; this proves an entry is creatable
-        // without ever touching it.
+    it('allows creating a crh:revisionEntry from editor-facing fields alone', () => {
+        // History: this type once carried a mandatory `snapshotRef` string holding an
+        // internally generated key no editor could possibly know, so a revisionEntry could not
+        // be saved at all. The property was then made hidden and optional, and has since been
+        // removed outright -- the entry/snapshot link now lives on the snapshot
+        // (crh:entryRefs), which is system content and never published, so binding it cannot
+        // leave an editor's page flagged as modified.
+        // What must stay true regardless is this: an entry is creatable from the fields an
+        // editor is actually shown, and nothing system-set is ever required of them.
         addNode({
             parentPathOrId: contentsPath,
             primaryNodeType: 'crh:revisionHistory',
@@ -755,14 +759,14 @@ describe('Publication-triggered revision snapshot capture', () => {
             addNode({
                 parentPathOrId: scratchContainerPath,
                 primaryNodeType: 'crh:revisionEntry',
-                name: 'entry-without-snapshot-ref',
+                name: 'entry-editor-fields-only',
                 properties: [
                     {name: 'revisionLabel', value: 'e2e regression'},
                     {name: 'revisionDate', value: new Date().toISOString(), type: 'DATE'},
-                    {name: 'summary', value: 'Created without a snapshotRef on purpose', language}
+                    {name: 'summary', value: 'Created from editor-facing fields only', language}
                 ]
             }).then((entryResult: ApolloResult<AddNodeQueryData>) => {
-                expect(entryResult.errors, 'a revisionEntry must be creatable without snapshotRef').to.be.undefined;
+                expect(entryResult.errors, 'a revisionEntry must be creatable from editor fields alone').to.be.undefined;
                 expect(entryResult.data?.jcr?.addNode.uuid, 'the entry must actually be created').to.be.a('string').and
                     .not.be.empty;
 

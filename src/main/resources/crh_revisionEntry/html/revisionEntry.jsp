@@ -1,40 +1,35 @@
 <%@ taglib prefix="c" uri="http://java.sun.com/jsp/jstl/core" %>
 <%@ taglib prefix="fmt" uri="http://java.sun.com/jsp/jstl/fmt" %>
 <%@ taglib prefix="fn" uri="http://java.sun.com/jsp/jstl/functions" %>
+<%@ taglib prefix="crh" uri="http://www.jahia.org/content-revision-history/functions" %>
 <%--
   Renders a single crh:revisionEntry as a self-contained record (<article> + <dl>).
   Designed to work standalone from just `currentNode` -- no data is threaded down
   from the crh_revisionHistory container view.
 
-  SECURITY -- summary/richtext handling (see task item 1: no unsanitised HTML ever):
+  SECURITY -- summary/richtext handling:
     `summary` is declared `(string, richtext) i18n mandatory`, i.e. authored through
-    the CKEditor widget in Content Editor, so the stored value is normally an HTML
-    fragment (e.g. "<p>...</p>"). This view renders it as ESCAPED PLAIN TEXT via
-    <c:out>, NOT as raw HTML.
-      Why: this module ships no vetted HTML sanitiser on its classpath (pom.xml is
-      out of scope for this change; adding one is a Java/dependency change owned by
-      another agent). Rendering the stored markup unescaped would reopen exactly the
-      stored-XSS hole the deleted spike view had, just moved from `jcr:title` to
-      `summary`.
-      Consequence: authored rich formatting (bold, links, lists) is NOT preserved on
-      the live page today -- editors will see literal "<p>...</p>" tags as text.
-      To restore real rich-text rendering safely, a follow-up change must run
-      `summary` through a vetted sanitiser (OWASP Java HTML Sanitizer is already on
-      this workspace's local repo; Jahia also ships an official `html-filtering`
-      module) in a Java render helper, and only then switch this line to unescaped
-      output through that filter's result. Do not remove the <c:out> without adding
-      that sanitisation step first.
+    the CKEditor widget, so the stored value is an HTML fragment. It is emitted
+    UNESCAPED, but only ever after passing through crh:sanitize (jsoup, allow-list
+    based -- see RichTextSanitizer for what survives and why).
+      This replaced a <c:out>, which was safe but showed visitors literal "<p>" tags
+      and discarded every link and emphasis an editor wrote. The rule that has NOT
+      changed: nothing reaches the page unescaped unless it went through the
+      sanitiser first. Do not swap crh:sanitize for a plain ${...} -- `summary` is
+      writable by any site contributor, so that is a stored-XSS hole on a public page.
 
   "Compare with previous" naming/positioning (SC 2.4.6, 2.5.3, 4.1.2):
     Each control's accessible name is its full VISIBLE text (no separate aria-label),
     so the accessible name always equals the visible label per SC 2.5.3, and always
     embeds both this entry's version+date and the previous entry's version+date, so
-    a screen-reader user scanning a "buttons" list sees N distinct names instead of
+    a screen-reader user scanning a links list sees N distinct names instead of
     N copies of "Compare".
     "Previous" is POSITIONAL, not computed from `revisionDate`: crh:revisionHistory
-    extends jmix:list, so editors control the child order by drag-and-drop in
-    Content Editor (see the historyTitle/revisionDate field help in the resource
-    bundle). This view treats the *next sibling in that editorial order* as the
+    is declared `orderable` in the CND, so editors control the child order by
+    drag-and-drop in Content Editor. Note that `orderable` is what makes this true --
+    extending jmix:list does NOT confer it, and while the type lacked the keyword
+    Jackrabbit refused reordering outright, leaving this whole convention
+    unachievable. This view treats the *next sibling in that editorial order* as the
     chronologically older revision, which only holds if editors keep the list
     newest-first. A plain JSTL view has no reliable way to sort a JCR NodeIterator
     by `revisionDate` without a Java helper (out of scope here), so this is a
@@ -64,7 +59,7 @@
      escapeXml attribute -- and revisionLabel is editor-authored free text. Every
      <fmt:param> below therefore escapes AT THE POINT OF USE. Do not reintroduce
      intermediate <c:set> "safe" variables: they did not survive to <fmt:message>,
-     and an empty param silently blanks the button instead of failing loudly. --%>
+     and an empty param silently blanks the control instead of failing loudly. --%>
 
 <article class="crh-entry" aria-labelledby="crh-entry-heading-${currentNode.identifier}">
     <h3 id="crh-entry-heading-${currentNode.identifier}">
@@ -84,28 +79,41 @@
         </c:choose></dd>
 
         <dt><fmt:message key="crh_revisionEntry.summary"/></dt>
-        <%-- Escaped plain text, deliberately -- see the security note above. --%>
-        <dd><c:out value="${currentNode.properties.summary.string}"/></dd>
+        <%-- Sanitised HTML, deliberately unescaped -- see the security note above. --%>
+        <dd>${crh:sanitize(currentNode.properties.summary.string)}</dd>
     </dl>
 
     <c:choose>
         <c:when test="${not empty previousEntry}">
             <fmt:formatDate var="previousHumanDate" value="${previousEntry.properties.revisionDate.date.time}" dateStyle="long"/>
             <c:set var="previousLabel" value="${previousEntry.properties.revisionLabel.string}"/>
-            <%-- Native <button>: keyboard/switch operable by default, no role/tabindex needed.
-                 Target size and focus-indicator styling are NOT shipped by this module -- see
-                 the accessibility notes in the parent agent's summary for what the host site
-                 must provide (>=44x44 CSS px target, >=2px/3:1 visible focus outline). --%>
-            <button type="button" class="crh-compare-btn"
-                    data-crh-current="${fn:escapeXml(currentNode.identifier)}"
-                    data-crh-previous="${fn:escapeXml(previousEntry.identifier)}">
+            <%-- A LINK, not a button, and deliberately so. This used to be a <button> with
+                 data- attributes and no script behind it, so it was a dead control: focusable,
+                 announced as a button, and doing nothing when activated (SC 4.1.2).
+
+                 The href is query-only and therefore relative to the current page URL, which
+                 keeps this correct under vanity URLs and SEO rewriting without the view having
+                 to reconstruct the page address. The fragment moves focus to the panel, which
+                 carries tabindex="-1" for exactly that reason.
+
+                 No JavaScript anywhere in this feature: the comparison is rendered server-side,
+                 so it works with scripting unavailable, and there is no client-side code path
+                 that could handle snapshot content unsafely.
+
+                 aria-current marks the comparison currently on screen, so a visitor returning
+                 to the list can tell which of N identically-shaped links is the active one. It
+                 reads crhRequestedEntry, set in REQUEST scope by the parent revisionHistory view:
+                 ${param.crhDiff} does not survive into this nested <template:module> render. --%>
+            <a class="crh-compare-link"
+               href="?crhDiff=${fn:escapeXml(currentNode.identifier)}#crh-diff-panel-${fn:escapeXml(parentHistory.identifier)}"
+               <c:if test="${crhRequestedEntry eq currentNode.identifier}">aria-current="true"</c:if>>
                 <fmt:message key="crh_revisionEntry.compareWithPrevious">
                     <fmt:param value="${fn:escapeXml(currentNode.properties.revisionLabel.string)}"/>
                     <fmt:param value="${fn:escapeXml(humanDate)}"/>
                     <fmt:param value="${fn:escapeXml(previousEntry.properties.revisionLabel.string)}"/>
                     <fmt:param value="${fn:escapeXml(previousHumanDate)}"/>
                 </fmt:message>
-            </button>
+            </a>
         </c:when>
         <c:otherwise>
             <%-- Oldest entry (last in editorial order): explained, non-interactive state --

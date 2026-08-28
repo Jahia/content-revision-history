@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<taglib xmlns="http://java.sun.com/xml/ns/j2ee"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://java.sun.com/xml/ns/j2ee
+                            http://java.sun.com/xml/ns/j2ee/web-jsptaglibrary_2_0.xsd"
+        version="2.0">
+
+    <description>Content Revision History view functions</description>
+    <display-name>Content Revision History Functions</display-name>
+    <tlib-version>1.0</tlib-version>
+    <short-name>crh</short-name>
+    <uri>http://www.jahia.org/content-revision-history/functions</uri>
+
+    <function>
+        <description>
+            Sanitises editor-authored rich text so it can be rendered unescaped. Strips scripts,
+            event handlers, styles, images and headings; keeps inline emphasis, links and lists.
+        </description>
+        <name>sanitize</name>
+        <function-class>org.jahia.modules.revisionhistory.RevisionHistoryFunctions</function-class>
+        <function-signature>java.lang.String sanitize(java.lang.String)</function-signature>
+        <example>${crh:sanitize(currentNode.properties.summary.string)}</example>
+    </function>
+
+    <function>
+        <description>
+            Compares a revision entry with the previous one in editorial order. The first
+            argument is the rendered revision-history node and is what restricts the second,
+            visitor-supplied, argument to entries of that history.
+        </description>
+        <name>compare</name>
+        <function-class>org.jahia.modules.revisionhistory.RevisionHistoryFunctions</function-class>
+        <function-signature>org.jahia.modules.revisionhistory.RevisionDiffView compare(java.lang.String, java.lang.String, java.lang.String)</function-signature>
+        <example>${crh:compare(currentNode.identifier, param.crhDiff, currentResource.locale.language)}</example>
+    </function>
+</taglib>

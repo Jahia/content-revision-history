@@ -35,6 +35,9 @@ publication ──▶ PublicationSnapshotListener ──▶ SnapshotCaptureJob (
                                                            │
                                                            ▼
                                      RevisionSnapshotService (dedupe, store, prune)
+                                                           │
+                                                           ▼
+                                    RevisionEntryBinder (link new entries to the snapshot)
 ```
 
 1. **Trigger.** `PublicationSnapshotListener` reacts to publication and enqueues a background
@@ -48,6 +51,8 @@ publication ──▶ PublicationSnapshotListener ──▶ SnapshotCaptureJob (
    yields a one-line diff.
 4. **Store.** `RevisionSnapshotService` hashes the Markdown and stores it only if it differs
    from the previous snapshot.
+5. **Bind.** `RevisionEntryBinder` attaches any revision entry that has no snapshot yet to the
+   current one, so the editor's description of a change and the evidence for it are joined.
 
 ### Why capture is *not* a render filter
 
@@ -63,6 +68,85 @@ recording because the filter approach looks attractive:
   unbounded repository growth.
 - The render used the **visitor's** session, so an editor's first visit captured content that
   anonymous users may not see — and that snapshot was destined to be published.
+
+## How the editorial and captured halves join
+
+An editor authors a **revision entry** (label, date, summary); the module captures **snapshots**.
+Those are two independent streams, and the link between them is what makes a comparison possible.
+
+The reference is stored on the **snapshot** (`crh:entryRefs`), pointing back at the entry — not
+on the entry pointing at the snapshot, which is the way round it looks like it should go. The
+reason is publication state: a revision entry is editorial content, so writing any property to it
+bumps `jcr:lastModified` and jContent shows the page as **modified again seconds after the editor
+published it**, every single time. Every revision would then need publishing twice. A snapshot is
+system content in `default` that is never published, so binding there is invisible to the
+editorial workflow.
+
+Binding runs after any capture attempt that leaves the store consistent with the live page —
+`STORED` **and** `UNCHANGED` — because both editorial habits have to work:
+
+| The editor... | Capture reports | What binds |
+|---|---|---|
+| changes the page and describes the change in one publication | `STORED` | the new entry, to the new snapshot |
+| publishes the change first, writes the entry afterwards | `UNCHANGED` (page text did not change) | the new entry, to the snapshot already current |
+
+`RATE_LIMITED`, `FAILED` and the rest deliberately do **not** bind: there the newest snapshot is
+known not to reflect the live page, and attaching an entry to content it does not describe would
+fabricate evidence. The entry stays unbound, says so on the page, and binds at the next
+publication.
+
+Binding is **append-only**. An entry that already has a snapshot is never rebound, or a later
+capture would silently rewrite what an existing public revision claims the page used to say.
+
+## The comparison
+
+Each entry renders a "Compare with the previous revision" link. It is a plain link to the same
+page with a `?crhDiff=<entry uuid>` query, so:
+
+- it works with **no JavaScript** — the comparison is computed and rendered server-side, and
+  there is no client-side code path that could handle snapshot content unsafely;
+- the URL is shareable and the browser Back button behaves;
+- the accessible name is the full visible text, naming both revisions and both dates, so a screen
+  reader user scanning a list of links gets N distinct names rather than N copies of "Compare".
+
+"Previous" is **positional** — the next sibling in editorial order — matching what the list view
+renders. `crh:revisionHistory` is declared `orderable` so editors control that order by
+drag-and-drop; keep the list newest-first.
+
+Diffing is line-based over the Markdown, with word-level highlighting inside changed lines.
+Because `MarkdownNormalizer` breaks text at sentence boundaries, a one-word edit produces a
+one-sentence diff rather than "this whole paragraph changed". Long unchanged runs collapse to a
+counted gap. The algorithm is Myers, from the platform's own `difflib` (`diffutils-1.3.0`, which
+is exported to modules) — so no dependency is added.
+
+`difflib` also ships a `DiffRowGenerator` that emits HTML directly. It is deliberately unused:
+the text being diffed is page content and can contain anything an editor typed, and a value that
+mixes generated markup with text-to-be-escaped has no safe rendering. `MarkdownDiff` carries text
+only; the view escapes every piece of it.
+
+The panel is served from the `default` workspace with a system session, because snapshots are
+never published. That is safe by construction rather than by permission check: the snapshot was
+captured over HTTP **as guest**, so it contains only what the visitor asking for the comparison
+could already see. The visitor-supplied entry identifier is constrained to entries of the
+*rendered* history node — without that containment check, a crafted identifier would have a
+system session read an arbitrary node onto a public page.
+
+The revision-history view opts out of the HTML cache (`revisionHistory.properties`,
+`cache.expiration=0`): Jahia keys fragments on node, template type, user and locale — not on the
+query string — so a cached fragment would serve one visitor's comparison to everyone else.
+
+## Rich-text summaries
+
+`summary` is a `richtext` field, so it is authored in CKEditor and stored as HTML. It is rendered
+**unescaped, but only after** `RichTextSanitizer` — an allow-list clean using the jsoup already
+embedded in this bundle for `MarkdownNormalizer`, so the safe path costs no new dependency.
+
+Inline emphasis, links and lists survive. Scripts, event handlers, styles, images, iframes and
+`javascript:`/`data:` URLs do not. Neither do **headings**: the summary renders inside an entry
+that already owns an `<h3>`, so an editor-supplied `<h2>` would break the page's heading
+hierarchy — that exclusion is an accessibility decision as much as a security one. Unknown
+elements are unwrapped rather than dropped, so the text an editor wrote always survives even when
+its markup does not.
 
 ## Storage layout
 
@@ -94,7 +178,12 @@ recording because the filter approach looks attractive:
 | `crh:revisionHistory` | The editorial container dropped on a page; holds revision entries. |
 | `crh:revisionEntry` | One public revision: label, date, summary, change type. |
 | `crh:snapshotFolder` | System container; carries dedupe state and last-capture status. |
-| `crh:revisionSnapshot` | One immutable Markdown snapshot. |
+| `crh:revisionSnapshot` | One immutable Markdown snapshot; `crh:entryRefs` links it to the revisions it is evidence for. |
+
+`crh:revisionHistory` is declared **`orderable`**. That is not implied by `jmix:list` —
+`jnt:contentList` declares it separately for the same reason — and without it Jackrabbit refuses
+reordering outright, so editors cannot drag entries into order and the newest-first convention
+both views depend on is unachievable.
 
 Snapshot types carry `jmix:hiddenType` so they never appear in the components tree.
 They keep `jmix:droppableContent` only because `jnt:contentFolder` accepts no other child
@@ -151,11 +240,13 @@ jsoup but does not export `org.jsoup` to modules.
 
 ## Not yet implemented
 
-- **The diff viewer.** Snapshots and the content model exist; the comparison UI does not.
-  Accessibility requirements for it are specified up front (semantic `<ins>`/`<del>`, never
-  colour alone, AAA contrast, unified view as the default at narrow widths).
 - **Retention / erasure policy.** Snapshots are permanent full-text copies of page content.
-  Before this stores production data, decide the retention rule and the GDPR erasure path —
-  it is cheap now and expensive after go-live.
-- **Rich-text `summary` is currently rendered as escaped plain text**, losing formatting: no
-  vetted HTML sanitiser is on the module's classpath yet.
+  Before this stores production data, decide the retention rule and the GDPR erasure path — it is
+  cheap now and expensive after go-live.
+- **Comparing across languages, or against an arbitrary revision.** The comparison is always
+  "this revision versus the one before it", within one language. Snapshots are partitioned per
+  language and the model supports any pair; only the UI is fixed.
+- **Ordering is a convention, not a constraint.** The views treat the next sibling as the older
+  revision. The type is `orderable` so editors can honour that, but nothing enforces it: a list
+  ordered oldest-first will compare pairs in the wrong direction. Sorting by `revisionDate`
+  instead would need a Java helper, and would then disagree with the order editors see.

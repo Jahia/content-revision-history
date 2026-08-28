@@ -128,10 +128,18 @@ describe('Rendered output correctness (crh_revisionHistory / crh_revisionEntry v
         });
     });
 
-    it('renders crh:revisionEntry.summary HTML as escaped text, never sanitised or raw', () => {
+    it('renders crh:revisionEntry.summary as sanitised HTML, keeping formatting and dropping scripts', () => {
         const containerName = `crh-render-check-summary-${Date.now()}`;
         const marker = Date.now();
-        const rawSummary = `<strong>bold-marker-${marker}</strong>`;
+        // Formatting an editor legitimately wants, plus two things that must never survive.
+        // The javascript: URL below is the payload under test; a sanitiser test that cannot
+        // contain the attack it defends against would assert nothing.
+        // eslint-disable-next-line no-script-url
+        const dangerousHref = 'javascript:alert(1)';
+        const rawSummary =
+            `<strong>bold-marker-${marker}</strong>` +
+            `<script>alert(${marker})</script>` +
+            `<a href="${dangerousHref}">bad-link-${marker}</a>`;
 
         addNode({
             parentPathOrId: areaPath,
@@ -158,11 +166,26 @@ describe('Rendered output correctness (crh_revisionHistory / crh_revisionEntry v
                 return renderPage();
             })
             .then(html => {
+                // Formatting survives: this is the whole reason the escaping was replaced by a
+                // sanitiser rather than left as <c:out>.
                 expect(
                     html,
-                    'the module does not sanitise summary yet (documented, deliberate): it must render as ESCAPED text'
-                ).to.contain(`&lt;strong&gt;bold-marker-${marker}&lt;/strong&gt;`);
-                expect(html, 'the summary HTML must never render as live markup').to.not.contain(rawSummary);
+                    'allowed inline formatting must render as real markup'
+                ).to.contain(`<strong>bold-marker-${marker}</strong>`);
+                expect(
+                    html,
+                    'the summary must no longer be double-escaped into visible tags'
+                ).to.not.contain(`&lt;strong&gt;bold-marker-${marker}&lt;/strong&gt;`);
+
+                // ...and the attacks do not. `summary` is writable by any site contributor and
+                // is emitted unescaped, so these two assertions are what stands between that
+                // field and stored XSS on a public page.
+                expect(html, 'a script element must never reach the page').to.not.contain(
+                    `<script>alert(${marker})</script>`
+                );
+                expect(html, 'a javascript: URL must never survive sanitisation').to.not.contain(dangerousHref);
+                // The link TEXT still survives -- sanitising must not silently delete content.
+                expect(html, 'the text of a stripped link must be kept').to.contain(`bad-link-${marker}`);
 
                 deleteNode(`${areaPath}/${containerName}`).then(null, () => undefined);
             });
@@ -204,8 +227,8 @@ describe('Rendered output correctness (crh_revisionHistory / crh_revisionEntry v
                 ).to.contain(`${onlyLabel} is the earliest recorded revision - there is no earlier version to compare.`);
                 expect(
                     html,
-                    'an entry with no previous sibling must never render a Compare button'
-                ).to.not.contain('crh-compare-btn');
+                    'an entry with no previous sibling must never render a Compare control'
+                ).to.not.contain('crh-compare-link');
 
                 deleteNode(`${areaPath}/${containerName}`).then(null, () => undefined);
             });

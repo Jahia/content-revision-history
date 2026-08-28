@@ -90,6 +90,19 @@ capture cannot race the publication's own asynchronous cache flush.
 **Snapshots live in the `default` workspace and are never published**, so all assertions query
 `jcr(workspace: EDIT)` and require `cy.login()`.
 
+**A scratch page must use a template the site actually has.** `digitall` ships `home`, `news`
+and `2-column`; there is no `default`. A page created with `j:templateName: 'default'` still
+publishes, and its `.markdown` render still works -- that path uses this module's own views and no
+page template at all -- but the LIVE `.html` render returns **404**, which reads like the page was
+never published. Specs that only assert on JCR state never notice; specs that read rendered HTML
+fail on every assertion at once.
+
+**04-revisionComparison.cy.ts is order-dependent within its own file, deliberately.** Binding is
+defined by what was already bound when a capture ran, so it can only be asserted as a sequence:
+the first test publishes an entry and proves it binds, the second publishes a change plus a second
+entry and proves the first entry was *not* rebound. The file uses its own scratch page and never
+touches the pages the other specs depend on.
+
 **Queries target `/sites/digitall/contents`, not `revision-history`.** The history root does
 not exist until the first capture, and `nodeByPath` on a missing path is a GraphQL error rather
 than a null.
@@ -104,6 +117,13 @@ than a null.
 | new snapshot when content changes | change detection |
 | heading on its own line | regression: H1 used to fuse onto the first child's text |
 | every snapshot carries `contentHash` + `generatorVersion` | dedupe key and formatting-change flag |
+| a revision entry binds to the snapshot of its publication | the join between the editorial and captured halves |
+| an already-bound entry is never rebound | binding is append-only; a public revision's evidence cannot be rewritten |
+| a word-level comparison renders between two revisions | the diff viewer, including `<ins>`/`<del>` and text alternatives |
+| a foreign or malformed `?crhDiff=` is refused | the containment check that stops a system session reading an arbitrary node |
+| the earliest revision is explained, not compared | no dead controls and no silently blank panel |
+| the revision list stays out of the snapshots | without a markdown view the changelog is captured into the record it describes |
+| `summary` renders as sanitised HTML | formatting survives; scripts and `javascript:` URLs do not |
 
 Unit tests for the pure Markdown logic live in `src/test/java` and run with `mvn test` —
 they cover sentence-level line breaking, entity handling and hash stability.
