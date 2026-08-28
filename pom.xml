@@ -62,6 +62,16 @@
             <version>5.10.2</version>
             <scope>test</scope>
         </dependency>
+        <!-- Only used to mock javax.management.MBeanServer for GuestMarkdownFetcherTest: the
+             connector-probing logic branches on MBean attribute values and query failures that
+             cannot be produced with a real MBeanServer in a unit test. Version pinned to what is
+             already present in the local repository so the build stays offline. -->
+        <dependency>
+            <groupId>org.mockito</groupId>
+            <artifactId>mockito-core</artifactId>
+            <version>5.14.2</version>
+            <scope>test</scope>
+        </dependency>
         <!-- Real HTML parser for MarkdownNormalizer: replaces the regex pipeline (ReDoS risk,
              entity-decoding-order bugs). The platform ships jsoup but does not export
              org.jsoup, so this must stay compile-scoped and be embedded in the bundle
@@ -91,6 +101,31 @@
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-surefire-plugin</artifactId>
                 <version>3.2.5</version>
+            </plugin>
+            <!-- Coverage reporting only, no enforced gate yet: this module is roughly
+                 35-45% unit-testable (see class-level comments), the rest being JCR/HTTP/
+                 Quartz/Spring glue exercised by the Cypress suite under tests/ instead. A hard
+                 jacoco:check threshold would either fail the build today or be set so low it is
+                 meaningless; revisit once the actual measured number is known. -->
+            <plugin>
+                <groupId>org.jacoco</groupId>
+                <artifactId>jacoco-maven-plugin</artifactId>
+                <version>0.8.13</version>
+                <executions>
+                    <execution>
+                        <id>prepare-agent</id>
+                        <goals>
+                            <goal>prepare-agent</goal>
+                        </goals>
+                    </execution>
+                    <execution>
+                        <id>report</id>
+                        <phase>test</phase>
+                        <goals>
+                            <goal>report</goal>
+                        </goals>
+                    </execution>
+                </executions>
             </plugin>
         </plugins>
     </build>
