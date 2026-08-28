@@ -76,9 +76,13 @@ public class PublicationSnapshotListener implements PublicationEventListener {
     }
 
     public void stop() {
-        INSTANCE = null;
+        // Order matters: cancel BEFORE clearing INSTANCE. If INSTANCE were nulled first,
+        // a job entering executeJahiaJob in the gap would find no instance, fail to
+        // deregister itself, and then be passed to deleteJob while already running --
+        // contradicting the guarantee that a running job is left alone.
         JCRPublicationService.getInstance().unregisterListener(this);
         cancelOutstandingJobs();
+        INSTANCE = null;
         logger.info("Content revision history: stopped listening for publication events");
     }
 

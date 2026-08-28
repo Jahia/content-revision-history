@@ -46,14 +46,6 @@
 <c:set var="previousEntry" value=""/>
 <c:set var="foundCurrent" value="false"/>
 <c:forEach items="${parentHistory.nodes}" var="sibling">
-    <%-- SECURITY: <fmt:message> writes its output unescaped -- it has no escapeXml
-         attribute, unlike <c:out>. revisionLabel is free text authored by an editor, so every
-         value interpolated below MUST be escaped here; escaping it only in the <h3> above is
-         not enough. The message text itself comes from our own resource bundle and is trusted. --%>
-    <c:set var="currentLabelSafe" value="${fn:escapeXml(currentLabel)}"/>
-    <c:set var="previousLabelSafe" value="${fn:escapeXml(previousLabel)}"/>
-    <c:set var="humanDateSafe" value="${fn:escapeXml(humanDate)}"/>
-    <c:set var="previousHumanDateSafe" value="${fn:escapeXml(previousHumanDate)}"/>
     <c:choose>
         <c:when test="${foundCurrent and empty previousEntry}">
             <c:set var="previousEntry" value="${sibling}"/>
@@ -68,6 +60,13 @@
 <fmt:formatDate var="humanDate" value="${currentNode.properties.revisionDate.date.time}" dateStyle="long"/>
 <c:set var="changeTypeCode" value="${currentNode.properties.changeType.string}"/>
 <c:set var="currentLabel" value="${currentNode.properties.revisionLabel.string}"/>
+<%-- SECURITY: <fmt:message> writes its output UNESCAPED -- unlike <c:out> it has no
+     escapeXml attribute -- and revisionLabel is free text authored by an editor. Escape every
+     value here, immediately after it is assigned: these <c:set>s must come AFTER the
+     assignments above, because JSTL evaluates strictly top-to-bottom with no hoisting, and
+     escaping an unassigned variable silently yields "" (which blanks the button text). --%>
+<c:set var="currentLabelSafe" value="${fn:escapeXml(currentLabel)}"/>
+<c:set var="humanDateSafe" value="${fn:escapeXml(humanDate)}"/>
 
 <article class="crh-entry" aria-labelledby="crh-entry-heading-${currentNode.identifier}">
     <h3 id="crh-entry-heading-${currentNode.identifier}">
@@ -92,6 +91,8 @@
         <c:when test="${not empty previousEntry}">
             <fmt:formatDate var="previousHumanDate" value="${previousEntry.properties.revisionDate.date.time}" dateStyle="long"/>
             <c:set var="previousLabel" value="${previousEntry.properties.revisionLabel.string}"/>
+            <c:set var="previousLabelSafe" value="${fn:escapeXml(previousLabel)}"/>
+            <c:set var="previousHumanDateSafe" value="${fn:escapeXml(previousHumanDate)}"/>
             <%-- Native <button>: keyboard/switch operable by default, no role/tabindex needed.
                  Target size and focus-indicator styling are NOT shipped by this module -- see
                  the accessibility notes in the parent agent's summary for what the host site

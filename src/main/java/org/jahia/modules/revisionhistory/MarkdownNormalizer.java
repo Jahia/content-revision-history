@@ -67,6 +67,8 @@ public final class MarkdownNormalizer {
      * its scheme, so the allow-list has to remove them first as well -- see
      * {@link #sanitizeUrl(String)}.
      */
+    /** Two or more leading slashes in any mix of "/" and "\\": a protocol-relative URL. */
+    private static final Pattern PROTOCOL_RELATIVE = Pattern.compile("^[/\\\\]{2,}");
     private static final Pattern URL_CONTROL_CHARS = Pattern.compile("[\\x00-\\x1F\\x7F]");
 
     /** Block-level tags handled generically: separated from surrounding content by a blank line. */
@@ -324,7 +326,11 @@ public final class MarkdownNormalizer {
             return null;
         }
         String href = URL_CONTROL_CHARS.matcher(rawHref).replaceAll("").trim();
-        if (href.isEmpty() || href.startsWith("//")) {
+        // Reject protocol-relative references in every form browsers accept. Per the
+        // WHATWG URL spec a backslash is normalised to a forward slash against an
+        // http(s) base, so "\\\\host/x" and "/\\host/x" resolve cross-origin exactly
+        // like "//host/x" while matching neither a scheme nor a plain "//" prefix.
+        if (href.isEmpty() || PROTOCOL_RELATIVE.matcher(href).find()) {
             return null;
         }
         Matcher m = URL_SCHEME.matcher(href);

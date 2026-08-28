@@ -143,6 +143,22 @@ class MarkdownNormalizerTest {
     }
 
     @Test
+    @DisplayName("backslash protocol-relative URLs are rejected like //host")
+    void backslashProtocolRelativeUrlsAreRejected() {
+        // Browsers normalise "\\" to "/" against an http(s) base, so these resolve
+        // cross-origin exactly like "//evil.test/x" while matching neither a scheme
+        // nor a literal "//" prefix.
+        String[] crossOrigin = {"//evil.test/x", "\\\\evil.test/x", "/\\evil.test/x", "\\/evil.test/x"};
+
+        for (String href : crossOrigin) {
+            String md = MarkdownNormalizer.normalize("<p><a href=\"" + href + "\">t</a></p>");
+
+            assertFalse(md.contains("evil.test"),
+                    "protocol-relative href survived: " + href + " -> " + md);
+        }
+    }
+
+    @Test
     @DisplayName("hash is stable for equal content and differs for changed content")
     void hashIsStableAndSensitive() {
         String a = MarkdownNormalizer.normalize("<p>Same content.</p>");
