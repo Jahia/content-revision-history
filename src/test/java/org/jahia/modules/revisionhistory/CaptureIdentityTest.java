@@ -108,6 +108,44 @@ class CaptureIdentityTest {
     }
 
     @Test
+    @DisplayName("The recorded principal follows the credential, so provenance cannot drift from it")
+    void principalTracksTheCredential() {
+        // Anonymous by default: nothing to name.
+        identity.configure(config());
+        assertNull(CaptureIdentity.principal());
+
+        // Configured and usable: the record must name the account that actually fetched.
+        identity.configure(config(CaptureIdentity.PROP_USER, "crh-capture",
+                CaptureIdentity.PROP_SECRET, "s3cr3t"));
+        assertEquals("crh-capture", CaptureIdentity.principal());
+    }
+
+    @Test
+    @DisplayName("A half-configured principal is not claimed, because capture stayed anonymous")
+    void principalIsNotClaimedWithoutAUsableCredential() {
+        // The dangerous case: a user is named but has no secret, so capture falls back to
+        // anonymous. Naming that user on the snapshot would assert the record was built from a
+        // view it was never built from -- the exact provenance error crh:capturedBy exists to
+        // prevent.
+        identity.configure(config(CaptureIdentity.PROP_USER, "crh-capture"));
+
+        assertNull(CaptureIdentity.authorization());
+        assertNull(CaptureIdentity.principal(),
+                "a principal that never authenticated must not be recorded as one that did");
+    }
+
+    @Test
+    @DisplayName("Deactivating clears the principal along with the credential")
+    void deactivationClearsThePrincipal() {
+        identity.configure(config(CaptureIdentity.PROP_USER, "u", CaptureIdentity.PROP_SECRET, "p"));
+        assertEquals("u", CaptureIdentity.principal());
+
+        identity.clear();
+
+        assertNull(CaptureIdentity.principal());
+    }
+
+    @Test
     @DisplayName("Deactivating clears the credential")
     void deactivationClearsTheCredential() {
         identity.configure(config(CaptureIdentity.PROP_USER, "u", CaptureIdentity.PROP_SECRET, "p"));

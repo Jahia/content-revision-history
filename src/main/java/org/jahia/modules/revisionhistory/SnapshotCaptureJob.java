@@ -144,7 +144,7 @@ public class SnapshotCaptureJob extends BackgroundJob {
                     // whole-paragraph diff -- the exact thing semanticLineBreaks prevents.
                     language, MarkdownNormalizer.normalize(fetched.body,
                             MarkdownNormalizer.localeFor(language)), captureInstant,
-                    CAPTURE_PRINCIPAL, fetched.sourceUrl);
+                    principalOfRecord(), fetched.sourceUrl);
             logger.info("Revision snapshot for {} [{}]: {}", page.path, language, status);
             // Only these two statuses mean the newest snapshot matches the live page, which is
             // the precondition for attaching an editor's revision entry to it. See
@@ -170,6 +170,20 @@ public class SnapshotCaptureJob extends BackgroundJob {
      * change" for a change. Flushing here makes the ordering deterministic; it costs nothing
      * extra, since publication was about to flush exactly these entries anyway.
      */
+    /**
+     * The principal to stamp on the snapshot: the configured capture user, or {@code guest}.
+     *
+     * <p>This used to be the constant {@code guest} unconditionally, which was true while capture
+     * could only ever be anonymous. Once a deployment configures a capture user it stops being
+     * true, and a record that names the wrong principal is worse than one that names none:
+     * {@code crh:capturedBy} is what tells a later reader whose view of the page the text
+     * represents, and therefore who may safely be shown it.
+     */
+    private static String principalOfRecord() {
+        String configured = CaptureIdentity.principal();
+        return configured == null ? CAPTURE_PRINCIPAL : configured;
+    }
+
     /** @return false when the cache could not be flushed, in which case do NOT capture */
     private boolean flushFragmentCache(String pagePath) {
         try {

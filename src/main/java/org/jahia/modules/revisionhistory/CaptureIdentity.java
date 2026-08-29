@@ -64,11 +64,17 @@ public class CaptureIdentity {
     @Activate
     @Modified
     public void configure(Map<String, Object> properties) {
-        authorization = resolve(properties);
+        String user = trimmed(properties, PROP_USER);
+        String header = resolve(properties);
+        authorization = header;
+        // Only claim the principal when the credential actually resolved. A user configured
+        // without a usable secret leaves capture anonymous, and the record must say so.
+        principal = header == null ? null : user;
     }
 
     @Deactivate
     public void clear() {
+        principal = null;
         // Leaving a credential resolved after the component goes away would let a capture that
         // is still in flight authenticate with configuration the platform considers withdrawn.
         authorization = null;
@@ -77,6 +83,20 @@ public class CaptureIdentity {
     /** @return the header for capture renders, or null when capture should stay anonymous */
     static String authorization() {
         return authorization;
+    }
+
+    /**
+     * Who capture actually renders as, for the record written onto each snapshot.
+     *
+     * <p>Kept beside {@link #authorization} and set in the same place, because a snapshot that
+     * names a different principal than the one that fetched it is worse than one that names
+     * none: the whole point of the field is provenance.
+     */
+    private static volatile String principal;
+
+    /** @return the configured capture user, or {@code null} when capture is anonymous */
+    static String principal() {
+        return principal;
     }
 
     private static String resolve(Map<String, Object> properties) {

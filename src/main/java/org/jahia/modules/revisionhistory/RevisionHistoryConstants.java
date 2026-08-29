@@ -36,7 +36,14 @@ public final class RevisionHistoryConstants {
     public static final String PROP_LANGUAGE = "crh:language";
     public static final String PROP_CONTENT_HASH = "crh:contentHash";
     public static final String PROP_GENERATOR_VERSION = "crh:generatorVersion";
-    /** Principal the capture ran as. Always {@value #CAPTURE_PRINCIPAL} by construction. */
+    /**
+     * Principal a capture runs as when none is configured, which is the default.
+     *
+     * <p>This said "always {@code guest} by construction" until capture became configurable. It
+     * is now the DEFAULT rather than a guarantee: see {@code CaptureIdentity}, and
+     * {@code SnapshotCaptureJob#principalOfRecord} for what actually reaches
+     * {@code crh:capturedBy}.
+     */
     public static final String PROP_CAPTURED_BY = "crh:capturedBy";
     public static final String PROP_SOURCE_URL = "crh:sourceUrl";
     public static final String PROP_MARKDOWN = "crh:markdown";
