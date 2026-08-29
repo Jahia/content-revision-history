@@ -4,6 +4,111 @@ A Jahia 8.2 module that gives selected public pages a **customer-facing revision
 a curated list of named revisions, each backed by a permanent Markdown snapshot of the page
 as it was published.
 
+## Requirements
+
+| | |
+|---|---|
+| Jahia | 8.2.3.2 or later |
+| Java | 11 |
+| Dependencies | none beyond the platform: no third-party libraries, no external service |
+
+The module works on any site. It changes nothing until you switch it on for a specific page, so
+installing it on a shared instance is safe.
+
+## Installing
+
+**From the store**: install it like any other module, then enable it on the sites that need it in
+**Administration > Modules**.
+
+**From a jar**: deploy through **Administration > Modules > Upload a module**, or through the
+provisioning API:
+
+```bash
+curl -u <user>:<secret> -X POST https://<your-jahia>/modules/api/provisioning \
+  -F 'script=@install.yml;type=text/yaml' \
+  -F 'file=@content-revision-history-1.1.0.jar'
+```
+
+```yaml
+# install.yml
+- installModule: "content-revision-history-1.1.0.jar"
+  autoStart: true
+```
+
+Do **not** drop the jar into the `digital-factory-data/modules/` folder. Felix FileInstall throws
+an NPE there because Jahia's artifact installer returns no bundle to checksum, and the module
+appears to install and then does not.
+
+Nothing else is required. The module creates its own storage the first time a page is captured,
+and ships a documented default configuration that needs no editing for public pages.
+
+## Using it
+
+Four steps, all in the editor UI.
+
+### 1. Turn history on for a page
+
+Open the page in Content Editor and enable **Public revision history**. Nothing is captured for a
+page until you do this, which is deliberate: a site with thousands of pages should not accumulate
+snapshots for all of them.
+
+### 2. Add the revision list to the page
+
+Drop the **Revision history** component wherever the list should appear, usually near the foot of
+the page. It renders nothing until the first revision is recorded, so you can place it before you
+have anything to show.
+
+Two options on the component:
+
+- **Heading shown above the revision list** - optional; the default is "Revision history".
+- **Start with the revision list collapsed** - on by default. Visitors see one line they can
+  expand. The revisions stay in the page either way, so collapsing hides them from view but not
+  from search engines or screen readers.
+
+### 3. Publish the page
+
+Publishing is what captures a snapshot: the module renders the page exactly as a visitor sees it,
+converts it to Markdown and stores it. This happens in the background, so publishing is no slower
+than usual.
+
+Publishing again with no change to the text stores nothing new. Snapshots are deduplicated on
+content, not on how often you publish, so routine republishing costs nothing.
+
+### 4. Record a revision
+
+A snapshot on its own is not shown to anyone. What visitors see is a **Revision** you author
+inside the Revision history component:
+
+| Field | What it is for |
+|---|---|
+| **Version label** | free text - `1.2`, `March 2026`, `Effective 1 April`. Whatever convention the page needs. |
+| **Revision date** | the date the change became visible, not the date you drafted it. |
+| **What changed** | rich text, shown to visitors. This is the part people actually read. |
+| **Change type** | Editorial, Substantive or Correction. Editorial means wording only; Substantive means the meaning changed; Correction fixes an error in an earlier revision. |
+
+Publish the revision and it appears in the list.
+
+**Only revisions you write are shown.** Snapshots are captured on every publication, but the
+public list contains exactly the entries you chose to author. That is what lets a run of typo
+fixes sit between two milestones without cluttering the history: comparing the two milestones
+shows the whole difference, and the intermediate publications stay invisible.
+
+### What visitors get
+
+A dated list of revisions, newest first, each with its label and your description of what changed.
+Selecting any two and pressing **Compare** opens a side-by-side view of the page text as it stood
+at each point, with the changed words highlighted.
+
+Comparison works between any two revisions, not just consecutive ones, which is the question
+people usually have: *what changed between the version I read in March and today?*
+
+### Pages the public cannot read
+
+By default the module captures pages anonymously, so a page a visitor cannot open is never
+captured and its history stays empty. To give restricted pages a history, name an account for the
+module to render as - see [Who capture renders as](#who-capture-renders-as) below, and read the
+limitation stated there before enabling it.
+
 ## Why not JCR versioning
 
 Jahia already versions content on publication, but that mechanism cannot serve a public
