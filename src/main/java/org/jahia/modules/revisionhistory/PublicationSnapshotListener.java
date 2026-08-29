@@ -13,6 +13,9 @@ import org.jahia.services.content.decorator.JCRSiteNode;
 import org.jahia.services.scheduler.BackgroundJob;
 import org.quartz.JobDetail;
 import org.quartz.Scheduler;
+import org.osgi.service.component.annotations.Activate;
+import org.osgi.service.component.annotations.Component;
+import org.osgi.service.component.annotations.Deactivate;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -48,9 +51,18 @@ import static org.jahia.modules.revisionhistory.RevisionHistoryConstants.*;
  * it carries per-language granularity in
  * {@link PublicationEvent.ContentPublicationInfo#getPublicationLanguages()}.
  *
+ * <p><b>Wiring.</b> A Declarative Services component, activated immediately and providing no
+ * service -- it exists for its own lifecycle, not to be looked up. It was a Spring bean with
+ * {@code init-method}/{@code destroy-method}, which required the module to declare the Jahia
+ * blueprint extender capability; without that declaration the context is never created and this
+ * listener is silently never registered, so publications produce no snapshots and nothing says
+ * why. DS removes that failure mode: bnd generates the descriptor at build time, and a missing
+ * descriptor is visible in the jar rather than only at runtime.
+ *
  * <p>This listener does no rendering and no writing. It resolves which pages a publication
  * touched and hands them to {@link SnapshotCaptureJob}, so publication latency is unaffected.
  */
+@Component(immediate = true, service = {})
 public class PublicationSnapshotListener implements PublicationEventListener {
 
     private static final Logger logger = LoggerFactory.getLogger(PublicationSnapshotListener.class);
@@ -69,12 +81,14 @@ public class PublicationSnapshotListener implements PublicationEventListener {
 
     private static volatile PublicationSnapshotListener INSTANCE;
 
+    @Activate
     public void start() {
         INSTANCE = this;
         JCRPublicationService.getInstance().registerListener(this);
         logger.info("Content revision history: listening for publication events");
     }
 
+    @Deactivate
     public void stop() {
         // Order matters: cancel BEFORE clearing INSTANCE. If INSTANCE were nulled first,
         // a job entering executeJahiaJob in the gap would find no instance, fail to

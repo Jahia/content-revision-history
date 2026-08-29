@@ -33,10 +33,12 @@
     <properties>
         <jahia-depends>default</jahia-depends>
         <jahia-module-type>module</jahia-module-type>
-        <!-- REQUIRED: without this the Jahia blueprint extender silently skips the bundle,
-             so no module Spring context is created and every code extension point
-             (Actions, render filters) is inert while views and CNDs still work fine. -->
-        <require-capability>osgi.extender;filter:="(osgi.extender=org.jahia.bundles.blueprint.extender.config)"</require-capability>
+        <!-- No Spring, no blueprint extender: this is a plain OSGi module and its one code
+             extension point is a Declarative Services component. The blueprint route needed an
+             explicit osgi.extender capability, and a bundle missing it deployed happily with
+             working views and CNDs while every code extension point stayed inert and nothing
+             said so. A DS descriptor is generated at build time, so its absence is visible in
+             the jar instead of only in production. -->
         <jahia.version>8.2.3.2</jahia.version>
         <!-- Ship build provenance: a module whose whole purpose is an auditable record has no
              business being un-auditable itself. -->
@@ -49,6 +51,15 @@
     </properties>
 
     <dependencies>
+        <!-- Compile-time only: the annotations are consumed by bnd to generate the DS
+             descriptors and are not needed at runtime. -->
+        <dependency>
+            <groupId>org.osgi</groupId>
+            <artifactId>org.osgi.service.component.annotations</artifactId>
+            <version>1.4.0</version>
+            <scope>provided</scope>
+        </dependency>
+
         <dependency>
             <groupId>org.jahia.server</groupId>
             <artifactId>jahia-api</artifactId>
@@ -116,6 +127,12 @@
                              JSP view and the resource bundles, leaving a classes-only bundle that
                              deploys 'successfully' and registers no node types. -->
                         <Include-Resource>{maven-resources},META-INF/LICENSE.txt=LICENSE.txt</Include-Resource>
+                        <!-- Declarative Services. bnd generates OSGI-INF/*.xml from the
+                             annotations and adds the osgi.extender=osgi.component requirement,
+                             which is what 48 of the shipped Jahia modules already use. Without
+                             this instruction the annotations compile, produce no descriptor,
+                             and the component silently never activates. -->
+                        <_dsannotations>*</_dsannotations>
                     </instructions>
                 </configuration>
             </plugin>
