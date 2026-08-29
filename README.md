@@ -286,6 +286,59 @@ type — it is a structural requirement, not an editorial affordance.
 Snapshot properties are `indexed=no` / `nofulltext` so historical copies never pollute site
 search, and `crh:markdown` is `binary` so metadata reads don't drag the payload.
 
+## Who capture renders as
+
+By default, nobody: capture renders anonymously, which is correct for a site whose revisioned
+pages are public, and is what an installation keeps without configuring anything.
+
+Set a **capture principal** to give *restricted* pages a revision history. An anonymous render of
+a page guest may not read returns 403, so without one such a page is never captured at all —
+there is no partial answer, just no history.
+
+Configuration lives in `karaf/etc/org.jahia.modules.revisionhistory.cfg` (the module ships a
+documented default):
+
+```properties
+capture.user       = crh-capture
+capture.secretFile = /etc/jahia/crh-capture.secret
+```
+
+`capture.secretFile` names a file whose first non-blank line is the secret; prefer it to
+`capture.secret`, because a file's permissions decide who can read it. A half-finished
+configuration — a user with no secret, an unreadable or empty secret file — leaves capture
+**anonymous** and logs an error. It never becomes a credential with an empty password, and it
+never silently looks configured. Changing the file takes effect without a restart.
+
+### What a capture principal costs you
+
+**Give the account the narrowest access that covers the revisioned pages, and nothing else.** A
+snapshot is flattened to text by whoever captured it, so its content is whatever that account
+could see, permanently, for everyone later allowed to read the history.
+
+Two consequences follow, and the second is a real limit rather than a caveat:
+
+1. **The comparison enforces the viewer's own JCR rights.** `RevisionDiffService` reads snapshots
+   with a system session that bypasses ACLs, so before it reads anything it checks that the
+   current user can read the revision history in their *own* session. It fails closed, and a
+   denial is reported identically to a history that does not exist, so the page cannot be used to
+   probe which identifiers are real.
+
+2. **Component-level ACLs inside a revisioned page are not reflected per viewer.** A snapshot is
+   one artifact with one visibility; JCR permissions are per-node and per-viewer. A live render
+   resolves access per request, so two users can legitimately see different pages at one URL. A
+   historical record cannot: it was flattened at capture time by one principal, and no read-time
+   check recovers structure discarded at write time.
+
+   So a viewer entitled to the page sees everything the capture principal put in the snapshot,
+   including a paragraph they could not read on the live page. Placing a revision history on a
+   page whose components have different audiences is therefore an administrative decision. If
+   that matters for a given page, do not revision it.
+
+When a principal is configured, a 401/403 from the render is recorded as `FAILED` rather than
+`NOT_PUBLIC`, with a message naming the setting to check — an operator who named an account so
+that restricted pages *could* be captured is looking at a misconfiguration, not at a page working
+as intended.
+
 ## Operational notes
 
 - **Capture is asynchronous.** A snapshot appears shortly after publication, not during it.

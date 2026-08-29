@@ -113,14 +113,19 @@ final class GuestMarkdownFetcher {
             connection.setUseCaches(false);
             connection.setConnectTimeout(CONNECT_TIMEOUT_MILLIS);
             connection.setReadTimeout(READ_TIMEOUT_MILLIS);
-            // Deliberately no cookie, no Authorization: the render must resolve to guest.
+            // No cookie, ever: a session would make the render resolve to whoever last used
+            // it. The identity comes from configuration and nowhere else.
+            String authorization = CaptureIdentity.authorization();
+            if (authorization != null) {
+                connection.setRequestProperty("Authorization", authorization);
+            }
             connection.setRequestProperty("Cache-Control", "no-cache");
             connection.setRequestProperty("Accept", "text/html, text/plain");
 
             int code = connection.getResponseCode();
             if (code != HttpURLConnection.HTTP_OK) {
-                return Fetched.problem(statusForHttp(code),
-                        "Guest render returned HTTP " + code, url);
+                return Fetched.problem(statusForHttp(code, authorization != null),
+                        renderFailureMessage(code, authorization != null), url);
             }
             String body = readBounded(connection.getInputStream());
             if (body == null) {
@@ -155,11 +160,45 @@ final class GuestMarkdownFetcher {
      * under a different page's name. A 4xx we caused (a malformed URL, say) is likewise ours.
      */
     static CaptureStatus statusForHttp(int code) {
+        return statusForHttp(code, false);
+    }
+
+    /**
+     * @param authenticated whether the request carried a configured capture principal
+     *
+     * <p>NOT_PUBLIC is a statement about policy: the principal this module renders as may not
+     * read the page, so there is nothing to record. Rendering anonymously that is a normal,
+     * expected outcome for a page the public cannot see.
+     *
+     * <p>With a capture principal configured it is not an outcome at all, it is a
+     * misconfiguration: an operator named an account precisely so restricted pages COULD be
+     * captured, and the account was refused. Filing that under NOT_PUBLIC would report it as
+     * working as intended and leave the history empty for exactly the pages the setting was
+     * added to cover.
+     */
+    static CaptureStatus statusForHttp(int code, boolean authenticated) {
         boolean redirectedAway = code >= 300 && code < 400;
-        boolean forbidden = code == HttpURLConnection.HTTP_UNAUTHORIZED
+        boolean refused = code == HttpURLConnection.HTTP_UNAUTHORIZED
                 || code == HttpURLConnection.HTTP_FORBIDDEN
                 || code == HttpURLConnection.HTTP_NOT_FOUND;
-        return redirectedAway || forbidden ? CaptureStatus.NOT_PUBLIC : CaptureStatus.FAILED;
+        if (authenticated && refused) {
+            return CaptureStatus.FAILED;
+        }
+        return redirectedAway || refused ? CaptureStatus.NOT_PUBLIC : CaptureStatus.FAILED;
+    }
+
+    /** A message that names the thing an operator has to change. */
+    static String renderFailureMessage(int code, boolean authenticated) {
+        String who = authenticated ? "Capture render" : "Guest render";
+        boolean refused = code == HttpURLConnection.HTTP_UNAUTHORIZED
+                || code == HttpURLConnection.HTTP_FORBIDDEN
+                || code == HttpURLConnection.HTTP_NOT_FOUND;
+        if (authenticated && refused) {
+            return who + " returned HTTP " + code + " for the configured capture user: check "
+                    + CaptureIdentity.PROP_USER + " and its secret, and that the account may"
+                    + " read this page";
+        }
+        return who + " returned HTTP " + code;
     }
 
     // Package-private (was private) so RevisionSnapshotServiceTest-sibling tests in this package
