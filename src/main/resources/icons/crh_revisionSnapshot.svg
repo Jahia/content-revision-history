@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24"
+     fill="none" stroke="currentColor" stroke-width="2"
+     stroke-linecap="round" stroke-linejoin="round" role="img"
+     aria-label="Revision snapshot">
+  <title>Revision snapshot</title>
+  <!--
+    A stack seen edge-on: the page as it was, kept behind the page as it is. The offset sheets say
+    "a copy set aside" rather than "a document you edit", which is the distinction that matters
+    for a node an editor can see but must never change.
+  -->
+  <path d="M7 5H5a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-2"/>
+  <rect x="7" y="3" width="14" height="14" rx="2"/>
+  <path d="M10.5 8h7M10.5 12h4"/>
+</svg>

@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24"
+     fill="none" stroke="currentColor" stroke-width="2"
+     stroke-linecap="round" stroke-linejoin="round" role="img"
+     aria-label="Revision">
+  <title>Revision</title>
+  <!--
+    The same spine, zoomed to a single point on it: one revision, with its label beside it. Read
+    next to crh_revisionHistory the relationship is immediate, which is the whole reason both use
+    the spine rather than each having its own metaphor.
+  -->
+  <path d="M7 2v5M7 17v5"/>
+  <circle cx="7" cy="12" r="3.2" fill="currentColor" stroke="none"/>
+  <path d="M13 10h7M13 14h5"/>
+</svg>

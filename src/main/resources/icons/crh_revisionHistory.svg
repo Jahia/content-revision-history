@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24"
+     fill="none" stroke="currentColor" stroke-width="2"
+     stroke-linecap="round" stroke-linejoin="round" role="img"
+     aria-label="Revision history">
+  <title>Revision history</title>
+  <!--
+    A page with its history beside it: the marks on the spine are revisions, the filled one is
+    what the page shows now.
+
+    TWO marks, not three. Three were tried first and merged into an indistinct column at 16px,
+    which is the size this is actually rendered at in jContent ; the sequence, the one thing the
+    icon has to say, was the part that disappeared. Two dots at r=2.1 leave roughly six pixels of
+    gap at that size, which survives.
+  -->
+  <path d="M4.5 8.5v7"/>
+  <circle cx="4.5" cy="6" r="2.1" fill="currentColor" stroke="none"/>
+  <circle cx="4.5" cy="18" r="2.1"/>
+  <rect x="10" y="3" width="11" height="18" rx="2"/>
+  <path d="M13.5 9h4M13.5 13h4M13.5 17h2.5"/>
+</svg>

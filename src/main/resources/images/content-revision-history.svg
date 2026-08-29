@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img"
+     aria-label="Content Revision History">
+  <title>Content Revision History</title>
+  <!--
+    The module mark. Unlike the node-type icons this one is never rendered at 16px, so it can show
+    what the module is actually FOR rather than only what it manages: two revisions of one page,
+    side by side, with what changed between them called out.
+
+    Colour carries meaning and is never the only signal. The removed line is struck through and
+    the added line is marked with a plus, so the mark still reads correctly in monochrome, for a
+    colour-blind reader, and at the sizes where the tint is a single pixel. Palette is the
+    module's own: #01579b is the accent that meets 7:1 on white, which is why it carries the
+    structure while #03a9f4 is decoration only.
+  -->
+  <rect width="64" height="64" rx="14" fill="#e8f2f8"/>
+
+  <!-- older revision, left -->
+  <rect x="10" y="14" width="20" height="36" rx="3" fill="#ffffff" stroke="#01579b" stroke-width="2"/>
+  <path d="M15 23h10M15 30h10M15 37h6" stroke="#5b7b8c" stroke-width="2" stroke-linecap="round"/>
+  <!-- the removed line: tinted AND struck through -->
+  <path d="M15 44h10" stroke="#c0343f" stroke-width="2" stroke-linecap="round"/>
+  <path d="M13 44h14" stroke="#c0343f" stroke-width="1.2" stroke-linecap="round" opacity="0.9"/>
+
+  <!-- newer revision, right -->
+  <rect x="34" y="14" width="20" height="36" rx="3" fill="#ffffff" stroke="#01579b" stroke-width="2"/>
+  <path d="M39 23h10M39 30h10M39 37h6" stroke="#5b7b8c" stroke-width="2" stroke-linecap="round"/>
+  <!-- the added line: tinted AND marked with a plus -->
+  <path d="M42 44h7" stroke="#1c7a45" stroke-width="2" stroke-linecap="round"/>
+  <path d="M38 41.5v5M35.5 44h5" stroke="#1c7a45" stroke-width="1.6" stroke-linecap="round"/>
+
+  <!-- the spine: these are two points in one history, not two documents -->
+  <circle cx="32" cy="9" r="3.4" fill="#01579b"/>
+  <path d="M32 12.5v43" stroke="#01579b" stroke-width="2" stroke-linecap="round" stroke-dasharray="3 4"/>
+</svg>
