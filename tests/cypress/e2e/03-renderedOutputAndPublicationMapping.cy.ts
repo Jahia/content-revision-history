@@ -406,7 +406,11 @@ describe('Publication mapping correctness', () => {
                     errorMsg,
                     verbose: true
                 })
-                .then(value => value as T);
+                // `as Chainable<T>`: waitUntil's signature admits `false` because that is what
+                // the predicate returns while polling, but it THROWS on timeout rather than
+                // resolving false, so no caller can observe it. Newer cypress-wait-until types
+                // return ThenReturn<false | T, T> here, which is the same fact spelled out.
+                .then(value => value as T) as Cypress.Chainable<T>;
 
     const waitForFolderStatusChange = (
         folderPath: string,

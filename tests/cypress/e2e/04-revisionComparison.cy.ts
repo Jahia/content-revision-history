@@ -127,7 +127,10 @@ describe('Revision comparison (entry binding + diff viewer)', () => {
             .waitUntil<T | false>(() => fetch().then(value => (predicate(value) ? value : false)), {
                 timeout: captureTimeoutMs, interval: pollIntervalMs, errorMsg, verbose: true
             })
-            .then(value => value as T);
+            // `as Chainable<T>`: waitUntil's signature admits `false` because that is what the
+            // predicate returns while polling, but it THROWS on timeout rather than resolving
+            // false, so no caller can observe it.
+            .then(value => value as T) as Cypress.Chainable<T>;
 
     /** Paces publishes past the module's per-page-and-language rate limiter. */
     const publishTriggeringCapture = (): Cypress.Chainable<boolean> => {

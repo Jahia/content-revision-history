@@ -255,7 +255,11 @@ describe('Durable capture failure modes (CaptureStatus outside STORED/UNCHANGED)
                     errorMsg,
                     verbose: true
                 })
-                .then(value => value as T);
+                // `as Chainable<T>`: waitUntil's signature admits `false` because that is what
+                // the predicate returns while polling, but it THROWS on timeout rather than
+                // resolving false, so no caller can observe it. Newer cypress-wait-until types
+                // return ThenReturn<false | T, T> here, which is the same fact spelled out.
+                .then(value => value as T) as Cypress.Chainable<T>;
 
     /**
      * Waits for the FIRST-EVER capture attempt on a brand-new page's folder to be recorded.

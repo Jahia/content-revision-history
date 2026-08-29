@@ -11,8 +11,16 @@
     "types": [
       "cypress",
       "node",
-      "@jahia/cypress"
+      "@jahia/cypress",
+      "cypress-wait-until"
     ],
-    "lib": [ "es2015" ]
+    "lib": [
+      "es2020",
+      "dom",
+      "dom.iterable"
+    ],
+    "target": "es2020",
+    "module": "commonjs",
+    "moduleResolution": "node"
   }
 }

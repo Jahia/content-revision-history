@@ -34,7 +34,7 @@ export default defineConfig({
                     }
                 }
             );
-            // eslint-disable-next-line @typescript-eslint/no-var-requires
+            // eslint-disable-next-line @typescript-eslint/no-require-imports
             return require('./cypress/plugins/index.js')(on, config);
         },
         excludeSpecPattern: '*.ignore.ts',

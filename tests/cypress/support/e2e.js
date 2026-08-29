@@ -27,9 +27,9 @@ jsErrorsLogger.setAllowedJsWarnings([
     'No satisfying version'
 ]);
 
-// eslint-disable-next-line @typescript-eslint/no-var-requires
+// eslint-disable-next-line @typescript-eslint/no-require-imports
 require('cypress-terminal-report/src/installLogsCollector')();
-// eslint-disable-next-line @typescript-eslint/no-var-requires
+// eslint-disable-next-line @typescript-eslint/no-require-imports
 require('@jahia/cypress/dist/support/registerSupport').registerSupport();
 
 Cypress.on('uncaught:exception', () => {
