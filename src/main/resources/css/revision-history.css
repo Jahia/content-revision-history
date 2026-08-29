@@ -63,7 +63,15 @@
      */
     font-family: 'Lato', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial,
         sans-serif;
+    /*
+     * Both halves, per the rule stated at the top of this file -- which this very block used to
+     * break by setting only `color`. Every contrast ratio the palette was chosen for is a ratio
+     * AGAINST --crh-surface, so a host section with a dark or tinted background collapsed all of
+     * them at once. The component is droppable content: it cannot know what it lands on, so it
+     * has to paint the ground its own numbers assume.
+     */
     color: var(--crh-text);
+    background: var(--crh-surface);
 }
 
 /* ------------------------------------------------------------------ revision list */
@@ -198,7 +206,8 @@
  * and for the same reason.
  */
 .crh-compare-form select {
-    min-height: 32px;
+    /* SC 2.5.5 asks for 44x44, not the 24x24 of the AA-level 2.5.8. */
+    min-height: 44px;
     max-width: 100%;
     padding: 0.25rem 0.4rem;
     font: inherit;
@@ -238,8 +247,9 @@
  * compact control, and it is written down here rather than left to be discovered.
  */
 .crh-compare-btn {
-    min-width: 32px;
-    min-height: 32px;
+    /* The only in-page control for submitting a comparison: it has to meet SC 2.5.5 (44x44). */
+    min-width: 44px;
+    min-height: 44px;
     padding: 0.4rem;
     display: inline-flex;
     align-items: center;
@@ -402,8 +412,10 @@
 .crh-diff-expand {
     align-items: center;
     justify-content: center;
-    min-width: 32px;
-    min-height: 32px;
+    /* SC 2.5.5, and these two sit next to each other, so being under size also meant tapping
+       full-screen when aiming for close. */
+    min-width: 44px;
+    min-height: 44px;
     padding: 0;
     color: var(--crh-text-muted);
     background: transparent;

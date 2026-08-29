@@ -83,6 +83,7 @@
                 panel.showPopover();
             }
             wireFullScreen(panel);
+            closeWhenFocusLeaves(panel);
             panel.focus();
             return true;
         } catch (ignored) {
@@ -92,6 +93,45 @@
             panel.removeAttribute('role');
             return false;
         }
+    }
+
+    /**
+     * Says something in the form's live region, or clears it.
+     *
+     * <p>The comparison arrives asynchronously and replaces content elsewhere on the page, which
+     * a screen reader has no reason to notice. Without this the only feedback for several seconds
+     * was nothing at all, so the natural response was to press the button again.
+     */
+    function announce(form, message) {
+        var id = form.getAttribute('data-crh-status');
+        var region = id && document.getElementById(id);
+        if (region) {
+            region.textContent = message;
+        }
+    }
+
+    /**
+     * Closes the popup once focus leaves it.
+     *
+     * <p>An `auto` popover neither traps focus nor inerts the page, so tabbing past the last
+     * control inside the panel put focus on page content sitting UNDERNEATH an opaque, fixed
+     * panel: focus indicator invisible, SC 2.4.12 failed. Trapping focus would be the other
+     * answer, but it would also mean promising modal behaviour the popover does not implement.
+     * Closing is what the panel's own light-dismiss behaviour already means.
+     */
+    function closeWhenFocusLeaves(panel) {
+        if (panel.hasAttribute('data-crh-focus-wired')) {
+            return;
+        }
+        panel.setAttribute('data-crh-focus-wired', '');
+        panel.addEventListener('focusout', function (event) {
+            // relatedTarget is where focus is going; null means it left the document entirely,
+            // which is not a reason to close.
+            var moving = event.relatedTarget;
+            if (moving && !panel.contains(moving) && panel.matches(':popover-open')) {
+                panel.hidePopover();
+            }
+        });
     }
 
     /** The panel belonging to a form, created empty if this page has never rendered one. */
@@ -141,6 +181,7 @@
             // the fallback path removes both attributes again.
             panel.setAttribute('role', 'dialog');
 
+            announce(form, form.getAttribute('data-crh-loading') || '');
             fetch(comparisonUrl(form), {credentials: 'same-origin'})
                 .then(function (response) {
                     if (!response.ok) {
@@ -161,10 +202,21 @@
                     // Import the parsed nodes rather than assigning innerHTML: no re-parse, no
                     // markup built here, nothing interpreted.
                     var imported = document.importNode(fresh, true);
+                    // Carry the wrapper's accessible name across. Only the CHILD nodes are
+                    // imported, so the server-rendered section's aria-labelledby -- pointing at
+                    // the heading that names both revisions -- was dropped on the floor, and a
+                    // panel created by panelFor() has none of its own. A screen reader then
+                    // announced "dialog" with no indication of what was being compared.
+                    var label = fresh.getAttribute('aria-labelledby');
+                    if (label) {
+                        panel.setAttribute('aria-labelledby', label);
+                    }
                     panel.replaceChildren.apply(panel, Array.prototype.slice.call(imported.childNodes));
+                    announce(form, '');
                     present(panel);
                 })
                 .catch(function () {
+                    announce(form, '');
                     // Give the visitor the comparison the slow way rather than nothing at all.
                     // The attributes are dropped first: a panel marked [popover] that was never
                     // shown stays hidden, and the navigation that follows would otherwise land on

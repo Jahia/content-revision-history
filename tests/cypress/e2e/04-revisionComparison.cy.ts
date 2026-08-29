@@ -583,7 +583,10 @@ describe('Revision comparison (entry binding + diff viewer)', () => {
 
                 expect(close.height, 'both tools must be the same height').to.equal(expand.height);
                 expect(close.top, 'and sit on the same line').to.equal(expand.top);
-                expect(close.height, 'and keep the AA target size').to.be.at.least(32);
+                // Tightened from 32 to 44: the module targets WCAG 2.2 AAA, so SC 2.5.5 (44x44)
+                // is the bar, not the AA-level SC 2.5.8 (24x24) this previously pinned. The test
+                // was weaker than the standard the component claims.
+                expect(close.height, 'and keep the AAA target size').to.be.at.least(44);
             });
         });
 
@@ -709,10 +712,23 @@ describe('Revision comparison (entry binding + diff viewer)', () => {
             // is no injection path in a test that never renders its input, but a tag-stripping
             // helper is exactly the kind of thing that gets copied somewhere that does render.
             // Reading the cells is also more precise about what the test means.
+            // Strip the visually-hidden side labels before comparing. Every cell now carries
+            // one ("Older revision:" / "Newer revision:") so a screen reader can tell the two
+            // copies of an unchanged line apart -- which means the two cells' MARKUP is
+            // legitimately different while their CONTENT, which is what this test is about, is
+            // identical. Matching raw markup conflated the two.
+            // \s+ rather than a literal space between the tag name and the attribute: the JSP
+            // wraps long tags, so this markup really is `<span\n    class="crh-visually-hidden">`.
+            // A single-space pattern silently matched nothing and the labels stayed in, which is
+            // how this helper failed the first time it ran.
+            const withoutLabels = (row: string) =>
+                row.replace(/<span\s+class="crh-visually-hidden">[\s\S]*?<\/span>/g, '');
             const sidesOf = (row: string) =>
-                [...row.matchAll(/<span class="crh-diff-side">([\s\S]*?)<\/span>/g)].map(m =>
-                    m[1].trim()
-                );
+                [
+                    ...withoutLabels(row).matchAll(
+                        /<span\s+class="crh-diff-side">([\s\S]*?)<\/span>/g
+                    )
+                ].map(m => m[1].trim());
 
             const unchanged = rows.find(
                 row =>

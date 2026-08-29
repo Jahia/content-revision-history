@@ -93,8 +93,11 @@
              to the result on a fresh page load. The script strips it when building its fetch URL:
              it was also the reason a repeat submission became a no-op, since navigating to a URL
              that differs only by fragment is a same-document navigation and never reloads. --%>
+        <fmt:message var="crhLoadingMessage" key="crh_compare.loading"/>
         <form class="crh-compare-form" method="get"
               data-crh-panel="crh-comparison-${currentNode.identifier}"
+              data-crh-status="crh-status-${currentNode.identifier}"
+              data-crh-loading="${fn:escapeXml(crhLoadingMessage)}"
               action="${fn:escapeXml(url.base)}${fn:escapeXml(renderContext.mainResource.node.path)}.html#crh-comparison-${currentNode.identifier}">
             <%-- The fieldset/legend is kept in the markup but carries no visual styling at all
                  (see the stylesheet: border, padding and margin are all zeroed). It is what tells
@@ -127,6 +130,13 @@
                                 value="${option.properties.revisionLabel.string}"/> (<c:out value="${optionDate}"/>)</option>
                     </c:forEach>
                 </select>
+
+                <%-- SC 4.1.3. Empty and present from the start: a live region has to exist before
+                     the text is put into it, or the change is not announced. Only the script ever
+                     writes here, so without scripting it stays empty and says nothing, which is
+                     correct -- the no-script path is a full page navigation with no waiting. --%>
+                <span id="crh-status-${currentNode.identifier}" class="crh-visually-hidden"
+                      role="status" aria-live="polite"></span>
 
                 <%-- Small icon button, following the store's own pattern: 16x16 viewBox,
                      stroke="currentColor", stroke-width 1.3, aria-hidden + focusable="false" on
@@ -264,7 +274,7 @@
                                 <span class="crh-diff-head"><c:out value="${view.previousLabel}"/></span><span
                                       class="crh-diff-head"><c:out value="${view.currentLabel}"/></span>
                             </p>
-                            <ol class="crh-diff-rows">
+                            <ol class="crh-diff-rows" role="list">
                                 <c:forEach items="${view.diff.rows}" var="row">
                                     <c:choose>
                                         <c:when test="${row.gap}">
@@ -281,8 +291,15 @@
                                                     <c:when test="${empty row.left}">
                                                         <span class="crh-diff-side crh-diff-absent" aria-hidden="true"></span>
                                                     </c:when>
+                                                    <%-- Changed cells already carry a visually-hidden "Added"/"Removed"
+                                                         label; unchanged cells were the only ones without one, so the same
+                                                         sentence was announced twice with nothing to tell the two copies
+                                                         apart. The column headers that disambiguate them visually are
+                                                         aria-hidden, so there was no label anywhere. Every cell is labelled
+                                                         now, which is also what makes the grid consistent. --%>
                                                     <c:when test="${row.unchanged}">
-                                                        <span class="crh-diff-side"><c:out value="${row.left.text}"/></span>
+                                                        <span class="crh-diff-side"><span
+                                                            class="crh-visually-hidden"><fmt:message key="crh_diff.olderSide"/></span><c:out value="${row.left.text}"/></span>
                                                     </c:when>
                                                     <c:otherwise>
                                                         <span class="crh-diff-side crh-diff-removed"><span
@@ -302,7 +319,8 @@
                                                         <span class="crh-diff-side crh-diff-absent" aria-hidden="true"></span>
                                                     </c:when>
                                                     <c:when test="${row.unchanged}">
-                                                        <span class="crh-diff-side"><c:out value="${row.right.text}"/></span>
+                                                        <span class="crh-diff-side"><span
+                                                            class="crh-visually-hidden"><fmt:message key="crh_diff.newerSide"/></span><c:out value="${row.right.text}"/></span>
                                                     </c:when>
                                                     <c:otherwise>
                                                         <span class="crh-diff-side crh-diff-added"><span
@@ -356,7 +374,7 @@
             </fmt:message>
         </summary>
 
-        <ol class="crh-revision-list">
+        <ol class="crh-revision-list" role="list">
             <c:forEach items="${entries}" var="entryNode" varStatus="status">
                 <li>
                     <template:module node="${entryNode}" templateType="html"/>
