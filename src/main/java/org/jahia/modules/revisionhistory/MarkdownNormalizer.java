@@ -130,9 +130,11 @@ public final class MarkdownNormalizer {
      * therefore look like it worked while reintroducing exactly the defect this method exists to
      * remove, which is why the parse is done by hand.
      *
-     * <p>The platform's own converter is not an option: {@code org.jahia.utils} is not in the
-     * packages exported to modules, so importing it yields a bundle that builds cleanly and then
-     * fails to resolve at deploy time.
+     * <p>The platform's {@code LanguageCodeConverters#languageCodeToLocale} would also work --
+     * {@code org.jahia.utils} IS among the packages exported to modules. It is not used here only
+     * because eight lines with no platform coupling are easier to unit-test than a dependency on
+     * an impl package, not because it is unavailable. (An earlier version of this comment claimed
+     * it was not exported; that was wrong.)
      */
     public static Locale localeFor(String languageCode) {
         if (languageCode == null || languageCode.trim().isEmpty()) {

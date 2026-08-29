@@ -2,6 +2,7 @@ package org.jahia.modules.revisionhistory;
 
 import org.jahia.services.content.JCRCallback;
 import org.jahia.services.content.JCRNodeWrapper;
+import org.jahia.services.content.JCRSessionFactory;
 import org.jahia.services.content.JCRSessionWrapper;
 import org.jahia.services.content.JCRTemplate;
 import org.slf4j.Logger;
@@ -24,9 +25,22 @@ import static org.jahia.modules.revisionhistory.RevisionHistoryConstants.*;
  * <p>Reads snapshots from the {@code default} workspace with a system session, deliberately.
  * Snapshots are never published, so nothing in {@code live} could serve this. That is defensible
  * and worth stating plainly, because it looks wrong at a glance: the snapshot is not a draft that
- * has escaped review, it is an immutable record <em>generated from the live page</em> -- captured
- * over HTTP as {@code guest}, which is exactly the content the visitor reading the comparison was
- * already entitled to see.
+ * has escaped review, it is an immutable record <em>generated from the live page</em>.
+ *
+ * <p><b>Who may read it is enforced here, not inferred from who captured it.</b> This class used
+ * to rest its whole case on captures rendering as {@code guest} -- a snapshot could then contain
+ * nothing the anonymous public was not already entitled to see, so an ACL-bypassing read of it
+ * leaked nothing. That argument is not available once a deployment captures as a technical user
+ * in order to give restricted pages a revision history, and an argument that holds only under a
+ * configuration nobody re-checks is not a safety property. {@link #viewerMayReadHistory} makes it
+ * one: the current user must be able to read the history node in their own session, or no
+ * comparison is produced.
+ *
+ * <p><b>Known limit, by construction.</b> A snapshot has one visibility because one principal
+ * flattened it to text; JCR permissions are per-node and per-viewer. So component-level ACLs
+ * <em>inside</em> a revisioned page are not reflected per viewer: a snapshot shows what its
+ * capture principal could read. Placing a revision history on a page whose components have
+ * differing audiences is therefore an administrative decision, and the README says so.
  *
  * <p><b>One comparison, on request.</b> An earlier design pre-rendered every adjacent comparison
  * so a popup could open with no round trip. That cannot extend to arbitrary pairs -- ten revisions
@@ -81,6 +95,11 @@ public class RevisionDiffService {
         }
         if (oneIdentifier.equals(otherIdentifier)) {
             return RevisionDiffView.unavailable(REASON_SAME_REVISION, null);
+        }
+        if (!viewerMayReadHistory(historyIdentifier)) {
+            // Deliberately the same answer as a bad identifier: a viewer who may not see this
+            // history must not be able to tell it apart from one that does not exist.
+            return RevisionDiffView.unavailable(REASON_NOT_FOUND, null);
         }
         try {
             return JCRTemplate.getInstance().doExecuteWithSystemSessionAsUser(null, WORKSPACE, null,
@@ -142,6 +161,42 @@ public class RevisionDiffService {
 
         return new RevisionDiffView(null, newerLabel, olderLabel,
                 dateOrNull(newer), dateOrNull(older), diff, mismatch);
+    }
+
+    /**
+     * Does the <em>current</em> user have read access to this revision history?
+     *
+     * <p>Everything below this point runs with a system session that bypasses ACLs, and the
+     * snapshots it reads are locked down so that no ordinary user can read them directly. That
+     * was self-evidently safe while captures rendered as {@code guest}: a snapshot could not
+     * contain anything the anonymous public was not already entitled to see, so who was asking
+     * did not matter.
+     *
+     * <p>It stops being self-evident the moment a capture runs as anything else. A snapshot is a
+     * single artifact flattened to text by a single principal, so it cannot answer "what may
+     * <em>this</em> viewer see" the way a live render can. The check therefore has to happen
+     * before any of it is read, and it is the viewer's own session that has to answer.
+     *
+     * <p>Reading the history node in the current user's session is the right question because a
+     * history always describes the page it sits on: being able to read the component means being
+     * able to read the page whose revisions it lists.
+     *
+     * <p><b>Fails closed.</b> No request context, an unreadable node, a repository error -- all
+     * of them deny. A permission check that cannot reach a verdict has not granted anything.
+     *
+     * <p>Package-private so a test can assert that verdict directly. Asserting it through
+     * {@link #compare} instead proves nothing: with no repository, compare denies for a dozen
+     * reasons at once, so the assertion passes just as well with this gate deleted.
+     */
+    boolean viewerMayReadHistory(String historyIdentifier) {
+        try {
+            JCRSessionWrapper viewer = JCRSessionFactory.getInstance().getCurrentUserSession();
+            return viewer != null && viewer.getNodeByIdentifier(historyIdentifier) != null;
+        } catch (RepositoryException | RuntimeException denied) {
+            logger.debug("Refusing a comparison of history {}: the current user cannot read it",
+                    historyIdentifier, denied);
+            return false;
+        }
     }
 
     private static boolean isIdentifier(String value) {
