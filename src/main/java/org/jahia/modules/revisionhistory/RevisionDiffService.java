@@ -62,6 +62,9 @@ public class RevisionDiffService {
     private static final Logger logger = LoggerFactory.getLogger(RevisionDiffService.class);
 
     /** Matches a JCR identifier. */
+    /** The workspace a visitor sees. Entries are publishable content; snapshots never are. */
+    private static final String PUBLISHED_WORKSPACE = "live";
+
     private static final Pattern IDENTIFIER = Pattern.compile(
             "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$");
 
@@ -102,27 +105,45 @@ public class RevisionDiffService {
             return RevisionDiffView.unavailable(REASON_NOT_FOUND, null);
         }
         try {
-            return JCRTemplate.getInstance().doExecuteWithSystemSessionAsUser(null, WORKSPACE, null,
-                    (JCRCallback<RevisionDiffView>) session ->
-                            resolve(session, historyIdentifier, oneIdentifier, otherIdentifier,
-                                    language));
+            // Two workspaces, deliberately, because the two halves of a comparison are different
+            // KINDS of thing. Revision entries are ordinary publishable content and the selector
+            // beside them is built from the rendering workspace, so the panel has to describe the
+            // same entries the visitor just chose from. Snapshots are never published at all, so
+            // they can only come from `default`. Reading both from `default` meant the control
+            // and its result could describe different revisions.
+            final String entryWorkspace = renderingWorkspace();
+            return JCRTemplate.getInstance().doExecuteWithSystemSessionAsUser(null, entryWorkspace,
+                    null, (JCRCallback<RevisionDiffView>) entrySession ->
+                            JCRTemplate.getInstance().doExecuteWithSystemSessionAsUser(
+                                    null, WORKSPACE, null,
+                                    (JCRCallback<RevisionDiffView>) snapshotSession ->
+                                            resolve(entrySession, snapshotSession,
+                                                    historyIdentifier, oneIdentifier,
+                                                    otherIdentifier, language)));
         } catch (RepositoryException | RuntimeException e) {
             logger.error("Could not compare revisions {} and {}", oneIdentifier, otherIdentifier, e);
             return RevisionDiffView.unavailable(REASON_NOT_FOUND, null);
         }
     }
 
-    private RevisionDiffView resolve(JCRSessionWrapper session, String historyIdentifier,
+    /**
+     * @param entrySession    the rendering workspace: revision entries, their labels and dates
+     * @param snapshotSession {@code default}: the snapshots, which are never published
+     */
+    private RevisionDiffView resolve(JCRSessionWrapper entrySession,
+                                     JCRSessionWrapper snapshotSession, String historyIdentifier,
                                      String oneIdentifier, String otherIdentifier, String language)
             throws RepositoryException {
 
-        JCRNodeWrapper history = nodeOrNull(session, historyIdentifier);
+        JCRNodeWrapper history = nodeOrNull(entrySession, historyIdentifier);
         if (history == null || !history.isNodeType(HISTORY_TYPE)) {
             return RevisionDiffView.unavailable(REASON_NOT_FOUND, null);
         }
 
-        // Newest first, and the SAME ordering the list view renders, because both go through
-        // RevisionEntryOrder. The list also decides which of the two selections is the older.
+        // Newest first, from the SAME workspace and through the SAME comparator as the list
+        // view, which is what makes the control and its result describe the same revisions.
+        // Sharing RevisionEntryOrder was never sufficient on its own: a shared comparator over
+        // different data still disagrees.
         List<JCRNodeWrapper> entries = RevisionEntryOrder.newestFirst(history);
         int newerIndex = indexOf(entries, oneIdentifier);
         int olderIndex = indexOf(entries, otherIdentifier);
@@ -142,7 +163,8 @@ public class RevisionDiffService {
         String newerLabel = stringOrNull(newer, PROP_REVISION_LABEL);
         String olderLabel = stringOrNull(older, PROP_REVISION_LABEL);
 
-        Map<String, JCRNodeWrapper> snapshotByEntry = snapshotsFor(session, history, language);
+        Map<String, JCRNodeWrapper> snapshotByEntry =
+                snapshotsFor(snapshotSession, history, language);
         JCRNodeWrapper newerSnapshot = snapshotByEntry.get(newer.getIdentifier());
         JCRNodeWrapper olderSnapshot = snapshotByEntry.get(older.getIdentifier());
         if (newerSnapshot == null) {
@@ -196,6 +218,31 @@ public class RevisionDiffService {
             logger.debug("Refusing a comparison of history {}: the current user cannot read it",
                     historyIdentifier, denied);
             return false;
+        }
+    }
+
+    /**
+     * The workspace the page is being rendered from: {@code live} for a visitor, {@code default}
+     * inside jContent preview.
+     *
+     * <p>Following the render is what keeps preview honest too. Hardcoding {@code live} would
+     * make an editor's preview of an unpublished entry answer "not found" for a revision that is
+     * plainly on the screen in front of them.
+     *
+     * <p>Falls back to {@code live} when there is no request context, because the fallback for a
+     * public-facing feature should be the published view, never the editorial one. Package-private
+     * so that choice is pinned by a test rather than left to whoever edits this next.
+     */
+    static String renderingWorkspace() {
+        try {
+            JCRSessionWrapper current = JCRSessionFactory.getInstance().getCurrentUserSession();
+            String name = current == null || current.getWorkspace() == null
+                    ? null : current.getWorkspace().getName();
+            return name == null || name.trim().isEmpty() ? PUBLISHED_WORKSPACE : name;
+        } catch (RepositoryException | RuntimeException noContext) {
+            logger.debug("No rendering workspace could be determined; comparing published entries",
+                    noContext);
+            return PUBLISHED_WORKSPACE;
         }
     }
 

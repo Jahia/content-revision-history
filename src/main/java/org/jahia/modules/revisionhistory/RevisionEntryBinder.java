@@ -118,6 +118,29 @@ public class RevisionEntryBinder {
 
     // ------------------------------------------------------------------ lookups
 
+    /*
+     * ACCEPTED LIMITATION: entries authored during a capture outage may compare as unchanged.
+     *
+     * Every not-yet-bound entry on the page binds to the ONE current snapshot. In normal running
+     * that is exactly right: a publication produces one entry and one snapshot, and they belong
+     * together.
+     *
+     * It stops being right when captures stop for a while -- a NOT_PUBLIC spell, repeated
+     * FAILED, sustained rate limiting, or the component being added to a page that already has
+     * entries. Several entries accumulate unbound, and the first capture that succeeds binds all
+     * of them to that single snapshot. Comparing two of them then resolves both to the same
+     * content and the panel reports that nothing in the text changed, for revisions that did
+     * change.
+     *
+     * This is a deliberate decision to leave as it is, not an oversight. The alternatives were
+     * binding only the newest entry (leaving the rest permanently unbound, so they would report
+     * "no snapshot recorded" forever) or matching each entry to the snapshot nearest its
+     * revisionDate (more correct, and a rule that has to be invented and maintained). Both were
+     * judged worse than a documented caveat for a situation that only arises after captures have
+     * already been failing -- which is itself visible in crh:lastCaptureStatus.
+     *
+     * If you are changing this, the README says the same thing under "Binding".
+     */
     private JCRNodeWrapper languageFolder(JCRSessionWrapper session, String siteKey,
                                           String pageUuid, String language) {
         try {

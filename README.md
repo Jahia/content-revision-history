@@ -98,6 +98,35 @@ publication.
 Binding is **append-only**. An entry that already has a snapshot is never rebound, or a later
 capture would silently rewrite what an existing public revision claims the page used to say.
 
+## Binding, and one case where it misleads
+
+An editor's `crh:revisionEntry` is joined to a snapshot by binding: every entry on the page that
+is not yet bound is attached to the snapshot captured for the publication that carried it.
+Binding is append-only, so an entry never moves once bound.
+
+In normal running one publication produces one entry and one snapshot, and they belong together.
+
+**Where it misleads.** If captures stop for a while — a page that is not publicly readable, a
+run of `FAILED` captures, sustained rate limiting, or the component being added to a page that
+already has entries — several entries accumulate unbound. The first capture that succeeds then
+binds *all* of them to that single snapshot.
+
+Comparing two such entries resolves both to the same content, so the panel reports:
+
+> These two revisions have identical page content. The revision was recorded, but nothing in the
+> text of the page changed between them.
+
+For revisions that did in fact change. Binding never re-runs, so this does not correct itself.
+
+**This is accepted rather than fixed.** The alternatives were binding only the newest entry —
+leaving the others reporting "no snapshot recorded" permanently — or matching each entry to the
+snapshot nearest its date, which means inventing and maintaining a rule for "nearest". Both were
+judged worse than a documented caveat for a situation that only arises *after* captures have
+already been failing, which `crh:lastCaptureStatus` records on the folder.
+
+If a page's history matters and its captures have been failing, check that field before trusting
+a comparison across the outage.
+
 ## The comparison
 
 The list itself sits in a native `<details>` disclosure and **starts closed** (editors override

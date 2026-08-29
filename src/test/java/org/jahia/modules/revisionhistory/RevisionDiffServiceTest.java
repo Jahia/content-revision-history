@@ -54,6 +54,17 @@ class RevisionDiffServiceTest {
     }
 
     @Test
+    @DisplayName("With no request context, entries are read from the PUBLISHED workspace")
+    void renderingWorkspaceFallsBackToPublished() {
+        // Arrange -- no Jahia context, so the rendering workspace cannot be determined.
+        // Act/Assert. The direction of this fallback matters: defaulting to "default" would make
+        // a comparison describe unpublished editorial values (a renamed label, a changed date) on
+        // a public page. Defaulting to "live" can only ever show less than the viewer might be
+        // entitled to, which is the safe direction for a public-facing feature.
+        assertEquals("live", RevisionDiffService.renderingWorkspace());
+    }
+
+    @Test
     @DisplayName("A malformed identifier is refused before anything is read")
     void malformedIdentifiersAreRefused() {
         // Arrange -- these arrive from a visitor-submitted form and are concatenated into a
