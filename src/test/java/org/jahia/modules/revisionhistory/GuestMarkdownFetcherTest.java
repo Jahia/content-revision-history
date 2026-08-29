@@ -3,6 +3,7 @@ package org.jahia.modules.revisionhistory;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
+import javax.management.AttributeNotFoundException;
 import javax.management.MBeanServer;
 import javax.management.ObjectName;
 import java.io.IOException;
@@ -47,6 +48,83 @@ class GuestMarkdownFetcherTest {
         // Assert
         assertEquals(Integer.valueOf(8080), probe.httpPort);
         assertNull(probe.failure);
+    }
+
+    @Test
+    @DisplayName("one unreadable connector does not hide the real HTTP connector behind it")
+    void oneUnreadableConnectorDoesNotHideTheRealOne() throws Exception {
+        // Arrange -- queryNames returns a Set, so enumeration order is unspecified. A container
+        // can expose a connector whose attributes cannot be read (an AJP or a custom one), and
+        // it may come first. Aborting the whole sweep on it fell back to the default port and
+        // made every capture on that container fail, with a perfectly usable connector present.
+        MBeanServer server = mock(MBeanServer.class);
+        ObjectName broken = new ObjectName("Catalina:type=Connector,port=8009");
+        ObjectName real = new ObjectName("Catalina:type=Connector,port=9090");
+        LinkedHashSet<ObjectName> ordered = new LinkedHashSet<>();
+        ordered.add(broken);
+        ordered.add(real);
+        when(server.queryNames(any(ObjectName.class), any())).thenReturn(ordered);
+        when(server.getAttribute(broken, "scheme"))
+                .thenThrow(new AttributeNotFoundException("scheme"));
+        when(server.getAttribute(real, "scheme")).thenReturn("http");
+        when(server.getAttribute(real, "port")).thenReturn(9090);
+
+        // Act
+        GuestMarkdownFetcher.ConnectorProbe probe = GuestMarkdownFetcher.probeConnectors(server);
+
+        // Assert
+        assertEquals(Integer.valueOf(9090), probe.httpPort,
+                "the sweep must continue past a connector it cannot read");
+        assertNull(probe.failure, "finding a usable connector is a success, whatever preceded it");
+    }
+
+    @Test
+    @DisplayName("a sweep that finds nothing still reports the last unreadable connector")
+    void unreadableConnectorIsReportedWhenNothingUsableIsFound() throws Exception {
+        // Arrange -- continuing past a failure must not mean swallowing it: with no usable
+        // connector, the reason the sweep came up empty is the diagnosis.
+        MBeanServer server = mock(MBeanServer.class);
+        ObjectName broken = new ObjectName("Catalina:type=Connector,port=8009");
+        when(server.queryNames(any(ObjectName.class), any()))
+                .thenReturn(Collections.singleton(broken));
+        when(server.getAttribute(broken, "scheme"))
+                .thenThrow(new AttributeNotFoundException("scheme"));
+
+        // Act
+        GuestMarkdownFetcher.ConnectorProbe probe = GuestMarkdownFetcher.probeConnectors(server);
+
+        // Assert
+        assertNull(probe.httpPort);
+        assertNotNull(probe.failure, "an empty result with no reason is not a diagnosis");
+    }
+
+    // ------------------------------------------------------- statusForHttp
+
+    @Test
+    @DisplayName("401, 403, 404 and a redirect are permission facts: NOT_PUBLIC")
+    void permissionRelatedCodesAreNotPublic() {
+        // Jahia answers 404 rather than 403 for content guest may not see, so 404 belongs here.
+        assertEquals(CaptureStatus.NOT_PUBLIC, GuestMarkdownFetcher.statusForHttp(401));
+        assertEquals(CaptureStatus.NOT_PUBLIC, GuestMarkdownFetcher.statusForHttp(403));
+        assertEquals(CaptureStatus.NOT_PUBLIC, GuestMarkdownFetcher.statusForHttp(404));
+        assertEquals(CaptureStatus.NOT_PUBLIC, GuestMarkdownFetcher.statusForHttp(302),
+                "a redirect to login means the same thing as a 403");
+    }
+
+    @Test
+    @DisplayName("a 5xx is a broken render, not a permission fact: FAILED")
+    void serverErrorsAreFailedNotNotPublic() {
+        // Reporting NOT_PUBLIC for a 500 sent operators to inspect ACLs on a page whose ACLs
+        // were never the problem, while the real cause was an exception in a markdown view.
+        assertEquals(CaptureStatus.FAILED, GuestMarkdownFetcher.statusForHttp(500));
+        assertEquals(CaptureStatus.FAILED, GuestMarkdownFetcher.statusForHttp(502));
+        assertEquals(CaptureStatus.FAILED, GuestMarkdownFetcher.statusForHttp(503));
+    }
+
+    @Test
+    @DisplayName("a request we malformed is ours, not the page's: FAILED")
+    void badRequestIsOurFault() {
+        assertEquals(CaptureStatus.FAILED, GuestMarkdownFetcher.statusForHttp(400));
     }
 
     @Test

@@ -119,9 +119,7 @@ final class GuestMarkdownFetcher {
 
             int code = connection.getResponseCode();
             if (code != HttpURLConnection.HTTP_OK) {
-                // 401/403/302-to-login all mean the same thing here: the public cannot read
-                // this page, so there is nothing a public revision history may record.
-                return Fetched.problem(CaptureStatus.NOT_PUBLIC,
+                return Fetched.problem(statusForHttp(code),
                         "Guest render returned HTTP " + code, url);
             }
             String body = readBounded(connection.getInputStream());
@@ -131,7 +129,10 @@ final class GuestMarkdownFetcher {
             }
             return Fetched.ok(body, url);
         } catch (IOException e) {
-            logger.debug("Guest capture render failed for {}", url, e);
+            // Was DEBUG, which is off in production, while the durable record carries only the
+            // exception class and message. A systemic failure -- the connector throttling, TLS
+            // resets under load -- then had no stack trace anywhere, for any page.
+            logger.warn("Guest capture render failed for {}", url, e);
             return Fetched.problem(CaptureStatus.FAILED,
                     e.getClass().getSimpleName() + ": " + e.getMessage(), url);
         } finally {
@@ -139,6 +140,26 @@ final class GuestMarkdownFetcher {
                 connection.disconnect();
             }
         }
+    }
+
+    /**
+     * Maps a non-200 guest render to the outcome an operator should act on.
+     *
+     * <p>Everything used to be {@link CaptureStatus#NOT_PUBLIC}, which reads as a statement about
+     * permissions. For 401, 403, 404 and a redirect to login that is exactly right -- Jahia
+     * answers 404 rather than 403 for content guest may not see, so that one belongs here too.
+     *
+     * <p>A 5xx is not a permission fact. It means the render itself broke, most likely in a
+     * {@code markdown} view. Recording NOT_PUBLIC for it sent operators to inspect ACLs on a page
+     * whose ACLs were never the problem, while the stack trace they needed sat in the server log
+     * under a different page's name. A 4xx we caused (a malformed URL, say) is likewise ours.
+     */
+    static CaptureStatus statusForHttp(int code) {
+        boolean redirectedAway = code >= 300 && code < 400;
+        boolean forbidden = code == HttpURLConnection.HTTP_UNAUTHORIZED
+                || code == HttpURLConnection.HTTP_FORBIDDEN
+                || code == HttpURLConnection.HTTP_NOT_FOUND;
+        return redirectedAway || forbidden ? CaptureStatus.NOT_PUBLIC : CaptureStatus.FAILED;
     }
 
     // Package-private (was private) so RevisionSnapshotServiceTest-sibling tests in this package
@@ -244,9 +265,17 @@ final class GuestMarkdownFetcher {
      */
     static ConnectorProbe probeConnectors(MBeanServer server) {
         Set<String> otherSchemes = new LinkedHashSet<>();
+        Set<ObjectName> connectors;
         try {
-            Set<ObjectName> connectors = server.queryNames(new ObjectName("*:type=Connector,*"), null);
-            for (ObjectName connector : connectors) {
+            connectors = server.queryNames(new ObjectName("*:type=Connector,*"), null);
+        } catch (Exception sweepFailed) {
+            // The query itself failed, so there is nothing to iterate.
+            return new ConnectorProbe(null, otherSchemes, sweepFailed);
+        }
+
+        Exception unreadableConnector = null;
+        for (ObjectName connector : connectors) {
+            try {
                 Object scheme = server.getAttribute(connector, "scheme");
                 Object port = server.getAttribute(connector, "port");
                 boolean usablePort = port instanceof Integer && (Integer) port > 0;
@@ -256,11 +285,15 @@ final class GuestMarkdownFetcher {
                 if (scheme != null) {
                     otherSchemes.add(String.valueOf(scheme));
                 }
+            } catch (Exception unreadable) {
+                // Keep going. queryNames returns a Set, so enumeration order is unspecified:
+                // one connector whose attributes cannot be read used to abort the sweep before
+                // the real plain-HTTP connector was ever inspected, which silently fell back to
+                // the default port and made every capture on that container fail.
+                unreadableConnector = unreadable;
             }
-        } catch (Exception e) {
-            return new ConnectorProbe(null, otherSchemes, e);
         }
-        return new ConnectorProbe(null, otherSchemes, null);
+        return new ConnectorProbe(null, otherSchemes, unreadableConnector);
     }
 
     /**
