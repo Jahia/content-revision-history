@@ -74,9 +74,13 @@
 
 // System-generated, never published, never editor-edited. Append-only record.
 // indexed=no / nofulltext throughout: historical copies must not pollute site search.
-// crh:capturedBy records the principal the render ran as. It is always `guest`: a snapshot is
-// destined to be shown publicly, so it is built from what an anonymous visitor can see, never
-// from the privileges of whoever triggered the capture.
+// crh:capturedBy records the principal the render ran as: `guest` unless a deployment configures
+// a capture user, which exists so that pages the public cannot read can have a history at all.
+// This comment used to say "always guest" and use that to argue a snapshot is safe to show
+// publicly. That argument expired when capture became configurable, and it was never the thing
+// keeping the read path safe: RevisionDiffService#viewerMayReadHistory is, by checking the
+// CURRENT user's own JCR rights before any snapshot is read. Read crh:capturedBy as provenance --
+// whose view of the page this text represents, and therefore who may safely be shown it.
 // crh:markdown is binary, not string, so reading a snapshot's metadata does not drag the whole
 // page payload along with it.
 // jmix:nolive is what keeps this tree out of the live workspace, and it is a stronger

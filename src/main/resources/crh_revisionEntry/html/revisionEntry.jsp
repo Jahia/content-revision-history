@@ -1,5 +1,6 @@
 <%@ taglib prefix="c" uri="http://java.sun.com/jsp/jstl/core" %>
 <%@ taglib prefix="fmt" uri="http://java.sun.com/jsp/jstl/fmt" %>
+<%@ taglib prefix="fn" uri="http://java.sun.com/jsp/jstl/functions" %>
 <%@ taglib prefix="crh" uri="http://www.jahia.org/content-revision-history/functions" %>
 <%--
   Renders ONE revision as a self-contained record (<article> + <dl>).
@@ -48,10 +49,23 @@
 
     <dl class="crh-entry-facts">
         <dt><fmt:message key="crh_revisionEntry.changeType"/></dt>
-        <%-- changeTypeCode is constrained by the CND choicelist to editorial|substantive|correction,
-             so building the resource key from it is not attacker-controlled input. --%>
+        <%-- changeTypeCode is a node property interpolated into a resource-bundle KEY, and two
+             JSTL behaviours make that load-bearing: fmt:message writes its output unescaped, and
+             a MISSING key renders as ???the.key???, echoing the key into the page.
+
+             The CND choicelist constrains the value to editorial|substantive|correction and
+             Jackrabbit enforces it on setProperty, so this holds today. It is escaped anyway.
+             This was the only output in the module whose safety came from a repository
+             constraint rather than from escaping where the value is used, and a value constraint
+             is enforced on setProperty while a system-view import is exactly the path where JCR
+             validation gets relaxed and nobody re-checks this line.
+
+             Escaping deliberately does NOT whitelist: an unexpected value still renders the
+             visible ??? marker rather than being silently shown as "Substantive", because
+             quietly displaying the wrong change type in an evidentiary record is worse than
+             visibly displaying a broken one. --%>
         <dd><c:choose>
-            <c:when test="${not empty changeTypeCode}"><fmt:message key="crh_revisionEntry.changeType.${changeTypeCode}"/></c:when>
+            <c:when test="${not empty changeTypeCode}"><fmt:message key="crh_revisionEntry.changeType.${fn:escapeXml(changeTypeCode)}"/></c:when>
             <c:otherwise><fmt:message key="crh_revisionEntry.changeType.substantive"/></c:otherwise>
         </c:choose></dd>
 
