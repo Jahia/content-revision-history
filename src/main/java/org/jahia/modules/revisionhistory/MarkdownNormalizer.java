@@ -42,7 +42,7 @@ public final class MarkdownNormalizer {
      * Stamped on every snapshot so the diff viewer can flag "formatting change" instead of
      * showing spurious churn between snapshots produced by different generators.
      */
-    public static final String GENERATOR_VERSION = "3";
+    public static final String GENERATOR_VERSION = "4";
 
     /**
      * Defensive cap on raw view output accepted for normalization. This runs on a live render
@@ -78,6 +78,21 @@ public final class MarkdownNormalizer {
 
     /** Elements whose bodies must never survive into the snapshot (scripts, styles, embedded SVG markup). */
     private static final String DANGEROUS_ELEMENTS = "script, style, noscript, svg, template";
+
+    /**
+     * Any Unicode space separator, including U+00A0 and the U+2000 block. Text inside a rich-text
+     * fragment reaches us through jsoup's TextNode#text(), which folds these into a plain space as
+     * part of normalising; view-emitted text does not go through that, so it has to be folded here
+     * or a diff would report a change because an editor typed a non-breaking space.
+     */
+    private static final Pattern UNICODE_SPACE = Pattern.compile("\\p{Zs}");
+
+    /**
+     * Horizontal whitespace at the start of a line: the JSP template's own indentation, never
+     * content. Four leading spaces is an indented code block in CommonMark, so leaving it in place
+     * would silently reclassify body text as code.
+     */
+    private static final Pattern LINE_LEADING_SPACE = Pattern.compile("(?<=\\n)[ \\t]+");
 
     private static final Pattern BLANK_RUN = Pattern.compile("\\n{3,}");
     private static final Pattern TRAILING_SPACE = Pattern.compile("[ \\t]+\\n");
@@ -160,9 +175,35 @@ public final class MarkdownNormalizer {
         doc.select(DANGEROUS_ELEMENTS).remove();
         StringBuilder out = new StringBuilder(html.length());
         for (Node child : doc.body().childNodes()) {
-            renderNode(child, out, 0);
+            // A text node at body level is what the markdown VIEWS emitted, where a line separator
+            // is structure: jnt_page/markdown writes "# <title>" + line.separator and
+            // jnt_content/markdown writes "## <title>" + line.separator. Anything nested inside an
+            // element came from a rich-text property, where a newline is only HTML whitespace and
+            // must stay collapsible -- otherwise a source-wrapped sentence would be split in two.
+            if (child instanceof TextNode) {
+                out.append(viewText(((TextNode) child).getWholeText()));
+            } else {
+                renderNode(child, out, 0);
+            }
         }
         return out.toString();
+    }
+
+    /**
+     * Text emitted by a markdown view, as opposed to text inside a rich-text fragment.
+     *
+     * <p>Read with {@code getWholeText()} rather than {@code text()}: {@code text()} normalises
+     * whitespace, so every line separator the views emit became a space and only structure carried
+     * by an HTML block tag survived (ensureBlankLine put that back). A page whose children all
+     * render as headings has no block tag anywhere, so the whole page collapsed onto one line --
+     * destroying the sentence-level diff granularity that generating Markdown exists to buy.
+     *
+     * <p>The two normalisations that {@code text()} did usefully are kept: Unicode space
+     * separators fold to a plain space, and per-line template indentation is dropped.
+     */
+    private static String viewText(String wholeText) {
+        String spaced = UNICODE_SPACE.matcher(wholeText).replaceAll(" ");
+        return LINE_LEADING_SPACE.matcher(spaced).replaceAll("");
     }
 
     private static void renderNode(Node node, StringBuilder out, int listDepth) {

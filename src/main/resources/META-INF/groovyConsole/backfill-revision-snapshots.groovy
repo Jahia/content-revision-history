@@ -224,7 +224,7 @@ def reconstruct = { long millis ->
 def wantedTranslation = 'j:translation_' + java.util.Locale.forLanguageTag(language).toString()
 
 def pageUuid = null, siteKey = null, folderPath = null
-def existing = [:]      // instant millis -> [name, markdown, capturedBy]
+def existing = [:]      // instant millis -> [name, markdown, capturedBy, generatorVersion]
 def candidates = [] as SortedSet
 def nodeVersions  = [:]  // path -> sorted checkpoint millis of the node itself
 def transVersions = [:]  // path -> sorted checkpoint millis of its j:translation_<lang>
@@ -277,7 +277,9 @@ JCRTemplate.instance.doExecuteWithSystemSession(null, 'default', java.util.Local
         s.getNode(folderPath).nodes.each { snap ->
             if (!snap.isNodeType('crh:revisionSnapshot')) return
             existing[snap.getProperty('crh:snapshotDate').date.timeInMillis] =
-                [snap.name, snap.getProperty('crh:markdown').string, snap.getPropertyAsString('crh:capturedBy')]
+                [snap.name, snap.getProperty('crh:markdown').string,
+                 snap.getPropertyAsString('crh:capturedBy'),
+                 snap.getPropertyAsString('crh:generatorVersion')]
         }
     } catch (Exception ignored) { /* no history captured yet */ }
     return null
@@ -330,7 +332,20 @@ report << "existing  : ${existing.size()} snapshot(s) already stored\n\n"
 
 // ------------------------------------------------------------------ the gate
 
-def guestSnapshots = existing.findAll { k, v -> v[2] == 'guest' }
+// Only a snapshot made by the CURRENT generator can validate the reconstruction. The
+// generator stamp exists precisely because a change to the views or to MarkdownNormalizer alters
+// the text for unchanged content, so comparing across versions measures the upgrade rather than
+// the composition -- and the abort below would blame composition drift for it, which is wrong.
+def currentGenerator = normalizerClass.getField('GENERATOR_VERSION').get(null) as String
+def staleGenerator = existing.findAll { k, v -> v[3] != currentGenerator }
+if (staleGenerator) {
+    report << "note: ${staleGenerator.size()} of ${existing.size()} stored snapshot(s) were made by "
+    report << "an older generator and are not used to validate (current is ${currentGenerator}, "
+    report << "found ${staleGenerator.values().collect { it[3] }.unique().sort()}).\n"
+    report << "  They are left exactly as they are. A comparison that spans the change already\n"
+    report << "  tells the reader some differences may be formatting rather than content.\n\n"
+}
+def guestSnapshots = existing.findAll { k, v -> v[2] == 'guest' && v[3] == currentGenerator }
 int checked = 0, exact = 0, skewed = 0, mismatched = 0, unverifiable = 0
 guestSnapshots.each { millis, info ->
     def blocked = unresolvableAt(millis)
@@ -383,9 +398,16 @@ if (mismatched > 0) {
     report << "\nPROCEEDING with ${mismatched} unexplained difference(s) because ALLOW_UNEXPLAINED is set.\n"
 }
 if (checked == 0) {
-    report << "\nNOTE: this page has no captured snapshots, so the reconstruction is UNVERIFIED.\n"
-    report << "Run this script first on a page that does have captured history, to establish that\n"
-    report << "the composition is faithful for your content types.\n"
+    report << "\nNOTE: nothing here could validate the reconstruction, so it is UNVERIFIED.\n"
+    if (staleGenerator) {
+        report << "This page HAS captured history, but every snapshot predates generator "
+        report << "${currentGenerator}, so none of it can say whether the composition is faithful\n"
+        report << "now. Capture one snapshot on this generator -- publish the page once -- and run\n"
+        report << "this script again to get a real check.\n"
+    } else {
+        report << "Run this script first on a page that does have captured history, to establish\n"
+        report << "that the composition is faithful for your content types.\n"
+    }
 }
 
 // ------------------------------------------------------------------ write

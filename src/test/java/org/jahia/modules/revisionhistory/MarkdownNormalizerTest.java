@@ -533,4 +533,75 @@ class MarkdownNormalizerTest {
         assertTrue(md.length() < html.length(), "expected truncation, got length " + md.length());
         assertTrue(elapsedMs < 5000, "took " + elapsedMs + " ms");
     }
+
+    // --- Defect 8: literal newlines from the views must survive -----------------------------
+    //
+    // The markdown views express structure as literal line separators, not as HTML block tags:
+    // jnt_page/markdown emits "# <title>" + line.separator, and jnt_content/markdown emits
+    // "## <title>" + line.separator. toMarkdown fed that to jsoup and read text nodes with
+    // TextNode.text(), which normalises whitespace and turns every newline into a space. Only
+    // structure carried by an HTML block tag survived, because ensureBlankLine re-inserted it.
+    //
+    // A page whose children all render as headings has no block tag anywhere, so the whole page
+    // collapsed onto one line -- destroying exactly the sentence-level diff granularity that
+    // generating Markdown is meant to buy.
+
+    @Test
+    @DisplayName("a heading-only page keeps one heading per block")
+    void headingOnlyPageKeepsItsStructure() {
+        // Arrange -- what jnt_page/markdown emits for a page of headings and no body text
+        String viewOutput = "# History\n\n## Alpha\n\n## Beta\n";
+
+        // Act
+        String md = MarkdownNormalizer.normalize(viewOutput);
+
+        // Assert
+        assertEquals("# History\n\n## Alpha\n\n## Beta\n", md);
+    }
+
+    @Test
+    @DisplayName("a heading does not absorb the paragraph that follows it")
+    void headingDoesNotAbsorbFollowingText() {
+        // Arrange
+        String viewOutput = "# History\n\nSome sentence here.\n\n## Alpha\n";
+
+        // Act
+        String md = MarkdownNormalizer.normalize(viewOutput);
+
+        // Assert
+        assertEquals("# History\n\nSome sentence here.\n\n## Alpha\n", md);
+    }
+
+    @Test
+    @DisplayName("a non-breaking space still normalises to a plain space")
+    void nonBreakingSpaceBecomesPlainSpace() {
+        // Preserving whitespace must not preserve U+00A0: TextNode.text() used to fold it into a
+        // plain space as part of normalising, and a diff must not report a change because an
+        // editor typed a non-breaking space.
+        String md = MarkdownNormalizer.normalize("a\u00A0b\n\nc\u2003d\n");
+
+        assertEquals("a b\n\nc d\n", md);
+    }
+
+    @Test
+    @DisplayName("view indentation never becomes an indented code block")
+    void leadingIndentDoesNotBecomeACodeBlock() {
+        // JSP output carries the template's own indentation. Four leading spaces is an indented
+        // code block in CommonMark, which would silently reclassify body text as code.
+        String md = MarkdownNormalizer.normalize("# Title\n\nfirst line\n    second line\n");
+
+        assertEquals("# Title\n\nfirst line\nsecond line\n", md);
+    }
+
+    @Test
+    @DisplayName("a newline inside rich-text HTML is whitespace, not a line break")
+    void newlineInsideRichTextDoesNotSplitASentence() {
+        // Rich text is stored as HTML, where a source newline is only whitespace. Treating it as
+        // structure -- the way view-emitted text must be treated -- would split one sentence over
+        // two lines and make a line diff report a change that never happened. This is why only
+        // body-level text nodes keep their newlines.
+        String md = MarkdownNormalizer.normalize("<p>This is a long\nsentence that wrapped.</p>");
+
+        assertEquals("This is a long sentence that wrapped.\n", md);
+    }
 }
