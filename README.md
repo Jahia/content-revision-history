@@ -341,8 +341,14 @@ for its `displayableNode` and rendering that, and a node is displayable **only w
 of `jmix:mainResource`, or of permissions. (`jnt:person` previews in the demo site for exactly
 this reason: `dx-base-demo-templates` ships `person-bio-content-template` for it.)
 
-The preview shows the capture metadata — including `crh:capturedBy`, which is always `guest` and
-is the guarantee the whole design rests on — and the Markdown itself as **preformatted text**.
+The preview shows the capture metadata — including `crh:capturedBy`, the principal the render ran
+as — and the Markdown itself as **preformatted text**. Read `crh:capturedBy` as *provenance*: whose
+view of the page this text represents, and therefore who may safely be shown it. It is `guest`
+unless a deployment configures a capture user. An earlier version of this section called it "always
+`guest`" and treated that as the guarantee the design rests on; that stopped being true when
+capture became configurable so that restricted pages could have a history at all, and it was never
+what kept the read path safe. `RevisionDiffService#viewerMayReadHistory` is, by checking the
+current user's own JCR rights before any snapshot is read.
 Deliberately not rendered as HTML: this module generates Markdown and never parses it, so
 rendering would mean adding a parser to turn an archived record back into markup, and any
 difference between that parser and the original page would make the preview quietly unfaithful.
