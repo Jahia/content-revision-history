@@ -71,9 +71,10 @@
 // history: an editor has to be able to read a snapshot before writing the revision entry for
 // it. jmix:hiddenType is not merely "keep it out of the components list" -- jContent's browse
 // query lists it in excludeTypes, so it hid the whole tree from the content browser too.
-// The record is still protected, by the two mechanisms that actually protect it: ACL
-// inheritance is broken on the root with nothing granted, so no contributor can read or delete
-// it, and jmix:nolive keeps it out of the live workspace entirely. Extending jnt:contentFolder
+// The tree inherits the site's content permissions: it used to have ACL inheritance broken with
+// nothing granted, which left it readable only by root -- not by administrators, whose privileges
+// are themselves delivered through ACL entries -- and that made the snapshot picker useless.
+// What still holds is jmix:nolive, which keeps the tree out of the live workspace entirely. Extending jnt:contentFolder
 // instead of carrying jmix:droppableContent was measured as an alternative and does NOT work:
 // jContent's browse filter is includeTypes [jmix:droppableContent, jnt:page, jnt:file], so a
 // folder that is not droppable is invisible again.

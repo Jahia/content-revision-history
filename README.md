@@ -378,11 +378,12 @@ jContent's browse query lists that mixin in `excludeTypes` and so hid the whole 
 content browser too. That was the one thing making backfilled history undescribable, so it was
 dropped.
 
-What still protects the record is what always did: ACL inheritance is broken on
-`revision-history/` with nothing granted, so no contributor can read or delete it, and
-`jmix:nolive` keeps it out of the live workspace entirely. An administrator can now delete a
-snapshot by hand from jContent — as they always could from `/tools` — and that is the accepted
-cost of being able to read one.
+What protects the record now is narrower, and worth stating plainly: `jmix:nolive` keeps the tree
+out of the live workspace entirely, and a comparison served to a visitor still checks the *current*
+user's own JCR rights before any snapshot is read (`RevisionDiffService#viewerMayReadHistory`).
+The tree is no longer locked down: anyone who may delete content under `/sites/<siteKey>/contents`
+may delete a snapshot. That is a deliberate trade for a store editors can actually read — the
+alternative left it readable only by `root`, which made the picker unusable.
 
 The template is the part that matters, and it is not obvious: jContent previews a node by asking
 for its `displayableNode` and rendering that, and a node is displayable **only when a
@@ -406,10 +407,13 @@ The snapshot is the evidence; the preview shows the stored bytes.
 
 Two constraints worth knowing:
 
-- **It resolves for administrators only.** The revision-history tree has ACL inheritance broken
-  and grants nobody, so only server administrators (who bypass ACLs) can reach a snapshot at all.
-  That is the storage design working as intended, not an oversight — widening it is an ACL
-  decision, not a view one.
+- **It resolves for whoever may read the site's content.** The revision-history tree inherits from
+  `/sites/<siteKey>/contents`, so an editor who can read content there can read a snapshot. Up to
+  1.3.x the tree had ACL inheritance broken with nothing granted, which the code justified by saying
+  server administrators bypass ACLs. They do not: a server administrator is a *role*, and a role is
+  delivered through ACL entries — the very thing breaking inheritance removes. Measured on 8.2.x,
+  every non-`root` account was denied, administrators included, which made the snapshot picker
+  useless because an editor could not read what it offered.
 - **The site's template set must have a `/base` template** (`j:rootTemplatePath`), following the
   convention of the shipped `news` module. A template set without one will not render the preview.
 
@@ -419,7 +423,7 @@ a version bump to take effect.
 ## Storage layout
 
 ```
-/sites/<siteKey>/contents/revision-history/     ACL inheritance broken, no grants
+/sites/<siteKey>/contents/revision-history/     inherits the site's content permissions
     <pageUuid>/                                 crh:snapshotFolder
         <lang>/                                 crh:snapshotFolder + capture status
             <yyyyMMdd'T'HHmmssSSS'Z'-hash8>     crh:revisionSnapshot

@@ -162,4 +162,32 @@ describe('jContent shows the snapshot store to an editor', () => {
         cy.get('body', {timeout: uiTimeoutMs}).should('contain.text', 'Captured');
         cy.get('body').should('not.contain.text', 'HTTP Status 404');
     });
+
+    // --- readable by someone other than root ----------------------------------------------
+    //
+    // Up to 1.3.x the history root had its ACL inheritance broken with nothing granted. The code
+    // said that left access to "server administrators, who bypass ACLs", which is untrue: in Jahia
+    // a server administrator is a ROLE, and a role is delivered through ACL entries -- exactly what
+    // breaking inheritance removes. Measured on 8.2.x, every non-root account was denied, including
+    // site and server administrators. Only root could read a snapshot, because root is the JCR
+    // system user and bypasses the access manager rather than holding a role.
+    //
+    // That made the feature unusable: an editor has to read a snapshot to describe it, and the
+    // picker offers exactly those snapshots. Every check before this one ran as root, which is
+    // precisely why nobody noticed.
+
+    it('shows the snapshot store to an editor, not only to root', () => {
+        cy.login('mathias', 'password');
+        cy.visit(jcontent('contents'));
+        cy.get(TABLE, {timeout: uiTimeoutMs}).should('exist');
+        cy.get(NAME_CELL).should('contain.text', 'revision-history');
+    });
+
+    it('shows an editor the snapshots themselves', () => {
+        // The folder being listed is not enough: the snapshots inside it are what has to be read
+        // before a revision entry can be written for one.
+        cy.login('mathias', 'password');
+        openInJContent(`contents/revision-history/${pageUuid}/${language}`);
+        cy.get(NAME_CELL).should('contain.text', snapshotName);
+    });
 });
