@@ -18,6 +18,17 @@
          change to an existing one) only takes effect on a version bump. Redeploying the same
          version leaves the repository untouched and the change looks silently ignored. -->
     <version>1.2.0-SNAPSHOT</version>
+
+    <!-- Without these the parent's own SCM is inherited, so the module advertises Jahia's
+         internal repository as its source. A store listing that offers a source link would send
+         readers somewhere they cannot go and that is not this module. -->
+    <url>https://github.com/Jahia/content-revision-history</url>
+    <scm>
+        <connection>scm:git:git@github.com:Jahia/content-revision-history.git</connection>
+        <developerConnection>scm:git:git@github.com:Jahia/content-revision-history.git</developerConnection>
+        <url>https://github.com/Jahia/content-revision-history</url>
+        <tag>HEAD</tag>
+    </scm>
     <packaging>bundle</packaging>
     <description>Public, curated revision history for Jahia pages: Markdown snapshots taken on
         publication, promoted by editors into named public revisions, with a diff viewer.
@@ -31,6 +42,11 @@
     </licenses>
 
     <properties>
+        <!-- The parent interpolates this into Jahia-Source-Folders. Left at its default it
+             becomes the absolute path of whoever built the jar, which then ships in the manifest
+             of a released artifact and points at a directory no customer has. Blank is the whole
+             fix: dev-mode source mounting is a local convenience, not something to publish. -->
+        <sourcesRoot></sourcesRoot>
         <jahia-depends>default</jahia-depends>
         <jahia-module-type>module</jahia-module-type>
         <!-- No Spring, no blueprint extender: this is a plain OSGi module and its one code
@@ -116,8 +132,11 @@
                 <extensions>true</extensions>
                 <configuration>
                     <instructions>
-                        <!-- Suppress dev-mode source mounting: it makes
-                             ModulesSourceSpringInitializer take over Spring handling. -->
+                        <!-- Belt and braces with the empty sourcesRoot property above. The
+                             original reason for this was that dev-mode source mounting made
+                             ModulesSourceSpringInitializer take over Spring handling; there is no
+                             Spring here any more, but keeping the header empty also keeps a build
+                             machine's directory layout out of the shipped manifest. -->
                         <Jahia-Source-Folders/>
                         <!-- Ship the licence inside the bundle: neither the parent pom nor bnd
                              does this automatically, and sibling Jahia modules carry
