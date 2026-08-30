@@ -1,6 +1,20 @@
 Changelog
 =========
 
+## [1.2.1](https://github.com/Jahia/content-revision-history/compare/1_2_0...1_2_1) (2026-08-30)
+
+Fixes an undeclared module dependency that would break the snapshot preview template on any
+install without the grid module.
+
+### Bug fixes
+
+* **import**: Removed `jnt:row` from the snapshot preview template, which the grid module provides while `jahia-depends` declared only `default`. The row was a single full-width column wrapping one element, so inlining `jnt:mainResourceDisplay` leaves only platform core types and removes the dependency rather than declaring it. ([commit](https://github.com/Jahia/content-revision-history/commit/1a9f30e))
+* **import**: Stopped packaging `repository.xml.generated` into `import.zip`. It is gitignored and does not regenerate; Maven swept it in because it globs `src/main/import/`, so it shipped in 1.1.0 and 1.2.0. ([commit](https://github.com/Jahia/content-revision-history/commit/1a9f30e))
+
+### Other changes
+
+* **docs**: Added this changelog, in the CKEditor 5 format. ([commit](https://github.com/Jahia/content-revision-history/commit/cbaae7d))
+
 ## [1.2.0](https://github.com/Jahia/content-revision-history/compare/1_1_0...1_2_0) (2026-08-30)
 
 Prefer this release over 1.1.0 for a fresh deployment: it is the first build whose manifest does
