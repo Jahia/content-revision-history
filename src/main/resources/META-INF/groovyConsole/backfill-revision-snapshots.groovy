@@ -410,6 +410,43 @@ if (checked == 0) {
     }
 }
 
+/**
+ * Every snapshot currently in the folder, with its date.
+ *
+ * <p>The counts alone ("28 already stored") do not tell you what you have, and the next thing to
+ * do after a backfill is to describe these revisions by hand -- which means choosing them by date
+ * in the editor. The NAME is printed beside the date because that is the value the picker stores
+ * in crh:snapshotRef, so a listing here can be matched against what the edit form offers.
+ */
+def listSnapshots = { String heading, Set<Long> writtenNow ->
+    def rows = []
+    JCRTemplate.instance.doExecuteWithSystemSession(null, 'default', null, { s ->
+        try {
+            s.getNode(folderPath).nodes.each { n ->
+                if (!n.isNodeType('crh:revisionSnapshot')) return
+                rows << [
+                    millis: n.getProperty('crh:snapshotDate').date.timeInMillis,
+                    name  : n.name,
+                    by    : n.getPropertyAsString('crh:capturedBy') ?: '?',
+                    gen   : n.getPropertyAsString('crh:generatorVersion') ?: '?'
+                ]
+            }
+        } catch (Exception noFolderYet) { /* nothing stored for this page and language */ }
+        return null
+    } as JCRCallback)
+    if (rows.isEmpty()) {
+        report << "\n${heading}: none\n"
+        return
+    }
+    rows.sort { it.millis }
+    report << "\n${heading} (${rows.size()}), oldest first:\n"
+    rows.each { r ->
+        def mark = writtenNow.contains(r.millis) ? '  <- written by this run' : ''
+        report << "  ${new Date(r.millis).format('yyyy-MM-dd HH:mm:ss.SSS')}  ${r.name}"
+        report << "  by ${r.by}  gen ${r.gen}${mark}\n"
+    }
+}
+
 // ------------------------------------------------------------------ write
 
 def unresolvable = [:]
@@ -435,8 +472,10 @@ if (unresolvable) {
 }
 
 if (dryRun) {
-    report << "\nDRY RUN - nothing written. First few instants:\n"
-    toWrite.take(5).each { report << "  ${new Date(it).format('yyyy-MM-dd HH:mm:ss.SSS')}\n" }
+    listSnapshots('snapshots already stored', [] as Set)
+    report << "\nDRY RUN - nothing written. Instants that WOULD be reconstructed:\n"
+    toWrite.each { report << "  ${new Date(it).format('yyyy-MM-dd HH:mm:ss.SSS')}\n" }
+    report << "  (many of these collapse by content hash once rendered)\n"
     return report.toString()
 }
 
@@ -465,11 +504,20 @@ JCRTemplate.instance.doExecuteWithSystemSession(null, 'default', null, { s ->
 } as JCRCallback)
 
 int stored = 0, unchanged = 0
+// Which instants this run actually wrote, so the listing below can mark them. An instant that
+// deduped is NOT in here: nothing new was stored for it, and saying otherwise would misreport
+// what happened.
+def writtenInstants = [] as Set
 toWrite.each { millis ->
     def md = reconstruct(millis)
     def status = captureMethod.invoke(service, siteKey, pageUuid, language, md,
             java.time.Instant.ofEpochMilli(millis), 'reconstructed', null)
-    if (String.valueOf(status) == 'STORED') stored++ else unchanged++
+    if (String.valueOf(status) == 'STORED') {
+        stored++
+        writtenInstants << millis
+    } else {
+        unchanged++
+    }
 }
 
 if (!before.isEmpty()) {
@@ -483,4 +531,10 @@ if (!before.isEmpty()) {
 }
 
 report << "\nstored ${stored} reconstructed snapshot(s), ${unchanged} skipped as unchanged\n"
+
+listSnapshots('snapshots now stored for this page and language', writtenInstants)
+report << "\nTo publish any of these as a revision, add a Revision to the page's revision list and\n"
+report << "set 'Snapshot this revision describes' to the matching date. Leaving it empty attaches\n"
+report << "the entry to the newest snapshot, which is not what reconstructed history needs.\n"
+
 report.toString()

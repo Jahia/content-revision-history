@@ -57,8 +57,15 @@
 // /sites/<site>/contents is a jnt:contentFolder whose only wildcard child definitions are
 // `+ * (jmix:droppableContent)` and `+ * (jnt:contentFolder)`, so without it the root folder
 // cannot be created at all (verified: ConstraintViolationException "No child node definition
-// for revision-history"). Child definitions are declared explicitly so crh:revisionSnapshot
-// never needs to be droppable either.
+// for revision-history").
+// crh:revisionSnapshot carries it too, and for a different reason: jContent's browse filter is
+// includeTypes [jmix:droppableContent, jnt:page, jnt:file], so a snapshot without it is invisible
+// in the content browser even though its folders are visible. 1.3.0 dropped jmix:hiddenType from
+// both types and verified only the FOLDER against that filter, which left 28 snapshots present
+// and 0 shown -- folders you can open onto an empty list. Neither type appears as a component an
+// editor can add: this module generates no components node at all (verified across every
+// deployed version), and the child definitions below are explicit, so nothing may be created
+// inside a snapshot folder except what capture puts there.
 // These types used to carry jmix:hiddenType as well. That was dropped so the store can be
 // browsed and previewed in jContent, which is what makes it possible to describe backfilled
 // history: an editor has to be able to read a snapshot before writing the revision entry for
@@ -112,7 +119,7 @@
 //
 // The editorial types (crh:revisionHistory, crh:revisionEntry) deliberately do NOT carry it:
 // they are the public half and must publish normally.
-[crh:revisionSnapshot] > jnt:content, jmix:nolive
+[crh:revisionSnapshot] > jnt:content, jmix:droppableContent, jmix:nolive
  - crh:snapshotDate (date) mandatory indexed=no
  - crh:language (string) mandatory indexed=no nofulltext
  - crh:contentHash (string) mandatory indexed=no nofulltext
