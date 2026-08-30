@@ -300,6 +300,18 @@ if (dryRun) {
 def service = serviceClass.newInstance()
 def before = [:]
 JCRTemplate.instance.doExecuteWithSystemSession(null, 'default', null, { s ->
+    // The folder is created by the first captureIfChanged below, so on a page that has never been
+    // captured there is nothing here yet and no baseline to preserve. That is the case this
+    // script exists for, and this read used to throw PathNotFoundException on it before a single
+    // snapshot was written. The read further up already tolerated a missing folder ("no history
+    // captured yet"); this one did not.
+    //
+    // Nothing is lost by skipping: with no prior capture there are no live-capture pointers to
+    // restore, and the backfill's newest snapshot IS the correct baseline for the next live
+    // capture, because writes go oldest first.
+    if (!s.nodeExists(folderPath)) {
+        return null
+    }
     def f = s.getNode(folderPath)
     ['crh:latestHash', 'crh:latestSnapshot'].each { p -> if (f.hasProperty(p)) before[p] = f.getPropertyAsString(p) }
     return null
