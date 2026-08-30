@@ -203,13 +203,49 @@ publication.
 Binding is **append-only**. An entry that already has a snapshot is never rebound, or a later
 capture would silently rewrite what an existing public revision claims the page used to say.
 
-## Binding, and one case where it misleads
+## Binding
 
-An editor's `crh:revisionEntry` is joined to a snapshot by binding: every entry on the page that
-is not yet bound is attached to the snapshot captured for the publication that carried it.
-Binding is append-only, so an entry never moves once bound.
+An editor's `crh:revisionEntry` is joined to a snapshot by binding. There are two ways it happens,
+and the second exists because the first cannot describe history that already happened.
 
-In normal running one publication produces one entry and one snapshot, and they belong together.
+### Automatic, which is right for the normal rhythm
+
+Every entry on the page that is not yet bound is attached to the snapshot captured for the
+publication that carried it. One publication produces one entry and one snapshot, and they belong
+together. Leave `crh:snapshotRef` empty and this is what you get.
+
+### Chosen, which is what backfilled history needs
+
+Reconstructing history produces many snapshots at once, and the entries describing them can only
+be written afterwards. Left automatic, every one of them would attach to the *newest* snapshot and
+every comparison between them would report that nothing changed.
+
+So a revision entry has an optional **Snapshot this revision describes** field. It lists that
+page's snapshots for the language being edited, newest first, each showing when it was captured
+and the first line that distinguishes it:
+
+```
+2026-08-28 18:15:31 — Post-backfill live capture check.
+2026-08-28 12:51:08 — Jahia provides support for supported releases for eighteen …
+2026-08-28 12:45:02 — Jahia provides support for supported releases for eighteen …
+```
+
+The date is shown to the second because captures within one publication land milliseconds apart,
+and the excerpt skips the page's own `# Title` line, which every snapshot of a page shares.
+
+Three rules worth knowing:
+
+- **Changing the choice moves the entry.** Binding is otherwise append-only, because a later
+  *capture* must never rewrite what an existing revision claims the page said. An editor
+  re-pointing an entry is the opposite: a deliberate correction, and history assembled by hand
+  after a backfill is exactly where a wrong choice is most likely.
+- **A choice that no longer resolves leaves the entry unbound**, and says so in the log. It does
+  not quietly fall back to the current snapshot, which would attach a revision to content it does
+  not describe.
+- **Only that page and language.** The value is a name resolved inside the page's own snapshot
+  folder, never a path, so it cannot reach another page's history.
+
+### One case where automatic binding misleads
 
 **Where it misleads.** If captures stop for a while — a page that is not publicly readable, a
 run of `FAILED` captures, sustained rate limiting, or the component being added to a page that
@@ -223,14 +259,15 @@ Comparing two such entries resolves both to the same content, so the panel repor
 
 For revisions that did in fact change. Binding never re-runs, so this does not correct itself.
 
-**This is accepted rather than fixed.** The alternatives were binding only the newest entry —
-leaving the others reporting "no snapshot recorded" permanently — or matching each entry to the
-snapshot nearest its date, which means inventing and maintaining a rule for "nearest". Both were
-judged worse than a documented caveat for a situation that only arises *after* captures have
-already been failing, which `crh:lastCaptureStatus` records on the folder.
+**Automatic binding is not going to guess its way out of this.** The alternatives were binding
+only the newest entry — leaving the others reporting "no snapshot recorded" permanently — or
+matching each entry to the snapshot nearest its date, which means inventing and maintaining a rule
+for "nearest". Both were judged worse than a documented caveat for a situation that only arises
+*after* captures have already been failing, which `crh:lastCaptureStatus` records on the folder.
 
-If a page's history matters and its captures have been failing, check that field before trusting
-a comparison across the outage.
+If a page's history matters and its captures have been failing, check that field before trusting a
+comparison across the outage — and **fix it by choosing the snapshot** on the affected entries,
+which moves them off the one they were lumped onto.
 
 ## The comparison
 
@@ -333,6 +370,19 @@ its markup does not.
 `crh:revisionSnapshot` has an html view, and the module ships a **content template** for it
 (`src/main/import/repository.xml`), so a snapshot can be selected in jContent and previewed like
 any other content.
+
+The snapshot store is browsable on purpose: describing backfilled history means reading a snapshot
+before writing the revision entry for it. It used to be invisible, because both snapshot types
+carried `jmix:hiddenType` — which is not merely "keep it out of the components list", since
+jContent's browse query lists that mixin in `excludeTypes` and so hid the whole tree from the
+content browser too. That was the one thing making backfilled history undescribable, so it was
+dropped.
+
+What still protects the record is what always did: ACL inheritance is broken on
+`revision-history/` with nothing granted, so no contributor can read or delete it, and
+`jmix:nolive` keeps it out of the live workspace entirely. An administrator can now delete a
+snapshot by hand from jContent — as they always could from `/tools` — and that is the accepted
+cost of being able to read one.
 
 The template is the part that matters, and it is not obvious: jContent previews a node by asking
 for its `displayableNode` and rendering that, and a node is displayable **only when a

@@ -11,6 +11,8 @@ import javax.jcr.PathNotFoundException;
 import javax.jcr.RepositoryException;
 import javax.jcr.Value;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
@@ -90,30 +92,169 @@ public class RevisionEntryBinder {
         if (folder == null) {
             return 0;
         }
-        JCRNodeWrapper latest = latestSnapshot(folder);
-        if (latest == null) {
-            logger.debug("No snapshot yet for page {} [{}]; entries stay unbound", pageUuid, language);
-            return 0;
-        }
-
         JCRNodeWrapper page = nodeOrNull(session, pageUuid);
         if (page == null) {
             return 0;
         }
 
-        Set<String> alreadyBound = boundEntryIdentifiers(folder);
+        // May be null: a page whose first capture has not landed yet still has entries to pin, and
+        // an entry that names its own snapshot does not need a current one to exist.
+        JCRNodeWrapper latest = latestSnapshot(folder);
+
+        Map<String, JCRNodeWrapper> boundTo = snapshotByBoundEntry(folder);
         List<JCRNodeWrapper> unbound = new ArrayList<>();
-        collectEntries(page, alreadyBound, unbound, new int[]{0});
+        collectEntries(page, boundTo.keySet(), unbound, new int[]{0});
+
+        int moved = repin(session, folder, page, boundTo);
         if (unbound.isEmpty()) {
+            if (moved > 0) {
+                session.save();
+            }
+            return moved;
+        }
+
+        Map<String, List<JCRNodeWrapper>> byTarget = new LinkedHashMap<>();
+        for (JCRNodeWrapper entry : unbound) {
+            JCRNodeWrapper target = targetFor(folder, entry, latest);
+            if (target == null) {
+                continue;
+            }
+            byTarget.computeIfAbsent(target.getName(), name -> new ArrayList<>()).add(entry);
+        }
+        if (byTarget.isEmpty() && moved == 0) {
+            logger.debug("Nothing to bind for page {} [{}]", pageUuid, language);
             return 0;
         }
 
-        appendReferences(session, latest, unbound);
+        int newlyBound = 0;
+        for (Map.Entry<String, List<JCRNodeWrapper>> group : byTarget.entrySet()) {
+            appendReferences(session, folder.getNode(group.getKey()), group.getValue());
+            newlyBound += group.getValue().size();
+            logger.info("Bound {} revision entr{} on page {} [{}] to snapshot {}",
+                    group.getValue().size(), group.getValue().size() == 1 ? "y" : "ies",
+                    pageUuid, language, group.getKey());
+        }
         session.save();
-        logger.info("Bound {} revision entr{} on page {} [{}] to snapshot {}",
-                unbound.size(), unbound.size() == 1 ? "y" : "ies", pageUuid, language,
-                latest.getName());
-        return unbound.size();
+        return newlyBound + moved;
+    }
+
+    /**
+     * Which snapshot an entry should be attached to.
+     *
+     * <p>An entry that names one ({@code crh:snapshotRef}) gets that one. An entry that names none
+     * gets the current snapshot, which is the whole of the previous behaviour.
+     *
+     * <p>A named snapshot that is gone -- pruned, or the name mistyped by an import -- returns
+     * null, leaving the entry unbound. It deliberately does NOT fall back to the current snapshot:
+     * that would attach a revision to content it does not describe, silently, which is the one
+     * failure this module exists to prevent. Unbound reports "no snapshot recorded", which is true.
+     */
+    private JCRNodeWrapper targetFor(JCRNodeWrapper folder, JCRNodeWrapper entry,
+                                     JCRNodeWrapper latest) throws RepositoryException {
+        String pinned = pinnedName(entry);
+        if (pinned == null) {
+            return latest;
+        }
+        JCRNodeWrapper named = snapshotNamed(folder, pinned);
+        if (named == null) {
+            logger.warn("Revision entry {} names snapshot '{}', which is not in {}."
+                    + " Leaving it unbound rather than attaching it to different content.",
+                    entry.getPath(), pinned, folder.getPath());
+        }
+        return named;
+    }
+
+    /**
+     * Moves entries whose editor has changed which snapshot they name.
+     *
+     * <p>Binding is otherwise append-only, because a later CAPTURE must never rewrite what an
+     * existing revision claims the page said. An editor re-pointing an entry is the opposite of
+     * that: it is a deliberate correction, and without it a wrong choice made once could never be
+     * fixed -- which, for history assembled by hand after a backfill, is where wrong choices are
+     * most likely to happen.
+     *
+     * @return how many entries were moved
+     */
+    private int repin(JCRSessionWrapper session, JCRNodeWrapper folder, JCRNodeWrapper page,
+                      Map<String, JCRNodeWrapper> boundTo) throws RepositoryException {
+        int moved = 0;
+        for (Map.Entry<String, JCRNodeWrapper> bound : boundTo.entrySet()) {
+            JCRNodeWrapper entry = nodeOrNull(session, bound.getKey());
+            if (entry == null || !isUnder(entry, page)) {
+                continue;
+            }
+            String pinned = pinnedName(entry);
+            JCRNodeWrapper current = bound.getValue();
+            if (pinned == null || pinned.equals(current.getName())) {
+                continue;
+            }
+            JCRNodeWrapper wanted = snapshotNamed(folder, pinned);
+            if (wanted == null) {
+                logger.warn("Revision entry {} now names snapshot '{}', which is not in {};"
+                        + " leaving it attached to {}", entry.getPath(), pinned, folder.getPath(),
+                        current.getName());
+                continue;
+            }
+            removeReference(session, current, entry);
+            appendReferences(session, wanted, Collections.singletonList(entry));
+            logger.info("Moved revision entry {} from snapshot {} to {}",
+                    entry.getPath(), current.getName(), wanted.getName());
+            moved++;
+        }
+        return moved;
+    }
+
+    private static boolean isUnder(JCRNodeWrapper node, JCRNodeWrapper ancestor) {
+        try {
+            return node.getPath().startsWith(ancestor.getPath() + '/');
+        } catch (RuntimeException e) {
+            return false;
+        }
+    }
+
+    private static String pinnedName(JCRNodeWrapper entry) throws RepositoryException {
+        if (!entry.hasProperty(PROP_SNAPSHOT_REF)) {
+            return null;
+        }
+        String name = entry.getProperty(PROP_SNAPSHOT_REF).getString();
+        return name == null || name.trim().isEmpty() ? null : name.trim();
+    }
+
+    /**
+     * Resolves a name against THIS page-and-language folder only, never as a path.
+     *
+     * <p>The value is editor-supplied, so it is looked up as a child of the folder rather than
+     * interpolated anywhere: a name carrying '/' or '..' cannot reach another page's history, or
+     * anything else in the repository.
+     */
+    private JCRNodeWrapper snapshotNamed(JCRNodeWrapper folder, String name) {
+        if (name.indexOf('/') >= 0 || name.indexOf('\\') >= 0 || ".".equals(name) || "..".equals(name)) {
+            return null;
+        }
+        try {
+            JCRNodeWrapper snapshot = folder.getNode(name);
+            return snapshot.isNodeType(SNAPSHOT_TYPE) ? snapshot : null;
+        } catch (RepositoryException notThere) {
+            return null;
+        }
+    }
+
+    private void removeReference(JCRSessionWrapper session, JCRNodeWrapper snapshot,
+                                 JCRNodeWrapper entry) throws RepositoryException {
+        if (!snapshot.hasProperty(PROP_ENTRY_REFS)) {
+            return;
+        }
+        List<Value> kept = new ArrayList<>();
+        for (Value value : snapshot.getProperty(PROP_ENTRY_REFS).getValues()) {
+            if (!entry.getIdentifier().equals(value.getString())) {
+                kept.add(value);
+            }
+        }
+        if (kept.isEmpty()) {
+            snapshot.getProperty(PROP_ENTRY_REFS).remove();
+        } else {
+            snapshot.setProperty(PROP_ENTRY_REFS, kept.toArray(new Value[0]));
+        }
     }
 
     // ------------------------------------------------------------------ lookups
@@ -173,20 +314,21 @@ public class RevisionEntryBinder {
     }
 
     /**
-     * Every entry identifier already referenced by any snapshot in this folder.
+     * Every entry identifier already referenced by any snapshot in this folder, and by which.
      *
      * <p>Bounded by {@code MAX_SNAPSHOTS_PER_PAGE_LANGUAGE}. A weak reference to a deleted
      * entry is kept in the set as a plain string, so a deleted-and-recreated entry (which gets
      * a new identifier) binds again rather than being mistaken for the old one.
      */
-    private Set<String> boundEntryIdentifiers(JCRNodeWrapper folder) throws RepositoryException {
-        Set<String> bound = new HashSet<>();
+    private Map<String, JCRNodeWrapper> snapshotByBoundEntry(JCRNodeWrapper folder)
+            throws RepositoryException {
+        Map<String, JCRNodeWrapper> bound = new LinkedHashMap<>();
         for (JCRNodeWrapper snapshot : folder.getNodes()) {
             if (!snapshot.isNodeType(SNAPSHOT_TYPE) || !snapshot.hasProperty(PROP_ENTRY_REFS)) {
                 continue;
             }
             for (Value value : snapshot.getProperty(PROP_ENTRY_REFS).getValues()) {
-                bound.add(value.getString());
+                bound.put(value.getString(), snapshot);
             }
         }
         return bound;

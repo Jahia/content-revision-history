@@ -33,6 +33,12 @@
  - revisionDate (date) mandatory
  - summary (string, richtext) i18n mandatory
  - changeType (string, choicelist[resourceBundle]) = 'substantive' < 'editorial', 'substantive', 'correction'
+ // Optional. Empty means "bind to whatever snapshot is current when this entry is published",
+ // which is right for the normal rhythm of one publication producing one entry and one snapshot.
+ // Backfill breaks that pairing -- many snapshots already exist and the entries describing them
+ // are written afterwards -- so an editor can pin the one an entry actually describes. The
+ // choicelist is served by SnapshotChoiceListInitializer, which registers itself under this key.
+ - crh:snapshotRef (string, choicelist[crhSnapshots])
  // NOTE: there is deliberately NO snapshotRef property here any more. The link between a
  // revision entry and the snapshot it describes is stored on the SNAPSHOT
  // (crh:revisionSnapshot / crh:entryRefs), pointing back at the entry, for one decisive
@@ -51,17 +57,26 @@
 // /sites/<site>/contents is a jnt:contentFolder whose only wildcard child definitions are
 // `+ * (jmix:droppableContent)` and `+ * (jnt:contentFolder)`, so without it the root folder
 // cannot be created at all (verified: ConstraintViolationException "No child node definition
-// for revision-history"). What actually has to be prevented -- the type showing up as a
-// component an editor can drop onto a page -- is what jmix:hiddenType does, and that is
-// declared here. Child definitions are declared explicitly so crh:revisionSnapshot never
-// needs to be droppable either.
+// for revision-history"). Child definitions are declared explicitly so crh:revisionSnapshot
+// never needs to be droppable either.
+// These types used to carry jmix:hiddenType as well. That was dropped so the store can be
+// browsed and previewed in jContent, which is what makes it possible to describe backfilled
+// history: an editor has to be able to read a snapshot before writing the revision entry for
+// it. jmix:hiddenType is not merely "keep it out of the components list" -- jContent's browse
+// query lists it in excludeTypes, so it hid the whole tree from the content browser too.
+// The record is still protected, by the two mechanisms that actually protect it: ACL
+// inheritance is broken on the root with nothing granted, so no contributor can read or delete
+// it, and jmix:nolive keeps it out of the live workspace entirely. Extending jnt:contentFolder
+// instead of carrying jmix:droppableContent was measured as an alternative and does NOT work:
+// jContent's browse filter is includeTypes [jmix:droppableContent, jnt:page, jnt:file], so a
+// folder that is not droppable is invisible again.
 // The crh:latest* / crh:snapshotCount properties are a denormalised index on the language
 // folder: dedupe used to scan every historical snapshot node -- each carrying a full page's
 // Markdown -- on every capture, so its cost grew linearly and forever.
 // The crh:lastCapture* properties make a missing snapshot self-explaining: without them a gap
 // in the record is indistinguishable from "the content did not change", which is the single
 // distinction this feature exists to make.
-[crh:snapshotFolder] > jnt:content, jmix:droppableContent, jmix:hiddenType, jmix:nolive
+[crh:snapshotFolder] > jnt:content, jmix:droppableContent, jmix:nolive
  - crh:latestHash (string) indexed=no nofulltext
  - crh:latestSnapshot (string) indexed=no nofulltext
  - crh:snapshotCount (long) indexed=no
@@ -97,7 +112,7 @@
 //
 // The editorial types (crh:revisionHistory, crh:revisionEntry) deliberately do NOT carry it:
 // they are the public half and must publish normally.
-[crh:revisionSnapshot] > jnt:content, jmix:hiddenType, jmix:nolive
+[crh:revisionSnapshot] > jnt:content, jmix:nolive
  - crh:snapshotDate (date) mandatory indexed=no
  - crh:language (string) mandatory indexed=no nofulltext
  - crh:contentHash (string) mandatory indexed=no nofulltext

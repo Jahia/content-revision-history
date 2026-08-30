@@ -74,6 +74,16 @@ public final class RevisionHistoryConstants {
     public static final String PROP_ENTRY_REFS = "crh:entryRefs";
 
     /**
+     * Optional, editor-set: the name of the snapshot this entry describes.
+     *
+     * <p>Empty means "whatever is current", which is the right answer for the normal editorial
+     * rhythm of one publication producing one entry and one snapshot. It is the wrong answer for
+     * backfilled history, where many snapshots already exist and the entries describing them are
+     * written afterwards -- see {@link SnapshotChoiceListInitializer}.
+     */
+    public static final String PROP_SNAPSHOT_REF = "crh:snapshotRef";
+
+    /**
      * Upper bound on nodes walked when looking for revision entries under a page. Pages hold
      * editorial content, not bulk data, so anything approaching this is a malformed tree
      * rather than a page -- and an unbounded walk on a capture path is how a background job
