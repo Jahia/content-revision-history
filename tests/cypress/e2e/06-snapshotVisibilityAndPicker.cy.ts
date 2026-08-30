@@ -32,9 +32,17 @@ describe('Snapshot visibility and the revision-entry snapshot picker', () => {
     const pollIntervalMs = 1000;
     const captureRateLimitGraceMs = 2500;
 
-    /** Exactly what jContent's content browser asks for. Kept as one constant so a drift in the
-     *  platform's filter shows up here as a single edit rather than five. */
-    const JCONTENT_BROWSE_TYPES = ['jmix:droppableContent', 'jnt:page', 'jnt:file'];
+    /**
+     * The filters jContent's CONTENT BROWSER uses, measured on 8.2.3.2.
+     *
+     * An earlier version of this file used ['jmix:droppableContent', 'jnt:page', 'jnt:file'], which
+     * is the content PICKER's filter, not the browser's. These tests therefore passed while the
+     * tree was empty on screen, through two releases. 07-jcontentUi.cy.ts is the authority now --
+     * it loads jContent in a browser and cannot be satisfied by a filter invented here. These two
+     * stay because they localise such a failure to the node types instead of to the UI.
+     */
+    const JCONTENT_FLAT_CONTENT = ['jmix:editorialContent', 'jmix:queryContent'];
+    const JCONTENT_TREE_RECURSION = ['jnt:page', 'jnt:contentFolder', 'jnt:folder'];
 
     interface ApolloResult<T> {
         data?: T
@@ -124,8 +132,8 @@ describe('Snapshot visibility and the revision-entry snapshot picker', () => {
         cy.apollo({query: allChildrenQuery, variables: {path}}).then((r: ApolloResult<ChildrenData>) =>
             (r.data?.jcr?.nodeByPath?.children.nodes ?? []).map(n => n.name));
 
-    const visibleChildNames = (path: string): Cypress.Chainable<string[]> =>
-        cy.apollo({query: filteredChildrenQuery, variables: {path, types: JCONTENT_BROWSE_TYPES}})
+    const childNamesMatching = (path: string, types: string[]): Cypress.Chainable<string[]> =>
+        cy.apollo({query: filteredChildrenQuery, variables: {path, types}})
             .then((r: ApolloResult<ChildrenData>) =>
                 (r.data?.jcr?.nodeByPath?.children.nodes ?? []).map(n => n.name));
 
@@ -247,28 +255,30 @@ describe('Snapshot visibility and the revision-entry snapshot picker', () => {
 
     // ---------------------------------------------------------------- visibility
 
-    it('shows every snapshot under the filter jContent browses with', () => {
-        // THE regression. 1.3.0 shipped with these two numbers reading 28 and 0.
+    it('lists every snapshot in the default content view', () => {
+        // 1.3.0 shipped with these two numbers reading 28 and 0. Set equality rather than a count:
+        // "greater than zero" would pass at 1 of 28.
         snapshotNames().then(present => {
             expect(present.length, 'the scratch page must have snapshots to show').to.be.greaterThan(0);
-            visibleChildNames(folderPath()).then(visible => {
-                expect(visible.sort(), 'every stored snapshot must be visible in jContent')
+            childNamesMatching(folderPath(), JCONTENT_FLAT_CONTENT).then(listed => {
+                expect(listed.sort(), 'every stored snapshot must be listed in the content view')
                     .to.deep.equal(present.sort());
             });
         });
     });
 
-    it('shows every folder on the path to a snapshot', () => {
-        // A visible snapshot inside an invisible folder is still unreachable, so the whole chain
-        // has to pass the same filter.
-        visibleChildNames(`/sites/${siteKey}/contents`).then(names => {
-            expect(names, 'the revision-history root must be visible').to.include('revision-history');
+    it('lets the tree recurse into every folder on the path to a snapshot', () => {
+        // Listing a folder is not the same as being able to OPEN it: the table and the tree are
+        // driven by different filters, and a folder that lists but cannot be opened is a dead end.
+        // This is the half that was broken, and 07-jcontentUi.cy.ts proves it on screen.
+        childNamesMatching(`/sites/${siteKey}/contents`, JCONTENT_TREE_RECURSION).then(names => {
+            expect(names, 'the revision-history root must be openable').to.include('revision-history');
         });
-        visibleChildNames(historyRoot).then(names => {
-            expect(names, 'the per-page folder must be visible').to.include(pageUuid);
+        childNamesMatching(historyRoot, JCONTENT_TREE_RECURSION).then(names => {
+            expect(names, 'the per-page folder must be openable').to.include(pageUuid);
         });
-        visibleChildNames(`${historyRoot}/${pageUuid}`).then(names => {
-            expect(names, 'the per-language folder must be visible').to.include(language);
+        childNamesMatching(`${historyRoot}/${pageUuid}`, JCONTENT_TREE_RECURSION).then(names => {
+            expect(names, 'the per-language folder must be openable').to.include(language);
         });
     });
 

@@ -83,7 +83,7 @@
 // The crh:lastCapture* properties make a missing snapshot self-explaining: without them a gap
 // in the record is indistinguishable from "the content did not change", which is the single
 // distinction this feature exists to make.
-[crh:snapshotFolder] > jnt:content, jmix:droppableContent, jmix:nolive
+[crh:snapshotFolder] > jnt:contentFolder, jmix:nolive
  - crh:latestHash (string) indexed=no nofulltext
  - crh:latestSnapshot (string) indexed=no nofulltext
  - crh:snapshotCount (long) indexed=no
@@ -119,7 +119,7 @@
 //
 // The editorial types (crh:revisionHistory, crh:revisionEntry) deliberately do NOT carry it:
 // they are the public half and must publish normally.
-[crh:revisionSnapshot] > jnt:content, jmix:droppableContent, jmix:nolive
+[crh:revisionSnapshot] > jnt:content, jmix:editorialContent, jmix:nolive
  - crh:snapshotDate (date) mandatory indexed=no
  - crh:language (string) mandatory indexed=no nofulltext
  - crh:contentHash (string) mandatory indexed=no nofulltext
