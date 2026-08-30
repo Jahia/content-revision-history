@@ -132,8 +132,35 @@ if (!(RENDER_USER ?: '').trim() || !(RENDER_SECRET ?: '')) {
  */
 def SELF_RENDERING = ['jnt:bigText', 'crh:revisionHistory'] as Set
 
+/**
+ * Is this node something the markdown template type can actually render?
+ *
+ * The views cover jnt:page and jnt:content (the generic fallback). Anything else hanging off a
+ * page has no view. jnt:vanityUrls and jnt:vanityUrl are the ones that bite: they extend nt:base,
+ * not jnt:content, their names are derived from the URL and contain spaces, and asking Jahia to
+ * render one answers 401. They are also mix:versionable, so without this they contribute version
+ * instants to the candidate list as well -- moments when a URL mapping changed and no content did.
+ *
+ * The name-starts-with-j: test that used to be the only filter does not exclude them, because the
+ * node is called vanityUrlMapping.
+ */
+def isRenderable = { JCRNodeWrapper n ->
+    n.isNodeType('jnt:content') || n.isNodeType('jnt:page')
+}
+
+/**
+ * Percent-encodes each path segment. A content node may legitimately carry spaces or other
+ * characters that are not URL-safe, and interpolating such a path straight into a URL produces a
+ * request Jahia rejects rather than the render that was intended.
+ */
+def encodePath = { String path ->
+    path.split('/', -1).collect { seg ->
+        seg ? java.net.URLEncoder.encode(seg, 'UTF-8').replace('+', '%20') : seg
+    }.join('/')
+}
+
 def fetchMarkdown = { String path, long millis ->
-    def url = new URL("${baseUrl}/cms/render/default/${language}${path}.markdown?v=${millis}")
+    def url = new URL("${baseUrl}/cms/render/default/${language}${encodePath(path)}.markdown?v=${millis}")
     def conn = url.openConnection()
     conn.setRequestProperty('Authorization', 'Basic ' + credentials.bytes.encodeBase64().toString())
     conn.connectTimeout = 10000
@@ -161,6 +188,7 @@ def compose
 compose = { JCRNodeWrapper node, long millis, StringBuilder sb ->
     node.nodes.each { child ->
         if (child.name.startsWith('j:')) return
+        if (!isRenderable(child)) return
 
         if (SELF_RENDERING.contains(child.primaryNodeTypeName)) {
             sb << fetchMarkdown(child.path, millis) << '\n'
@@ -211,7 +239,7 @@ JCRTemplate.instance.doExecuteWithSystemSession(null, 'default', java.util.Local
         if (n.isVersioned()) {
             n.versionsAsVersion.each { candidates << it.created.timeInMillis }
         }
-        n.nodes.each { if (!it.name.startsWith('j:')) collect(it) }
+        n.nodes.each { if (!it.name.startsWith('j:') && isRenderable(it)) collect(it) }
     }
     collect(page)
 
