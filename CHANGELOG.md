@@ -1,6 +1,26 @@
 Changelog
 =========
 
+## [1.3.1](https://github.com/Jahia/content-revision-history/compare/1_3_0...1_3_1) (2026-08-30)
+
+1.3.0 shipped its own headline feature broken. The snapshot store was meant to become browsable in
+jContent so that backfilled history could be described, and it was not: the snapshots were invisible,
+the folder could not be opened, and the whole tree was readable only by `root`. Recommended for
+anyone on 1.3.0.
+
+No migration is needed. An instance carrying the old permissions repairs itself on its next capture.
+
+### Bug fixes
+
+* **jcontent**: Used the filters jContent's content browser actually applies. The types were checked against `includeTypes [jmix:droppableContent, jnt:page, jnt:file]`, which is the content PICKER's filter. The browser lists flat views on `[jmix:editorialContent, jmix:queryContent]` and recurses the tree only into `[jnt:page, jnt:contentFolder, jnt:folder, ...]`, so `crh:snapshotFolder` now extends `jnt:contentFolder` and `crh:revisionSnapshot` carries `jmix:editorialContent`. Measured on the same instance, tree recursion into `revision-history` went from 0 to 1 and snapshots listed in the default view from 0 to 28. ([commit](https://github.com/Jahia/content-revision-history/commit/769c41d))
+* **acl**: Stopped breaking ACL inheritance on the history root. It granted nothing, on the stated reasoning that server administrators bypass ACLs -- which is untrue, because a server administrator is a role and a role is delivered through ACL entries, the very thing the break removes. Every non-`root` account was denied, administrators included, which left the snapshot picker offering snapshots its user could not read. The tree now inherits the site's content permissions. The trade is that a contributor who can delete content under `/contents` can delete a snapshot; `jmix:nolive` still keeps the tree out of the live workspace, and a comparison still checks the current user's own rights before serving. ([commit](https://github.com/Jahia/content-revision-history/commit/5e0a588))
+* **jcontent**: Made snapshots visible at all, having previously fixed only their folders. 1.3.0 verified the folder against the browse filter and not the snapshots inside it, so it shipped with every snapshot present and none shown -- folders that open onto an empty list. ([commit](https://github.com/Jahia/content-revision-history/commit/d5c62e8))
+
+### Other changes
+
+* **backfill**: The report now lists every snapshot in the folder, oldest first, with its date, its node name, who captured it and which generator produced it. Instants written by the run are marked. The node name is printed beside the date because that is the value the snapshot picker stores, so a listing can be matched against what the edit form offers. Dry runs list every instant rather than the first five. ([commit](https://github.com/Jahia/content-revision-history/commit/d5c62e8))
+* **test**: End-to-end coverage now loads jContent in a browser and asserts against its own test hooks, and exercises a non-`root` editor account. Both gaps are why the two defects above shipped: a GraphQL assertion only proves what its author believed the client asks for, and every check that ever ran against this tree used `root`, the one principal for which ACLs are meaningless. The suite is 67 specs, up from 53. ([commit](https://github.com/Jahia/content-revision-history/commit/5e0a588))
+
 ## [1.3.0](https://github.com/Jahia/content-revision-history/compare/1_2_1...1_3_0) (2026-08-30)
 
 The backfill script works. It did not in any previous release: reconstructing a page's history
