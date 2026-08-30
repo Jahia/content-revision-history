@@ -220,11 +220,14 @@ def reconstruct = { long millis ->
     return normalize(raw)
 }
 
-// ------------------------------------------------------------------ gather state
+/** The one translation subnode that the render of this language will actually dereference. */
+def wantedTranslation = 'j:translation_' + java.util.Locale.forLanguageTag(language).toString()
 
 def pageUuid = null, siteKey = null, folderPath = null
 def existing = [:]      // instant millis -> [name, markdown, capturedBy]
 def candidates = [] as SortedSet
+def nodeVersions  = [:]  // path -> sorted checkpoint millis of the node itself
+def transVersions = [:]  // path -> sorted checkpoint millis of its j:translation_<lang>
 
 JCRTemplate.instance.doExecuteWithSystemSession(null, 'default', java.util.Locale.forLanguageTag(language), { s ->
     def page = s.getNode(pagePath)
@@ -237,7 +240,34 @@ JCRTemplate.instance.doExecuteWithSystemSession(null, 'default', java.util.Local
     def collect
     collect = { JCRNodeWrapper n ->
         if (n.isVersioned()) {
-            n.versionsAsVersion.each { candidates << it.created.timeInMillis }
+            def own = n.versionsAsVersion.collect { it.created.timeInMillis }.sort()
+            candidates.addAll(own)
+            // Only a versionable node is ever wrapped as JCRFrozenNodeAsRegular, and only that
+            // wrapper can return null from getI18N. A plain node reads its live translation and
+            // cannot trip the interceptor, so it is not worth recording.
+            nodeVersions[n.path] = own
+        }
+        // The translation subnode keeps its OWN version history, and a save checkpoints it a few
+        // milliseconds after its parent. Without its instants the candidate set holds only the
+        // moment before the translation was checkpointed, which is precisely the instant that
+        // cannot be rendered at all. Only the language being rendered is collected: on digitall
+        // j:translation_de_DE has an EMPTY history, so treating every translation as required
+        // would leave no usable instant at all.
+        def i18ns = n.getI18Ns()
+        while (i18ns.hasNext()) {
+            def t = i18ns.nextNode()
+            if (t.name != wantedTranslation || !t.hasProperty('jcr:versionHistory')) continue
+            def vh = s.getProviderSession(n.provider)
+                      .getNodeByIdentifier(t.getProperty('jcr:versionHistory').string)
+            def own = []
+            def vit = vh.allVersions
+            while (vit.hasNext()) {
+                def v = vit.nextVersion()
+                if (v.name != 'jcr:rootVersion') own << v.created.timeInMillis
+            }
+            own.sort()
+            candidates.addAll(own)
+            transVersions[n.path] = own
         }
         n.nodes.each { if (!it.name.startsWith('j:') && isRenderable(it)) collect(it) }
     }
@@ -253,6 +283,46 @@ JCRTemplate.instance.doExecuteWithSystemSession(null, 'default', java.util.Local
     return null
 } as JCRCallback)
 
+/**
+ * Which nodes cannot be read at all at this instant?
+ *
+ * JCRFrozenNodeAsRegular.getI18N breaks a contract the platform itself depends on. hasI18N(locale)
+ * answers true, because the frozen node really does carry a j:translation_<lang> child, while
+ * getI18N(locale) answers null, because that translation's OWN version history holds no version at
+ * or before the instant. LastModifiedInterceptor.afterGetValue guards with the first and
+ * dereferences the second, so reading ANY property of such a node throws NullPointerException and
+ * the render answers 500. Reading a single property directly fails the same way at a different
+ * line, so no change to the markdown views can avoid it.
+ *
+ * It happens because a save checkpoints a node a few milliseconds BEFORE its translation subnode.
+ * A candidate instant taken from the parent's own version lands inside that gap, where the page is
+ * genuinely unresolvable -- a state no reader ever saw. The settled state of the same publication
+ * is the translation's checkpoint, which collect() now gathers too, so declining these instants
+ * loses no content.
+ *
+ * Measured on 8.2.3.2, /sites/digitall/home/about/history/landing/banner:
+ *   node             checkpoints 16:06:17.4xx, 16:06:18  -> 1 at or before 16:06:17.498
+ *   j:translation_en checkpoints 16:06:17.5xx, 16:06:18  -> 0 at or before 16:06:17.498
+ *
+ * This is arithmetic over the histories gathered above rather than a walk of a pinned session,
+ * because setVersionDate on a system session does NOT produce frozen wrappers -- a walk there
+ * reads HEAD and the predicate never fires. It also refuses to be set twice on one thread.
+ *
+ * Known limit: the walk above is of the CURRENT subtree, so a node deleted since the instant is
+ * not considered. Nodes ADDED since are handled -- their own history has nothing at or before the
+ * instant, so they are skipped by the first test.
+ */
+def unresolvableAt = { long millis ->
+    def bad = []
+    nodeVersions.each { path, own ->
+        def trans = transVersions[path]
+        if (trans == null) return                       // no translation in this language
+        if (!own.any { it <= millis }) return            // the node itself is not there yet
+        if (!trans.any { it <= millis }) bad << path     // it is, but its translation is not
+    }
+    return bad.sort()
+}
+
 report << "page      : ${pagePath}\n"
 report << "site/lang : ${siteKey} / ${language}\n"
 report << "candidates: ${candidates.size()} version instants across the subtree\n"
@@ -261,8 +331,15 @@ report << "existing  : ${existing.size()} snapshot(s) already stored\n\n"
 // ------------------------------------------------------------------ the gate
 
 def guestSnapshots = existing.findAll { k, v -> v[2] == 'guest' }
-int checked = 0, exact = 0, skewed = 0, mismatched = 0
+int checked = 0, exact = 0, skewed = 0, mismatched = 0, unverifiable = 0
 guestSnapshots.each { millis, info ->
+    def blocked = unresolvableAt(millis)
+    if (blocked) {
+        unverifiable++
+        report << "UNVERIFIABLE at ${info[0]}: ${blocked.size()} node(s) have no resolvable "
+        report << "${wantedTranslation} at this instant, e.g. ${blocked[0]}.\n"
+        return
+    }
     def rebuilt = reconstruct(millis)
     checked++
     if (rebuilt == info[1]) {
@@ -286,7 +363,8 @@ guestSnapshots.each { millis, info ->
         report << "  captured ${info[1].readLines().take(3)}\n  rebuilt  ${rebuilt.readLines().take(3)}\n"
     }
 }
-report << "validation: ${checked} checked, ${exact} exact, ${skewed} date-skewed, ${mismatched} unexplained\n"
+report << "validation: ${checked} checked, ${exact} exact, ${skewed} date-skewed, "
+report << "${mismatched} unexplained, ${unverifiable} unverifiable\n"
 
 if (mismatched > 0 && !allowUnexplained) {
     report << "\nABORTED. The reconstruction produced text that was never captured at any instant.\n"
@@ -312,12 +390,31 @@ if (checked == 0) {
 
 // ------------------------------------------------------------------ write
 
-def toWrite = candidates.findAll { !existing.containsKey(it) }.sort()
+def unresolvable = [:]
+def toWrite = candidates.findAll { !existing.containsKey(it) }.sort().findAll { millis ->
+    def blocked = unresolvableAt(millis)
+    if (blocked) {
+        unresolvable[millis] = blocked
+        return false
+    }
+    return true
+}
 report << "\nto reconstruct: ${toWrite.size()} instant(s)\n"
+if (unresolvable) {
+    report << "skipped ${unresolvable.size()} instant(s) that cannot be rendered at any credential:\n"
+    report << "  a save checkpoints a node a few ms before its ${wantedTranslation}, and inside that\n"
+    report << "  gap JCRFrozenNodeAsRegular.getI18N returns null while hasI18N answers true, so\n"
+    report << "  LastModifiedInterceptor throws NullPointerException and the render answers 500.\n"
+    report << "  The settled state of the same publication is the translation's own checkpoint,\n"
+    report << "  which is in the candidate set, so no content is lost by skipping these. First few:\n"
+    unresolvable.keySet().sort().take(3).each {
+        report << "    ${new Date(it).format('yyyy-MM-dd HH:mm:ss.SSS')} -> ${unresolvable[it][0]}\n"
+    }
+}
 
 if (dryRun) {
     report << "\nDRY RUN - nothing written. First few instants:\n"
-    toWrite.take(5).each { report << "  ${new Date(it).format('yyyy-MM-dd HH:mm:ss')}\n" }
+    toWrite.take(5).each { report << "  ${new Date(it).format('yyyy-MM-dd HH:mm:ss.SSS')}\n" }
     return report.toString()
 }
 
