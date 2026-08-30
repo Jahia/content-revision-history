@@ -17,11 +17,8 @@
                                         j:priority="100"
                                         jcr:primaryType="jnt:contentTemplate">
                <pagecontent jcr:primaryType="jnt:contentList">
-                  <row column="1col16" jcr:primaryType="jnt:row"/>
-               </pagecontent>
-               <row-col1 jcr:primaryType="jnt:contentList">
                   <mainResourceDisplay jcr:primaryType="jnt:mainResourceDisplay"/>
-               </row-col1>
+               </pagecontent>
             </revision-snapshot-template>
          </templates>
       </content-revision-history>
