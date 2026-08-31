@@ -85,13 +85,13 @@
 // in the record is indistinguishable from "the content did not change", which is the single
 // distinction this feature exists to make.
 [crh:snapshotFolder] > jnt:contentFolder, jmix:nolive
- - crh:latestHash (string) indexed=no nofulltext
- - crh:latestSnapshot (string) indexed=no nofulltext
- - crh:snapshotCount (long) indexed=no
- - crh:prunedCount (long) indexed=no
- - crh:lastCaptureStatus (string) indexed=no nofulltext
- - crh:lastCaptureMessage (string) indexed=no nofulltext
- - crh:lastCaptureDate (date) indexed=no
+ - crh:latestHash (string) indexed=no nofulltext hidden
+ - crh:latestSnapshot (string) indexed=no nofulltext hidden
+ - crh:snapshotCount (long) indexed=no hidden
+ - crh:prunedCount (long) indexed=no hidden
+ - crh:lastCaptureStatus (string) indexed=no nofulltext hidden
+ - crh:lastCaptureMessage (string) indexed=no nofulltext hidden
+ - crh:lastCaptureDate (date) indexed=no hidden
  + * (crh:snapshotFolder)
  + * (crh:revisionSnapshot)
 
@@ -120,18 +120,35 @@
 //
 // The editorial types (crh:revisionHistory, crh:revisionEntry) deliberately do NOT carry it:
 // they are the public half and must publish normally.
+// Every property below is `hidden`: written by capture, never typed. The edit engine offered all
+// of them as editable fields -- measured with forms.editForm, crh:markdown came out as
+// requiredType BINARY with selectorType Text and readOnly false, i.e. a single-line input for a
+// document that may be a megabyte, sitting next to an editable crh:contentHash. An editor could
+// retype the record and its own hash. `hidden` is the platform's own answer for a property that
+// code sets and users must not (j:published, j:workInProgress use it); `protected` is NOT used
+// here, because that would refuse this module's own writes.
+//
+// Nothing is lost by hiding them. Views read properties directly, so the snapshot preview still
+// shows the metadata and the Markdown as preformatted text -- that is what it exists for.
+// crh:snapshotRef on crh:revisionEntry stays visible: it is the one field an editor is meant to set.
+//
+// A textarea was considered and is the wrong fix. BINARY gets selectorType Text from the platform
+// whatever the label, so a real textarea would mean (string, textarea) -- which would drag up to a
+// megabyte into every metadata read (the snapshot picker deliberately reads a bounded 512-byte
+// prefix), move the payload from the datastore into the workspace bundle, and invalidate every
+// existing binary value.
 [crh:revisionSnapshot] > jnt:content, jmix:editorialContent, jmix:nolive
- - crh:snapshotDate (date) mandatory indexed=no
- - crh:language (string) mandatory indexed=no nofulltext
- - crh:contentHash (string) mandatory indexed=no nofulltext
- - crh:generatorVersion (string) mandatory indexed=no nofulltext
- - crh:capturedBy (string) mandatory indexed=no nofulltext
- - crh:sourceUrl (string) indexed=no nofulltext
- - crh:markdown (binary) mandatory indexed=no nofulltext
+ - crh:snapshotDate (date) mandatory indexed=no hidden
+ - crh:language (string) mandatory indexed=no nofulltext hidden
+ - crh:contentHash (string) mandatory indexed=no nofulltext hidden
+ - crh:generatorVersion (string) mandatory indexed=no nofulltext hidden
+ - crh:capturedBy (string) mandatory indexed=no nofulltext hidden
+ - crh:sourceUrl (string) indexed=no nofulltext hidden
+ - crh:markdown (binary) mandatory indexed=no nofulltext hidden
  // Back-references to the crh:revisionEntry nodes this snapshot is the content for. Set by
  // RevisionEntryBinder after each capture attempt; see the note on crh:revisionEntry for why
  // the reference points this way. Multiple, because an editor can author more than one entry
  // between two captures. WEAK references: an entry may be deleted, and a snapshot must never
  // block that or be dragged into referential-integrity failures -- the record of what the
  // page said outlives the editorial description of why it changed.
- - crh:entryRefs (weakreference) multiple indexed=no nofulltext
+ - crh:entryRefs (weakreference) multiple indexed=no nofulltext hidden
