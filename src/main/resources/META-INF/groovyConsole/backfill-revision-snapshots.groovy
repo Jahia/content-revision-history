@@ -210,7 +210,28 @@ def fetchMarkdown = { String path, long millis ->
                       "about the node itself."
                     : "Check BASE_URL (${baseUrl}) and that ${path} renders in the default workspace.")))
     }
-    return conn.inputStream.getText('UTF-8')
+    String body = conn.inputStream.getText('UTF-8')
+    // An empty 200 is the same hole as a 404, and it was NOT guarded. The comment above understood
+    // the danger of splicing '' into a record and then only checked the status code, so a host that
+    // answers 200 with nothing sailed straight through. Measured on a real page: every leaf returned
+    // an empty body, composition produced the page heading and nothing else, 32 instants across 5
+    // publication moments all composed to the same 27 characters, and the run stored ONE snapshot
+    // and called the other 31 "unchanged". The page had demonstrably changed.
+    if (body == null || body.trim().isEmpty()) {
+        throw new IllegalStateException(
+            "Render of ${path} at ${millis} returned HTTP 200 but an EMPTY body. Refusing to " +
+            "continue: composing '' for a node produces a snapshot that holds only the page " +
+            "heading, which would be stored as evidence and would look like a page that never " +
+            "changed.\n" +
+            "  URL  : ${url}\n" +
+            "  curl : curl -i -u '<RENDER_USER>:<RENDER_SECRET>' '${url}'\n" +
+            "BASE_URL is ${baseUrl}. If that is not this node's own HTTP connector, it is the " +
+            "cause: a public host does not always answer 404 for /cms/render/... paths, it can " +
+            "answer 200 with nothing, and an empty render is indistinguishable from a node with " +
+            "no content unless it is refused here. Try the URL above against " +
+            "http://127.0.0.1:8080 and compare.")
+    }
+    return body
 }
 
 // Checkpoints per node, filled by the gather pass below and read by compose and unresolvableAt.
@@ -400,6 +421,37 @@ def unresolvableAt = { long millis ->
 report << "page      : ${pagePath}\n"
 report << "site/lang : ${siteKey} / ${language}\n"
 report << "candidates: ${candidates.size()} version instants across the subtree\n"
+
+// A single publish checkpoints every versioned node in the subtree a few milliseconds apart, so
+// 40 instants is routinely ONE editorial event. The number of snapshots that SHOULD appear tracks
+// the number of events, not the number of instants, and without this grouping a correct run and a
+// broken one both just print "1 stored, 32 unchanged".
+final long SAME_EVENT_GAP_MS = 10000L
+def moments = []
+candidates.each { m ->
+    if (moments.isEmpty() || (m - moments[-1][-1]) > SAME_EVENT_GAP_MS) {
+        moments << [m]
+    } else {
+        moments[-1] << m
+    }
+}
+if (!candidates.isEmpty()) {
+    report << "            spanning ${new Date(candidates.first()).format('yyyy-MM-dd HH:mm:ss')}"
+    report << " to ${new Date(candidates.last()).format('yyyy-MM-dd HH:mm:ss')}\n"
+    report << "            grouped into ${moments.size()} publication moment(s)"
+    report << " (instants within ${(int) (SAME_EVENT_GAP_MS / 1000)}s treated as one)\n"
+    if (moments.size() == 1) {
+        report << "            ALL instants fall in one moment, so this page has a single publication in\n"
+        report << "            its surviving version history and ONE snapshot is the correct outcome.\n"
+    } else {
+        moments.take(8).each { g ->
+            report << "              ${new Date(g.first()).format('yyyy-MM-dd HH:mm:ss')}  ${g.size()} instant(s)\n"
+        }
+        if (moments.size() > 8) {
+            report << "              ... and ${moments.size() - 8} more\n"
+        }
+    }
+}
 report << "existing  : ${existing.size()} snapshot(s) already stored\n\n"
 
 // ------------------------------------------------------------------ the gate
@@ -490,6 +542,21 @@ if (checked == 0) {
  * in the editor. The NAME is printed beside the date because that is the value the picker stores
  * in crh:snapshotRef, so a listing here can be matched against what the edit form offers.
  */
+/** crh:markdown is stored as a binary, so it has to be streamed rather than read as a string. */
+def readMarkdown = { JCRNodeWrapper n ->
+    if (!n.hasProperty('crh:markdown')) {
+        return ''
+    }
+    def binary = n.getProperty('crh:markdown').binary
+    try {
+        return binary.stream.getText('UTF-8')
+    } catch (Exception unreadable) {
+        return ''
+    } finally {
+        try { binary.dispose() } catch (Exception ignored) { }
+    }
+}
+
 def listSnapshots = { String heading, Set<Long> writtenNow ->
     def rows = []
     JCRTemplate.instance.doExecuteWithSystemSession(null, 'default', null, { s ->
@@ -500,7 +567,11 @@ def listSnapshots = { String heading, Set<Long> writtenNow ->
                     millis: n.getProperty('crh:snapshotDate').date.timeInMillis,
                     name  : n.name,
                     by    : n.getPropertyAsString('crh:capturedBy') ?: '?',
-                    gen   : n.getPropertyAsString('crh:generatorVersion') ?: '?'
+                    gen   : n.getPropertyAsString('crh:generatorVersion') ?: '?',
+                    // crh:markdown is a BINARY property. getPropertyAsString returns nothing for
+                    // one, so reading it that way reported 0 chars for every snapshot however full
+                    // it was, and made an empty capture indistinguishable from a healthy one.
+                    md    : readMarkdown(n)
                 ]
             }
         } catch (Exception noFolderYet) { /* nothing stored for this page and language */ }
@@ -514,8 +585,10 @@ def listSnapshots = { String heading, Set<Long> writtenNow ->
     report << "\n${heading} (${rows.size()}), oldest first:\n"
     rows.each { r ->
         def mark = writtenNow.contains(r.millis) ? '  <- written by this run' : ''
+        def firstHeading = r.md.readLines().find { it.startsWith('#') } ?: '(no heading)'
         report << "  ${new Date(r.millis).format('yyyy-MM-dd HH:mm:ss.SSS')}  ${r.name}"
         report << "  by ${r.by}  gen ${r.gen}${mark}\n"
+        report << "      ${r.md.length()} chars, opens with: ${firstHeading.take(70)}\n"
     }
 }
 
@@ -545,9 +618,29 @@ if (unresolvable) {
 
 if (dryRun) {
     listSnapshots('snapshots already stored', [] as Set)
-    report << "\nDRY RUN - nothing written. Instants that WOULD be reconstructed:\n"
-    toWrite.each { report << "  ${new Date(it).format('yyyy-MM-dd HH:mm:ss.SSS')}\n" }
-    report << "  (many of these collapse by content hash once rendered)\n"
+    // A dry run now composes each instant and reports its length. Rendering is read-only, and
+    // without this the safe mode could not answer the only question that matters when a run
+    // collapses: did the instants actually compose to different text? Printing the instants alone
+    // and adding "many of these collapse once rendered" explained nothing.
+    report << "\nDRY RUN - nothing written. Composing each instant to measure it:\n"
+    def dryLengths = [:]
+    toWrite.each { millis ->
+        def md = reconstruct(millis)
+        dryLengths[millis] = (md ?: '').length()
+        report << "  ${new Date(millis).format('yyyy-MM-dd HH:mm:ss.SSS')}  ${dryLengths[millis]} chars\n"
+    }
+    def distinctDry = dryLengths.values() as Set
+    report << "\n${distinctDry.size()} distinct composed length(s) across ${dryLengths.size()} instant(s)"
+    report << (distinctDry.isEmpty() ? "\n"
+        : (distinctDry.size() == 1 ? " (${distinctDry.first()} chars every time)\n"
+            : ", ${distinctDry.min()} to ${distinctDry.max()} chars\n"))
+    if (distinctDry.size() == 1 && moments.size() > 1) {
+        report << "\nEvery instant composed to the SAME length across ${moments.size()} publication moments.\n"
+        report << "A real run would therefore store ONE snapshot. If the repository holds different\n"
+        report << "text at those instants, composition is dropping content rather than the page being\n"
+        report << "unchanged, and a length near the page title alone means the walk never reached the\n"
+        report << "leaves at all.\n"
+    }
     return report.toString()
 }
 
@@ -576,15 +669,28 @@ JCRTemplate.instance.doExecuteWithSystemSession(null, 'default', null, { s ->
 } as JCRCallback)
 
 int stored = 0, unchanged = 0
+// captureIfChanged answers with a status, and STORED is only one of them: UNCHANGED, EMPTY,
+// OVERSIZE, NOT_PUBLIC, RATE_LIMITED and FAILED are all distinct outcomes. Counting everything
+// that is not STORED as "unchanged" was how a run could report a tidy "1 stored, 32 skipped as
+// unchanged" while 32 instants had in fact produced empty markdown, or failed outright. The
+// breakdown below is printed verbatim, so the next run says which it was.
+def statusCounts = [:]
+// The composed length per instant, because identical lengths across instants that are KNOWN to
+// differ in the repository is the signature of composition dropping content rather than of a page
+// that did not change.
+def composedLengths = [:]
 // Which instants this run actually wrote, so the listing below can mark them. An instant that
 // deduped is NOT in here: nothing new was stored for it, and saying otherwise would misreport
 // what happened.
 def writtenInstants = [] as Set
 toWrite.each { millis ->
     def md = reconstruct(millis)
+    composedLengths[millis] = (md ?: '').length()
     def status = captureMethod.invoke(service, siteKey, pageUuid, language, md,
             java.time.Instant.ofEpochMilli(millis), 'reconstructed', null)
-    if (String.valueOf(status) == 'STORED') {
+    def name = String.valueOf(status)
+    statusCounts[name] = (statusCounts[name] ?: 0) + 1
+    if (name == 'STORED') {
         stored++
         writtenInstants << millis
     } else {
@@ -602,7 +708,43 @@ if (!before.isEmpty()) {
     report << "\nrestored the folder's latest-snapshot pointers to the live-capture baseline\n"
 }
 
-report << "\nstored ${stored} reconstructed snapshot(s), ${unchanged} skipped as unchanged\n"
+report << "\nstored ${stored} reconstructed snapshot(s), ${toWrite.size() - stored} not stored\n"
+report << "outcome by status, as captureIfChanged reported it:\n"
+statusCounts.sort { -it.value }.each { name, count ->
+    report << "  ${name.padRight(14)} ${count}\n"
+}
+// EMPTY and FAILED are not "nothing changed", they are the capture not happening. Saying so here
+// rather than folding them into a benign-looking count is the whole point of the breakdown.
+if (statusCounts['EMPTY']) {
+    report << "\n  EMPTY means the composition produced no text for that instant, so nothing could be\n"
+    report << "  stored. That is composition failing, not a page that did not change.\n"
+}
+if (statusCounts['FAILED']) {
+    report << "\n  FAILED means the write itself did not happen. Check the log for the cause.\n"
+}
+
+def lengths = composedLengths.values() as Set
+report << "\ncomposed markdown length across ${composedLengths.size()} instant(s): "
+report << "${lengths.size()} distinct value(s)"
+report << (lengths.size() == 1 ? " (${lengths.first()} chars every time)\n" : ", ${lengths.min()} to ${lengths.max()} chars\n")
+if (lengths.size() == 1 && moments.size() > 1) {
+    report << "  Every instant composed to the SAME length across ${moments.size()} publication moments.\n"
+    report << "  If the repository shows different text at those instants, composition is dropping\n"
+    report << "  content: compare this length against the page's own textContent lengths. A length\n"
+    report << "  close to just the page title means the walk never reached the leaves.\n"
+}
+
+// The failure this catches: a BASE_URL that does not reach Jahia directly can answer 200 with the
+// same "not found" or login page for every /cms/render path. Every render then hashes identically,
+// dedupe collapses the lot, and the run reports a tidy "1 stored, N unchanged" that looks like a
+// page which simply never changed. Distinguishing the two needs the moment count, not the hash.
+if (stored <= 1 && moments.size() > 1) {
+    report << "\nWARNING: ${moments.size()} distinct publication moments produced only ${stored} snapshot(s).\n"
+    report << "  Content published ${moments.size()} times that renders byte-identical every time is far more\n"
+    report << "  likely a fetch problem than real history. Check that the stored snapshot's\n"
+    report << "  crh:markdown holds the actual page and not an error or login page, and if BASE_URL\n"
+    report << "  is not this node's loopback connector, set it to http://127.0.0.1:8080 and re-run.\n"
+}
 
 listSnapshots('snapshots now stored for this page and language', writtenInstants)
 report << "\nTo publish any of these as a revision, add a Revision to the page's revision list and\n"

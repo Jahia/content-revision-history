@@ -56,4 +56,14 @@
         <function-signature>org.jahia.modules.revisionhistory.RevisionDiffView compare(java.lang.String, java.lang.String, java.lang.String, java.lang.String)</function-signature>
         <example>${crh:compare(currentNode.identifier, selectedFrom, selectedTo, currentResource.locale)}</example>
     </function>
+    <function>
+        <description>
+            Every text-bearing property of a node, so the generic markdown fallback emits content
+            rather than only a title. Nodes whose text lives outside jcr:title rendered empty
+            without this, which lost content silently from a record meant to be authoritative.
+        </description>
+        <name>textProperties</name>
+        <function-class>org.jahia.modules.revisionhistory.RevisionHistoryFunctions</function-class>
+        <function-signature>java.util.List textProperties(org.jahia.services.content.JCRNodeWrapper)</function-signature>
+    </function>
 </taglib>

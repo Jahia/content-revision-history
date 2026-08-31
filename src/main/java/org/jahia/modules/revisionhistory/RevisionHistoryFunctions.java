@@ -78,4 +78,102 @@ public final class RevisionHistoryFunctions {
                                            String otherIdentifier, String language) {
         return DIFF_SERVICE.compare(historyIdentifier, oneIdentifier, otherIdentifier, language);
     }
+
+    /**
+     * Every text-bearing property this node carries, so the generic markdown fallback can emit the
+     * node's content instead of only its title.
+     *
+     * <p>Written because it was missing. The fallback view emitted {@code jcr:title} and then
+     * recursed into children, so any node holding its text in some OTHER property rendered
+     * completely empty. Measured on a real advisory page: a leaf with 388 characters of stored text
+     * rendered nothing at all, every instant of a backfill composed to the page heading alone, and
+     * the run stored one snapshot for a page that had changed five times. Live capture had the same
+     * hole. Silent content loss in a record meant to be authoritative is the worst failure this
+     * module has, which is why the fallback must emit content it was not specialised for rather
+     * than quietly emit nothing.
+     *
+     * <p>Only single-valued strings are returned, and system namespaces are skipped: {@code jcr:}
+     * and {@code j:} carry structure and publication bookkeeping, never prose. Ordering is
+     * alphabetical by property name, not definition order, because a snapshot is diffed against
+     * its neighbours and a stable order matters more than a natural one.
+     *
+     * <p>The trade-off is deliberate: a non-prose string property (a link target, say) will appear
+     * in the snapshot. Emitting a little too much is recoverable by specialising a view for that
+     * type; emitting nothing loses the record and looks like success.
+     *
+     * @return the values, never null, in a stable order
+     */
+    public static java.util.List<String> textProperties(org.jahia.services.content.JCRNodeWrapper node) {
+        java.util.List<String> values = new java.util.ArrayList<>();
+        if (node == null) {
+            return values;
+        }
+        java.util.SortedMap<String, String> byName = new java.util.TreeMap<>();
+        try {
+            javax.jcr.PropertyIterator properties = node.getProperties();
+            while (properties.hasNext()) {
+                javax.jcr.Property property = properties.nextProperty();
+                String name = property.getName();
+                if (name.startsWith("jcr:") || name.startsWith("j:")) {
+                    continue;
+                }
+                try {
+                    if (property.isMultiple() || property.getType() != javax.jcr.PropertyType.STRING) {
+                        continue;
+                    }
+                    String value = property.getString();
+                    if (value != null && !value.trim().isEmpty()) {
+                        byName.put(name, value);
+                    }
+                } catch (RepositoryException unreadable) {
+                    // One unreadable property must not cost the whole node its content.
+                    LOGGER.warn("Could not read property {} of {}, skipping it", name, node.getPath(), unreadable);
+                }
+            }
+        } catch (RepositoryException cannotList) {
+            LOGGER.warn("Could not list the properties of {}; its text will be missing from the"
+                    + " snapshot", safePath(node), cannotList);
+            return values;
+        }
+        values.addAll(byName.values());
+        if (values.isEmpty() && !hasChildren(node)) {
+            // The loud fall-through the design asked for. A node that contributes neither text nor
+            // children is content that vanished from the record, and it must not do so in silence.
+            LOGGER.warn("Node {} of type {} contributed NO text and has no children, so nothing of"
+                    + " it reaches the snapshot. If it holds content, the markdown template type"
+                    + " needs a view for that type.", safePath(node), safeType(node));
+        }
+        return values;
+    }
+
+    private static boolean hasChildren(org.jahia.services.content.JCRNodeWrapper node) {
+        try {
+            javax.jcr.NodeIterator children = node.getNodes();
+            while (children.hasNext()) {
+                if (!children.nextNode().getName().startsWith("j:")) {
+                    return true;
+                }
+            }
+        } catch (RepositoryException cannotList) {
+            // Assume children rather than log a second warning for the same node.
+            return true;
+        }
+        return false;
+    }
+
+    private static String safePath(org.jahia.services.content.JCRNodeWrapper node) {
+        try {
+            return node.getPath();
+        } catch (Exception unavailable) {
+            return "(path unavailable)";
+        }
+    }
+
+    private static String safeType(org.jahia.services.content.JCRNodeWrapper node) {
+        try {
+            return node.getPrimaryNodeTypeName();
+        } catch (Exception unavailable) {
+            return "(type unavailable)";
+        }
+    }
 }

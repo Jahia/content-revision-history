@@ -983,4 +983,77 @@ describe('Revision comparison (entry binding + diff viewer)', () => {
             );
         });
     });
+
+    // ---------------------------------------------------------------- pinning
+
+    /**
+     * Reported from a real page: two revisions pinned to two reconstructed snapshots could not be
+     * compared, and the panel said "No snapshot of the page was recorded for this revision" while
+     * both snapshots existed and both entries named one.
+     *
+     * crh:entryRefs, which the comparison reads, is written by RevisionEntryBinder, and the binder
+     * runs only after a capture, which happens only on publication. So an entry pinned by hand and
+     * not followed by a publication was invisible to the comparison. That is the NORMAL workflow for
+     * backfilled history, where every entry has to be pinned to a historical snapshot by hand.
+     *
+     * This entry is deliberately NEVER published after being created: publishing would run a
+     * capture, the binder would bind it, and the test would pass for the wrong reason.
+     *
+     * Mutation-checked: removing the crh:snapshotRef pass from RevisionDiffService.snapshotsFor
+     * fails this test with the exact message above.
+     */
+    it('compares a revision pinned by hand, with no publication to bind it', () => {
+        const namesQuery = gql`
+            query($path: String!) {
+                jcr(workspace: EDIT) {
+                    nodeByPath(path: $path) { children { nodes { name } } }
+                }
+            }
+        `;
+
+        let pinnedUuid = '';
+        cy.apollo({query: namesQuery, variables: {path: folderPath()}})
+            .then((result: ApolloResult<{jcr: {nodeByPath?: {children: {nodes: Array<{name: string}>}}}}>) => {
+                const names = (result.data?.jcr?.nodeByPath?.children.nodes ?? [])
+                    .map(n => n.name).sort();
+                expect(names.length, 'the earlier tests must have captured snapshots')
+                    .to.be.greaterThan(1);
+
+                // The OLDEST snapshot, so the pin points somewhere the binder would never choose:
+                // the binder always binds to the current one.
+                return addNode({
+                    parentPathOrId: historyPath,
+                    primaryNodeType: 'crh:revisionEntry',
+                    name: 'rev-pinned',
+                    properties: [
+                        {name: 'revisionLabel', value: '9.0'},
+                        {name: 'revisionDate', value: new Date().toISOString(), type: 'DATE'},
+                        {name: 'changeType', value: 'substantive'},
+                        {name: 'summary', value: '<p>Pinned by hand.</p>', language},
+                        // crh:snapshotRef carries the prefix, unlike the four properties above.
+                        // The CND declares it that way, and using the bare name here created the
+                        // entry with no pin at all, silently.
+                        {name: 'crh:snapshotRef', value: names[0]}
+                    ]
+                });
+            })
+            .then((result: ApolloResult<AddNodeQueryData>) => {
+                expect(result.errors, 'the pinned entry must be creatable').to.be.undefined;
+                pinnedUuid = result.data?.jcr.addNode.uuid as string;
+                expect(pinnedUuid, 'the pinned entry must have an identifier').to.not.be.undefined;
+
+                return cy.request<string>({
+                    url: `/cms/render/default/${language}${pagePath}.html`
+                        + comparisonUrl(pinnedUuid, firstEntryUuid),
+                    failOnStatusCode: false
+                });
+            })
+            .then(response => {
+                expect(response.status).to.equal(200);
+                expect(response.body, 'a pinned revision must not report a missing snapshot')
+                    .to.not.contain('No snapshot of the page was recorded for this revision');
+                expect(response.body, 'nor a missing previous snapshot')
+                    .to.not.contain('No snapshot of the page was recorded for the previous revision');
+            });
+    });
 });

@@ -301,6 +301,37 @@ public class RevisionDiffService {
                 byEntry.put(value.getString(), snapshot);
             }
         }
+
+        // An entry that NAMES its snapshot is honoured here as well as through the back-reference.
+        //
+        // crh:entryRefs is written by RevisionEntryBinder, and the binder runs only after a capture,
+        // which happens only on publication. So an editor who pins an entry to a snapshot and does
+        // not publish afterwards had a comparison that answered "No snapshot of the page was
+        // recorded for this revision" while the snapshot existed and the entry named it. That is the
+        // normal workflow for BACKFILLED history, where every entry has to be pinned by hand to a
+        // historical snapshot, so the one case that most needs comparing was the one that could not.
+        //
+        // The pin wins over the back-reference when both exist: it is an explicit editorial
+        // statement about which snapshot a revision describes, and the binder's automatic choice is
+        // a default. Resolution is by name within THIS page-and-language folder only, exactly as the
+        // binder does it, so an editor-supplied value cannot reach anything else in the repository.
+        for (JCRNodeWrapper entry : history.getNodes()) {
+            if (!entry.isNodeType(ENTRY_TYPE) || !entry.hasProperty(PROP_SNAPSHOT_REF)) {
+                continue;
+            }
+            String name = entry.getProperty(PROP_SNAPSHOT_REF).getString();
+            if (name == null || name.trim().isEmpty()) {
+                continue;
+            }
+            JCRNodeWrapper pinned = snapshotNamed(folder, name.trim());
+            if (pinned != null) {
+                byEntry.put(entry.getIdentifier(), pinned);
+            } else {
+                logger.warn("Revision {} names snapshot '{}', which is not a snapshot of {} [{}];"
+                        + " the comparison will fall back to the bound snapshot, if any",
+                        entry.getPath(), name, page.getPath(), language);
+            }
+        }
         return byEntry;
     }
 
@@ -334,6 +365,25 @@ public class RevisionDiffService {
         try {
             return session.getNodeByIdentifier(identifier);
         } catch (RepositoryException gone) { // includes ItemNotFoundException
+            return null;
+        }
+    }
+
+    /**
+     * Resolves a snapshot name against ONE page-and-language folder, never as a path.
+     *
+     * <p>The value is editor-supplied, so it is looked up as a child of the folder rather than
+     * interpolated: a name carrying a separator or a parent reference cannot reach another page's
+     * history. Mirrors RevisionEntryBinder deliberately; the two must agree about what a pin means.
+     */
+    private JCRNodeWrapper snapshotNamed(JCRNodeWrapper folder, String name) {
+        if (name.indexOf('/') >= 0 || name.indexOf('\\') >= 0 || ".".equals(name) || "..".equals(name)) {
+            return null;
+        }
+        try {
+            JCRNodeWrapper snapshot = folder.getNode(name);
+            return snapshot.isNodeType(SNAPSHOT_TYPE) ? snapshot : null;
+        } catch (RepositoryException notThere) {
             return null;
         }
     }

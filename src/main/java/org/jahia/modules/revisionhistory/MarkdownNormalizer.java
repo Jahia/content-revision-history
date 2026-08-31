@@ -42,7 +42,7 @@ public final class MarkdownNormalizer {
      * Stamped on every snapshot so the diff viewer can flag "formatting change" instead of
      * showing spurious churn between snapshots produced by different generators.
      */
-    public static final String GENERATOR_VERSION = "4";
+    public static final String GENERATOR_VERSION = "5";
 
     /**
      * Defensive cap on raw view output accepted for normalization. This runs on a live render
