@@ -15,7 +15,7 @@ import java.io.IOException;
 public class RevisionHistoryMutation {
 
     @GraphQLField
-    @GraphQLDescription("Writes this site's settings. Requires the site-admin permission on that"
+    @GraphQLDescription("Writes this site's settings. Requires the siteAdminContentRevisionHistory permission on that"
             + " site. Returns the settings as they now stand.")
     public GqlSiteSettings saveSiteSettings(
             @GraphQLName("siteKey") @GraphQLNonNull String siteKey,
@@ -49,7 +49,7 @@ public class RevisionHistoryMutation {
 
     @GraphQLField
     @GraphQLDescription("Removes this site's settings, returning it to the module defaults."
-            + " Requires the site-admin permission on that site.")
+            + " Requires the siteAdminContentRevisionHistory permission on that site.")
     public boolean deleteSiteSettings(@GraphQLName("siteKey") @GraphQLNonNull String siteKey) {
         SiteSettingsAccess.requireSiteAdmin(siteKey);
         try {

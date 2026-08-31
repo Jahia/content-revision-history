@@ -2,8 +2,10 @@ package org.jahia.modules.revisionhistory;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.osgi.service.cm.ConfigurationException;
 
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Hashtable;
 
@@ -272,6 +274,80 @@ class SiteSettingsRegistryTest {
         assertFalse(first.isCaptureEnabled());
         assertEquals(30, first.getMaxSnapshots());
         assertEquals("crh-academy", first.getCaptureUser());
+    }
+
+    // ------------------------------------------------------------------ writing the file
+
+    /**
+     * Every field the panel can edit has to survive save-then-reload.
+     *
+     * <p>Written after capture.baseUrl did not. The resolver accepted it, withChanges carried it and
+     * the mutation returned it, so a test of any one of those passed; save() simply never wrote the
+     * key, and the value came back null on the next read. Only a round trip through the file catches
+     * a field that is missing from the writer, which is why this asserts on a reloaded registry
+     * rather than on the object it just saved.
+     */
+    @Test
+    @DisplayName("every edited field survives save and reload, baseUrl included")
+    void saveRoundTripsEveryField(@TempDir Path etc) throws Exception {
+        String previousEtc = System.getProperty("karaf.etc");
+        System.setProperty("karaf.etc", etc.toString());
+        try {
+            SiteCaptureSettings edited = SiteCaptureSettings.DEFAULTS
+                    .withChanges("academy", false, 7, "crh-academy", "http://127.0.0.1:8080");
+            registry.save(edited);
+
+            Path written = registry.configFile("academy");
+            assertTrue(Files.exists(written), "save must produce the site's file");
+
+            // Reload through the same path Felix FileInstall uses, so the assertion covers the
+            // writer and the reader together.
+            java.util.Properties reloaded = new java.util.Properties();
+            try (java.io.InputStream in = Files.newInputStream(written)) {
+                reloaded.load(in);
+            }
+            Hashtable<String, Object> asProps = new Hashtable<>();
+            reloaded.stringPropertyNames().forEach(k -> asProps.put(k, reloaded.getProperty(k)));
+
+            SiteSettingsRegistry reader = new SiteSettingsRegistry();
+            reader.updated("pid-reload", asProps);
+            SiteCaptureSettings back = reader.forSite("academy");
+
+            assertEquals("http://127.0.0.1:8080", back.getBaseUrl(),
+                    "baseUrl must be written, not just accepted");
+            assertEquals(7, back.getMaxSnapshots());
+            assertEquals("crh-academy", back.getCaptureUser());
+            assertFalse(back.isCaptureEnabled());
+        } finally {
+            if (previousEtc == null) {
+                System.clearProperty("karaf.etc");
+            } else {
+                System.setProperty("karaf.etc", previousEtc);
+            }
+        }
+    }
+
+    /** An unset baseUrl must stay absent, so the node default keeps applying. */
+    @Test
+    @DisplayName("an unset baseUrl is omitted from the file rather than written empty")
+    void unsetBaseUrlIsOmitted(@TempDir Path etc) throws Exception {
+        String previousEtc = System.getProperty("karaf.etc");
+        System.setProperty("karaf.etc", etc.toString());
+        try {
+            registry.save(SiteCaptureSettings.DEFAULTS
+                    .withChanges("academy", true, 10, null, null));
+
+            String body = new String(Files.readAllBytes(registry.configFile("academy")),
+                    java.nio.charset.StandardCharsets.UTF_8);
+            assertFalse(body.contains(SiteSettingsRegistry.PROP_BASE_URL + " ="),
+                    "an absent key means the node default applies; an empty value would override it");
+        } finally {
+            if (previousEtc == null) {
+                System.clearProperty("karaf.etc");
+            } else {
+                System.setProperty("karaf.etc", previousEtc);
+            }
+        }
     }
 
     @Test

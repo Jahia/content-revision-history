@@ -42,12 +42,13 @@
     </licenses>
 
     <properties>
+        <skip.frontend>false</skip.frontend>
         <!-- The parent interpolates this into Jahia-Source-Folders. Left at its default it
              becomes the absolute path of whoever built the jar, which then ships in the manifest
              of a released artifact and points at a directory no customer has. Blank is the whole
              fix: dev-mode source mounting is a local convenience, not something to publish. -->
         <sourcesRoot></sourcesRoot>
-        <jahia-depends>default</jahia-depends>
+        <jahia-depends>default,siteSettings,graphql-dxm-provider</jahia-depends>
         <jahia-module-type>module</jahia-module-type>
         <!-- No Spring, no blueprint extender: this is a plain OSGi module and its one code
              extension point is a Declarative Services component. The blueprint route needed an
@@ -167,6 +168,49 @@
                         <_dsannotations>*</_dsannotations>
                     </instructions>
                 </configuration>
+            </plugin>
+            <!-- The frontend build. Bound to generate-resources so the bundle plugin finds the
+                 output in src/main/resources/javascript/apps.
+
+                 skip.frontend exists because this is otherwise a pure-Java module: the plugin
+                 downloads a node distribution on first run, so `mvn -o` in a fresh checkout would
+                 fail with no network. Anyone touching only Java can pass -Dskip.frontend=true, and
+                 CI leaves it false. -->
+            <plugin>
+                <groupId>com.github.eirslett</groupId>
+                <artifactId>frontend-maven-plugin</artifactId>
+                <version>1.15.0</version>
+                <configuration>
+                    <installDirectory>${project.build.directory}/node</installDirectory>
+                    <skip>${skip.frontend}</skip>
+                </configuration>
+                <executions>
+                    <execution>
+                        <id>install-node-and-yarn</id>
+                        <goals><goal>install-node-and-yarn</goal></goals>
+                        <phase>generate-resources</phase>
+                        <configuration>
+                            <nodeVersion>v22.6.0</nodeVersion>
+                            <yarnVersion>v1.22.21</yarnVersion>
+                        </configuration>
+                    </execution>
+                    <execution>
+                        <id>yarn-install</id>
+                        <goals><goal>yarn</goal></goals>
+                        <phase>generate-resources</phase>
+                        <configuration>
+                            <arguments>install</arguments>
+                        </configuration>
+                    </execution>
+                    <execution>
+                        <id>yarn-build</id>
+                        <goals><goal>yarn</goal></goals>
+                        <phase>generate-resources</phase>
+                        <configuration>
+                            <arguments>build:production</arguments>
+                        </configuration>
+                    </execution>
+                </executions>
             </plugin>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>

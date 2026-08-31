@@ -207,6 +207,11 @@ public class SiteSettingsRegistry implements ManagedServiceFactory {
         if (settings.getCaptureUser() != null) {
             body.append(PROP_USER).append(" = ").append(settings.getCaptureUser()).append('\n');
         }
+        // Omitted rather than written empty when unset: an empty value would read back as an empty
+        // string and override the node default, whereas an absent key means "use the default".
+        if (settings.getBaseUrl() != null) {
+            body.append(PROP_BASE_URL).append(" = ").append(settings.getBaseUrl()).append('\n');
+        }
         Path temp = Files.createTempFile(target.getParent(), target.getFileName().toString(), ".tmp");
         Files.write(temp, body.toString().getBytes(StandardCharsets.UTF_8));
         try {

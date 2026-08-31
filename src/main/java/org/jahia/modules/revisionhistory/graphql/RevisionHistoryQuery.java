@@ -20,7 +20,7 @@ public class RevisionHistoryQuery {
 
     @GraphQLField
     @GraphQLDescription("Revision capture settings for one site."
-            + " Requires the site-admin permission on that site.")
+            + " Requires the siteAdminContentRevisionHistory permission on that site.")
     public GqlSiteSettings getSiteSettings(
             @GraphQLName("siteKey") @GraphQLNonNull String siteKey) {
         SiteSettingsAccess.requireSiteAdmin(siteKey);

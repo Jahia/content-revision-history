@@ -14,16 +14,23 @@ import org.slf4j.LoggerFactory;
  * <p>Deliberately not per resolver: an unguarded resolver added later is the failure this shape is
  * meant to make hard, and a single method is easier to audit than four call sites.
  *
- * <p>The permission checked is {@code site-admin} on {@code /sites/<siteKey>}, evaluated against the
- * CURRENT user's own session. Measured on 8.2.x: root has it, an editor with {@code jcr:write} on the
- * same site does not -- so writing content does not imply administering the module's capture
+ * <p>The permission is evaluated on {@code /sites/<siteKey>} against the CURRENT user's own session.
+ * Measured on 8.2.x for the parent {@code site-admin}: root has it, an editor with {@code jcr:write}
+ * on the same site does not -- so writing content does not imply administering the module's capture
  * settings, which is the distinction that matters here.
  */
 final class SiteSettingsAccess {
 
     private static final Logger logger = LoggerFactory.getLogger(SiteSettingsAccess.class);
 
-    private static final String SITE_ADMIN = "site-admin";
+    /**
+     * The module's own permission, declared in {@code src/main/import/permissions.xml} as a child of
+     * {@code site-admin}. Jahia permissions are hierarchical, so a role granting the whole
+     * {@code site-admin} group grants this one too and no role has to be edited on upgrade; naming
+     * it separately is what lets an administrator revoke JUST this module without revoking site
+     * administration.
+     */
+    private static final String PERMISSION = "siteAdminContentRevisionHistory";
 
     private SiteSettingsAccess() {
     }
@@ -58,7 +65,7 @@ final class SiteSettingsAccess {
         String path = "/sites/" + siteKey;
         try {
             JCRSessionWrapper viewer = JCRSessionFactory.getInstance().getCurrentUserSession();
-            if (viewer != null && viewer.getNode(path).hasPermission(SITE_ADMIN)) {
+            if (viewer != null && viewer.getNode(path).hasPermission(PERMISSION)) {
                 return;
             }
         } catch (Exception denied) {
@@ -68,7 +75,7 @@ final class SiteSettingsAccess {
             logger.debug("Refusing site settings access to {}", path, denied);
         }
         throw new BaseGqlClientException(
-                "The " + SITE_ADMIN + " permission on " + path + " is required",
+                "The " + PERMISSION + " permission on " + path + " is required",
                 ErrorType.DataFetchingException);
     }
 }

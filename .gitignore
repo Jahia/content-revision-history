@@ -7,3 +7,13 @@ target/
 # Written by the Jahia module build beside src/main/import/repository.xml (the comments are
 # stripped and the XML normalised). It is a build output, not a source file.
 src/main/import/*.generated
+# Only the webpack OUTPUT is generated. Ignoring the whole javascript/ directory also hid
+# javascript/locales/*.json, which are hand-written sources: they silently never got committed
+# and a clean checkout built a module whose every label rendered as its translation key.
+src/main/resources/javascript/apps/
+
+# Frontend build, run from the module root by frontend-maven-plugin
+node_modules/
+/node/
+yarn-error.log
+.yarn-integrity
