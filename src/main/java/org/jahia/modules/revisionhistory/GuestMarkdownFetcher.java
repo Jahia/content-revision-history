@@ -89,6 +89,15 @@ final class GuestMarkdownFetcher {
      */
     private final String pinnedBaseUrl;
 
+    /**
+     * The site being captured, so {@link #getBaseUrl()} can prefer that site's endpoint.
+     *
+     * <p>Set per fetch on a single object because the fetcher is a static singleton. Captures run on
+     * Quartz worker threads, so this is a ThreadLocal rather than a field: two sites publishing at
+     * once must not read each other's endpoint.
+     */
+    private final ThreadLocal<String> siteKeyForFetch = new ThreadLocal<>();
+
     GuestMarkdownFetcher() {
         this.pinnedBaseUrl = null;
     }
@@ -105,7 +114,23 @@ final class GuestMarkdownFetcher {
      *                    publication rather than random, so a retry reuses one cache entry
      *                    instead of creating another.
      */
+    /** Kept for the existing tests, which do not care which site a page belongs to. */
     Fetched fetch(String pagePath, String language, long cacheBuster) {
+        return fetch(pagePath, language, cacheBuster, null);
+    }
+
+    Fetched fetch(String pagePath, String language, long cacheBuster, String siteKey) {
+        siteKeyForFetch.set(siteKey);
+        try {
+            return doFetch(pagePath, language, cacheBuster);
+        } finally {
+            // Quartz reuses worker threads, so a value left behind would be read by the next
+            // capture on this thread -- a different site's endpoint.
+            siteKeyForFetch.remove();
+        }
+    }
+
+    private Fetched doFetch(String pagePath, String language, long cacheBuster) {
         String url;
         try {
             url = buildUrl(pagePath, language, cacheBuster);
@@ -123,7 +148,7 @@ final class GuestMarkdownFetcher {
             connection.setReadTimeout(READ_TIMEOUT_MILLIS);
             // No cookie, ever: a session would make the render resolve to whoever last used
             // it. The identity comes from configuration and nowhere else.
-            String authorization = CaptureIdentity.authorization();
+            String authorization = authorizationFor(siteKeyForFetch.get());
             if (authorization != null) {
                 connection.setRequestProperty("Authorization", authorization);
             }
@@ -444,11 +469,30 @@ final class GuestMarkdownFetcher {
                 + " = https://127.0.0.1:8443) in the module configuration; it applies without a restart.";
     }
 
+    /**
+     * Which principal captures this site.
+     *
+     * <p>A site's own capture user wins; otherwise the module-wide one applies. Falling back rather
+     * than refusing matters for an upgrade: every site that had no per-site configuration keeps
+     * capturing exactly as it did, with the global account.
+     *
+     * <p>Package-private so the precedence is pinned by a test rather than inferred from two call
+     * sites.
+     */
+    static String authorizationFor(String siteKey) {
+        String perSite = SiteSettingsRegistry.settingsFor(siteKey).getAuthorization();
+        return perSite != null ? perSite : CaptureIdentity.authorization();
+    }
+
     private static String stripTrailingSlash(String url) {
         return url.endsWith("/") ? url.substring(0, url.length() - 1) : url;
     }
 
     String getBaseUrl() {
-        return pinnedBaseUrl != null ? pinnedBaseUrl : resolveBaseUrl();
+        if (pinnedBaseUrl != null) {
+            return pinnedBaseUrl;
+        }
+        String perSite = SiteSettingsRegistry.settingsFor(siteKeyForFetch.get()).getBaseUrl();
+        return perSite != null ? perSite : resolveBaseUrl();
     }
 }

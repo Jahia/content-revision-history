@@ -24,5 +24,14 @@ public enum CaptureStatus {
     /** The guest render did not return 200, or the page is not publicly readable. */
     NOT_PUBLIC,
     /** Rendering or storing threw. */
+    /**
+     * Capture is switched off for this site.
+     *
+     * <p>Recorded rather than passed over in silence: the folder's crh:lastCaptureStatus is what
+     * makes a gap in the record self-explaining, and "someone turned this off" is a different
+     * answer from "the content did not change" or "the capture failed".
+     */
+    DISABLED,
+
     FAILED
 }

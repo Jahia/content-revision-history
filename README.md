@@ -420,6 +420,68 @@ Two constraints worth knowing:
 Initial JCR content is imported **once per module version**, so changing `repository.xml` requires
 a version bump to take effect.
 
+## Per-site configuration
+
+Three settings can differ per site. Each site that needs its own gets one file in
+`karaf/etc`, and a site with no file behaves exactly as the module did before per-site settings
+existed — an upgrade must not change what gets captured.
+
+```properties
+# karaf/etc/org.jahia.modules.revisionhistory.site-academy.cfg
+
+siteKey                 = academy      # required: what says which site this file is for
+capture.enabled         = true         # false stops capture without touching any page
+retention.maxSnapshots  = 500          # per page and language, oldest pruned first
+capture.user            = crh-academy  # optional; the account capture renders as
+capture.secretFile      = /etc/jahia/crh-academy.secret
+capture.baseUrl         =              # rarely needed; see below
+```
+
+Changes apply without a restart: Felix FileInstall delivers the file to the module in a few
+seconds.
+
+### `capture.baseUrl`, and why it is almost never what you want per site
+
+It can be set per site, and it usually should not be. It addresses **this node's own HTTP
+connector** — not the site's public address. A public host has SEO URL rewriting and usually a
+reverse proxy in front, and those rewrite or refuse the `/cms/render/...` paths capture asks for.
+The symptom is a flat HTTP 404 on **every** page of that site, whatever its type, its version count,
+or the rights of the capture principal, reported as `FAILED`.
+
+There is also no content-correctness reason to reach for the public host. Measured on 8.2.x:
+
+- fetching over loopback puts **no** `127.0.0.1` into a snapshot — site-relative links stay relative
+- the same page fetched with `Host: <public name>` and without produces **byte-identical** output,
+  so the request host does not change what Jahia generates
+
+An absolute URL *does* appear in a snapshot when an editor authored one. That is the record being
+faithful, and the capture endpoint has no bearing on it.
+
+A non-loopback value is accepted — an unusual deployment may genuinely need one — and logged as a
+warning naming the site.
+
+### Not per-site at all
+
+**Rate limits** protect the node rather than the site. Several sites each staying under their own
+limit could still overwhelm it together, so per-site would be the wrong axis.
+
+### Why a file rather than ConfigurationAdmin
+
+A factory configuration created through `ConfigurationAdmin.createFactoryConfiguration` is
+bundle-scoped: it lives under `bundleNN/data/config` and is orphaned or dropped when the bundle is
+reinstalled, or when a default `.cfg` later ships for the same factory pid. That loses a site's
+configuration on a restart, silently. A file under `karaf/etc` survives reinstalls and is what an
+administrator can back up, diff, and keep in configuration management.
+
+The file name is a convention for humans; the `siteKey` **property** is what the module trusts. It
+is validated as one safe path segment before it is ever interpolated into a file name.
+
+### Turning capture off for a site
+
+`capture.enabled = false` records `DISABLED` against the page rather than passing over it in
+silence. The folder's `crh:lastCaptureStatus` is what makes a gap in the record self-explaining, and
+"someone turned this off" is a different answer from "the content did not change".
+
 ## Storage layout
 
 ```

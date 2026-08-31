@@ -100,15 +100,31 @@ public class CaptureIdentity {
     }
 
     private static String resolve(Map<String, Object> properties) {
-        String user = trimmed(properties, PROP_USER);
+        return authorizationFrom(trimmed(properties, PROP_USER),
+                trimmed(properties, PROP_SECRET_FILE),
+                properties == null || properties.get(PROP_SECRET) == null
+                        ? null : String.valueOf(properties.get(PROP_SECRET)));
+    }
+
+    /**
+     * The credential rules, in one place, for the global configuration and the per-site one alike.
+     *
+     * <p>Extracted rather than duplicated because the important rule is easy to get subtly wrong:
+     * a user configured WITHOUT a usable secret must leave capture anonymous AND must not be
+     * claimed as the principal, or a snapshot would name an account that never fetched it. Two
+     * implementations of that would eventually disagree.
+     *
+     * @return the Authorization header, or {@code null} when capture should stay anonymous
+     */
+    static String authorizationFrom(String user, String secretFile, String secret) {
         if (user == null) {
             logger.info("No {} configured: capture renders stay anonymous. Pages the public"
                     + " cannot read will report NOT_PUBLIC and have no revision history.",
                     PROP_USER);
             return null;
         }
-        String secret = secretFor(properties);
-        if (secret == null) {
+        String resolved = secretFrom(secretFile, secret);
+        if (resolved == null) {
             // Falling back to anonymous here would be worse than refusing: the operator asked
             // for a principal precisely so restricted pages could be captured, and anonymous
             // capture cannot do that. It would look configured and quietly not be.
@@ -121,12 +137,11 @@ public class CaptureIdentity {
         logger.info("Capture renders will authenticate as '{}'. Snapshots will contain whatever"
                 + " that account can read, so the revision history component should be shown"
                 + " only to an audience entitled to see it.", user);
-        return basicAuthorization(user, secret);
+        return basicAuthorization(user, resolved);
     }
 
     /** File first: a path can be permission-restricted, a configuration value cannot. */
-    private static String secretFor(Map<String, Object> properties) {
-        String file = trimmed(properties, PROP_SECRET_FILE);
+    private static String secretFrom(String file, String direct) {
         if (file != null) {
             try {
                 for (String line : Files.readAllLines(Paths.get(file), StandardCharsets.UTF_8)) {
@@ -141,9 +156,7 @@ public class CaptureIdentity {
             }
             return null;
         }
-        Object direct = properties == null ? null : properties.get(PROP_SECRET);
-        String value = direct == null ? null : String.valueOf(direct);
-        return value == null || value.isEmpty() ? null : value;
+        return direct == null || direct.isEmpty() ? null : direct;
     }
 
     private static String trimmed(Map<String, Object> properties, String key) {

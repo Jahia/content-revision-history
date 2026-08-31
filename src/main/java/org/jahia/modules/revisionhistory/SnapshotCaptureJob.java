@@ -107,6 +107,16 @@ public class SnapshotCaptureJob extends BackgroundJob {
     }
 
     private void capture(PageRef page, String language, Instant captureInstant, long cacheBuster) {
+        // Checked before the rate limiter: a disabled site must not consume a site's allowance, and
+        // must not be reported as rate limited when it was simply switched off.
+        if (!SiteSettingsRegistry.settingsFor(page.siteKey).isCaptureEnabled()) {
+            logger.info("Capture is disabled for site {}; page {} [{}] is not captured",
+                    page.siteKey, page.uuid, language);
+            snapshotService.recordStatus(page.siteKey, page.uuid, language,
+                    CaptureStatus.DISABLED, "Capture is disabled for this site");
+            return;
+        }
+
         if (!LIMITER.tryAcquire(page.uuid, language, System.currentTimeMillis())) {
             logger.warn("Capture for page {} [{}] refused by the rate limiter", page.uuid, language);
             snapshotService.recordStatus(page.siteKey, page.uuid, language,
@@ -126,7 +136,7 @@ public class SnapshotCaptureJob extends BackgroundJob {
             return;
         }
         GuestMarkdownFetcher.Fetched fetched =
-                FetcherHolder.INSTANCE.fetch(page.path, language, cacheBuster);
+                FetcherHolder.INSTANCE.fetch(page.path, language, cacheBuster, page.siteKey);
         if (!fetched.isOk()) {
             logger.warn("No snapshot for page {} [{}]: {} ({})", page.path, language,
                     fetched.status, fetched.message);

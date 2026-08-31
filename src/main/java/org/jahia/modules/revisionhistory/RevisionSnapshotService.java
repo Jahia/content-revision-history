@@ -159,7 +159,7 @@ public class RevisionSnapshotService {
             return CaptureStatus.UNCHANGED;
         }
 
-        long kept = pruneIfNeeded(folder);
+        long kept = pruneIfNeeded(folder, siteKey);
         createSnapshot(session, folder, name, language, payload, contentHash,
                 instant, principal, sourceUrl);
         updateFolderState(folder, name, contentHash, kept + 1, instant);
@@ -390,7 +390,8 @@ public class RevisionSnapshotService {
     }
 
     /**
-     * Enforces {@link RevisionHistoryConstants#MAX_SNAPSHOTS_PER_PAGE_LANGUAGE}.
+     * Enforces this site's retention: {@code retention.maxSnapshots}, defaulting to
+     * {@link RevisionHistoryConstants#MAX_SNAPSHOTS_PER_PAGE_LANGUAGE}.
      *
      * <p>Only enumerates children once the denormalised counter says the cap is in reach, so
      * the common path stays O(1). Pruned snapshots are counted into
@@ -399,9 +400,10 @@ public class RevisionSnapshotService {
      *
      * @return the number of snapshots remaining in the folder
      */
-    private long pruneIfNeeded(JCRNodeWrapper folder) throws RepositoryException {
+    private long pruneIfNeeded(JCRNodeWrapper folder, String siteKey) throws RepositoryException {
+        int maxSnapshots = SiteSettingsRegistry.settingsFor(siteKey).getMaxSnapshots();
         long count = longProperty(folder, PROP_SNAPSHOT_COUNT, -1);
-        if (count >= 0 && count < MAX_SNAPSHOTS_PER_PAGE_LANGUAGE) {
+        if (count >= 0 && count < maxSnapshots) {
             return count;
         }
         List<String> names = new ArrayList<>();
@@ -411,7 +413,7 @@ public class RevisionSnapshotService {
             }
         }
         Collections.sort(names);
-        int excess = names.size() - (MAX_SNAPSHOTS_PER_PAGE_LANGUAGE - 1);
+        int excess = names.size() - (maxSnapshots - 1);
         long pruned = 0;
         for (int i = 0; i < excess; i++) {
             folder.getNode(names.get(i)).remove();
@@ -420,7 +422,7 @@ public class RevisionSnapshotService {
         if (pruned > 0) {
             folder.setProperty(PROP_PRUNED_COUNT, longProperty(folder, PROP_PRUNED_COUNT, 0) + pruned);
             logger.warn("Pruned {} oldest snapshot(s) under {} to stay within the cap of {}",
-                    pruned, folder.getPath(), MAX_SNAPSHOTS_PER_PAGE_LANGUAGE);
+                    pruned, folder.getPath(), maxSnapshots);
         }
         return names.size() - pruned;
     }
