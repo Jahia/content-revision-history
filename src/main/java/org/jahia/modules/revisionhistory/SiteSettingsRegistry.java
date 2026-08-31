@@ -92,6 +92,11 @@ public class SiteSettingsRegistry implements ManagedServiceFactory {
      * @return the settings for a site, or the module defaults when the component is not running.
      *         Never null: capture must keep working while configuration is being replaced.
      */
+    /** @return the running component, or null when the module is not active on this node */
+    public static SiteSettingsRegistry active() {
+        return instance;
+    }
+
     public static SiteCaptureSettings settingsFor(String siteKey) {
         SiteSettingsRegistry current = instance;
         return current == null ? SiteCaptureSettings.DEFAULTS : current.forSite(siteKey);

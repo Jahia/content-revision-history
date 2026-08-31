@@ -258,4 +258,36 @@ class SiteSettingsRegistryTest {
         assertTrue(registry.forSite("academy").toString().contains("http://127.0.0.1:8009"));
         assertTrue(SiteCaptureSettings.DEFAULTS.toString().contains("(node default)"));
     }
+
+    @Test
+    @DisplayName("configuring a site that has none starts from the defaults and keeps its key")
+    void firstSaveForASiteCarriesTheSiteKey() {
+        // The common case, and the one that breaks if withChanges reuses its own siteKey: the
+        // caller starts from DEFAULTS, whose key is null, and a file written with no siteKey fails
+        // the validation in updated() -- on the very first save of every site.
+        SiteCaptureSettings first = SiteCaptureSettings.DEFAULTS
+                .withChanges("academy", false, 30, "crh-academy", null);
+
+        assertEquals("academy", first.getSiteKey());
+        assertFalse(first.isCaptureEnabled());
+        assertEquals(30, first.getMaxSnapshots());
+        assertEquals("crh-academy", first.getCaptureUser());
+    }
+
+    @Test
+    @DisplayName("withChanges carries the resolved credential without exposing it")
+    void withChangesKeepsTheCredential() throws Exception {
+        registry.updated("pid-1", props(
+                SiteSettingsRegistry.PROP_SITE_KEY, "academy",
+                SiteSettingsRegistry.PROP_USER, "crh-academy",
+                SiteSettingsRegistry.PROP_SECRET, "s3cret"));
+        SiteCaptureSettings configured = registry.forSite("academy");
+        assertTrue(configured.hasResolvedCredential(), "the fixture must actually resolve one");
+
+        SiteCaptureSettings edited = configured.withChanges("academy", true, 99, "crh-academy", null);
+
+        assertTrue(edited.hasResolvedCredential(),
+                "editing retention must not silently drop the credential");
+        assertEquals(99, edited.getMaxSnapshots());
+    }
 }

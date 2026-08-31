@@ -67,6 +67,19 @@
     </properties>
 
     <dependencies>
+        <dependency>
+            <groupId>io.github.graphql-java</groupId>
+            <artifactId>graphql-java-annotations</artifactId>
+            <version>21.1</version>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.jahia.modules</groupId>
+            <artifactId>graphql-dxm-provider</artifactId>
+            <version>3.7.0</version>
+            <scope>provided</scope>
+        </dependency>
+
         <!-- Compile-time only: the annotations are consumed by bnd to generate the DS
              descriptors and are not needed at runtime. -->
         <dependency>

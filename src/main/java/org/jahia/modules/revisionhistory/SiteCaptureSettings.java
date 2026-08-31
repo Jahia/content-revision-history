@@ -80,6 +80,35 @@ public final class SiteCaptureSettings {
         return authorization;
     }
 
+    /**
+     * @return whether a usable credential resolved, without exposing it
+     *
+     * <p>What callers outside this package are allowed to know. The header itself stays
+     * package-private: a GraphQL response is logged, cached and pasted into bug reports, and an
+     * accessor that exists is an accessor that eventually gets called.
+     */
+    public boolean hasResolvedCredential() {
+        return authorization != null;
+    }
+
+    /**
+     * @return a copy with the editable fields replaced, carrying the resolved credential across
+     *
+     * <p>The credential is deliberately not a parameter. It is resolved from a secret file whose
+     * permissions an administrator controls, so it is not something an editing caller supplies --
+     * and passing it through a public signature would put it somewhere it could be logged.
+     *
+     * <p>The site key IS a parameter, and must be: the common case is configuring a site that has
+     * none yet, where the caller starts from {@link #DEFAULTS}, whose key is null. Carrying that
+     * null through would write a file with no siteKey and fail its own validation, on the very
+     * first save of every site.
+     */
+    public SiteCaptureSettings withChanges(String siteKey, boolean captureEnabled, int maxSnapshots,
+                                           String captureUser, String baseUrl) {
+        return new SiteCaptureSettings(siteKey, captureEnabled, maxSnapshots, captureUser,
+                authorization, baseUrl);
+    }
+
     @Override
     public String toString() {
         // No secret and no header: this ends up in logs.
