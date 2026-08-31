@@ -199,7 +199,7 @@ class GuestMarkdownFetcherTest {
     // ------------------------------------------------------------ misconfigurationMessage
 
     @Test
-    @DisplayName("message names the jahia.crh.captureBaseUrl override property")
+    @DisplayName("message names the capture.baseUrl configuration key")
     void messageNamesTheOverrideProperty() {
         // Arrange
         GuestMarkdownFetcher.ConnectorProbe probe =
@@ -209,7 +209,7 @@ class GuestMarkdownFetcherTest {
         String message = GuestMarkdownFetcher.misconfigurationMessage(probe);
 
         // Assert -- this is the one property an operator must be told about to fix the outage
-        assertTrue(message.contains(RevisionHistoryConstants.SYSPROP_CAPTURE_BASE_URL),
+        assertTrue(message.contains(CaptureEndpoint.PROP_BASE_URL),
                 "the message must name the exact system property that fixes the misconfiguration");
     }
 
@@ -371,7 +371,7 @@ class GuestMarkdownFetcherTest {
 
     // --- the capture base URL must reach Jahia directly -----------------------------------
     //
-    // SYSPROP_CAPTURE_BASE_URL is an escape hatch for exotic setups, and it accepts anything. A
+    // capture.baseUrl is an escape hatch for exotic setups, and it accepts anything. A
     // deployment that points it at the site's PUBLIC address gets a flat 404 on every capture:
     // a public host has SEO URL rewriting (urlRewriteSeoRulesEnabled, urlRewriteRemoveCmsPrefix)
     // and usually a reverse proxy, and those rewrite or refuse the /cms/render/... paths this

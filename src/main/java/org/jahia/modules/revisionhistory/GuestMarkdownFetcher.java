@@ -81,14 +81,20 @@ final class GuestMarkdownFetcher {
         }
     }
 
-    private final String baseUrl;
+    /**
+     * Non-null only when a test pinned one. Production leaves this null and resolves per call, so an
+     * OSGi configuration change reaches the NEXT capture: this object is a static singleton, and
+     * anything captured in its constructor would be fixed for the life of the JVM -- which is the
+     * restart requirement the move away from a system property was meant to remove.
+     */
+    private final String pinnedBaseUrl;
 
     GuestMarkdownFetcher() {
-        this(resolveBaseUrl());
+        this.pinnedBaseUrl = null;
     }
 
     GuestMarkdownFetcher(String baseUrl) {
-        this.baseUrl = baseUrl;
+        this.pinnedBaseUrl = baseUrl;
     }
 
     /**
@@ -221,7 +227,7 @@ final class GuestMarkdownFetcher {
             }
             encoded.append('/').append(URLEncoder.encode(segment, "UTF-8").replace("+", "%20"));
         }
-        return baseUrl + "/cms/render/live/" + URLEncoder.encode(language, "UTF-8")
+        return getBaseUrl() + "/cms/render/live/" + URLEncoder.encode(language, "UTF-8")
                 + encoded + '.' + RevisionHistoryConstants.MARKDOWN_TEMPLATE_TYPE
                 + "?crhCapture=" + cacheBuster;
     }
@@ -249,24 +255,31 @@ final class GuestMarkdownFetcher {
      * system property remains as an escape hatch for exotic setups (a container whose HTTP
      * connector is not reachable on loopback, for instance).
      */
+    /**
+     * Resolved per call rather than once, so an OSGi configuration change applies to the next
+     * capture instead of the next restart. The detected fallback is still computed once: it sweeps
+     * JMX, and the answer cannot change while the JVM runs.
+     */
     private static String resolveBaseUrl() {
-        String override = System.getProperty(RevisionHistoryConstants.SYSPROP_CAPTURE_BASE_URL);
-        if (override != null && !override.trim().isEmpty()) {
-            String configured = stripTrailingSlash(override.trim());
+        String configured = CaptureEndpoint.baseUrl();
+        if (configured != null) {
             if (!reachesJahiaDirectly(configured)) {
                 logger.warn("{} is set to {}, which is not this node's own connector."
                         + " Capture asks for /cms/render/... paths, and a public host rewrites or"
                         + " refuses those (SEO rewriting, a reverse proxy), so EVERY capture will"
                         + " report FAILED on a flat HTTP 404 whatever the page. Point it at the"
-                        + " loopback connector, e.g. http://127.0.0.1:8080, or unset it and let the"
-                        + " port be detected.",
-                        RevisionHistoryConstants.SYSPROP_CAPTURE_BASE_URL, configured);
+                        + " loopback connector, e.g. http://127.0.0.1:8080, or remove the setting"
+                        + " and let the port be detected.",
+                        CaptureEndpoint.PROP_BASE_URL, configured);
             }
             return configured;
         }
-        int port = detectHttpPort();
-        String contextPath = safeContextPath();
-        return "http://127.0.0.1:" + port + contextPath;
+        return DetectedEndpoint.VALUE;
+    }
+
+    /** The detected loopback endpoint, computed once: a JMX sweep whose answer cannot change. */
+    private static final class DetectedEndpoint {
+        static final String VALUE = "http://127.0.0.1:" + detectHttpPort() + safeContextPath();
     }
 
     /**
@@ -425,10 +438,10 @@ final class GuestMarkdownFetcher {
                 + cause + ". Guest capture renders will be attempted against " + DEFAULT_BASE_URL
                 + ", which almost certainly listens to nothing, so EVERY snapshot capture for "
                 + "EVERY page will be recorded FAILED until this is corrected. Set -D"
-                + RevisionHistoryConstants.SYSPROP_CAPTURE_BASE_URL
+                + CaptureEndpoint.PROP_BASE_URL
                 + "=<base URL of this node, reachable from this node itself> (for example -D"
-                + RevisionHistoryConstants.SYSPROP_CAPTURE_BASE_URL
-                + "=https://127.0.0.1:8443) and restart.";
+                + CaptureEndpoint.PROP_BASE_URL
+                + " = https://127.0.0.1:8443) in the module configuration; it applies without a restart.";
     }
 
     private static String stripTrailingSlash(String url) {
@@ -436,6 +449,6 @@ final class GuestMarkdownFetcher {
     }
 
     String getBaseUrl() {
-        return baseUrl;
+        return pinnedBaseUrl != null ? pinnedBaseUrl : resolveBaseUrl();
     }
 }

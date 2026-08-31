@@ -144,8 +144,8 @@ public final class RevisionHistoryConstants {
     /** Upper bound on nodes inspected per publication event when resolving pages. */
     public static final int MAX_PUBLICATION_INFOS_INSPECTED = 20_000;
 
-    // ---------------------------------------------------------------- system properties
-
-    /** Optional override of the loopback base URL used for guest capture renders. */
-    public static final String SYSPROP_CAPTURE_BASE_URL = "jahia.crh.captureBaseUrl";
+    // The capture endpoint used to be the system property jahia.crh.captureBaseUrl. It is now
+    // CaptureEndpoint.PROP_BASE_URL in this module's own OSGi configuration: a system property needs
+    // a restart to change, is visible to anyone who can list processes, and was the only setting in
+    // this module that lived outside its configuration file.
 }
