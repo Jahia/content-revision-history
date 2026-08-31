@@ -368,4 +368,47 @@ class GuestMarkdownFetcherTest {
         assertThrows(IllegalArgumentException.class,
                 () -> fetcher.buildUrl("/sites/mySite/../../etc/passwd", "en", 1L));
     }
+
+    // --- the capture base URL must reach Jahia directly -----------------------------------
+    //
+    // SYSPROP_CAPTURE_BASE_URL is an escape hatch for exotic setups, and it accepts anything. A
+    // deployment that points it at the site's PUBLIC address gets a flat 404 on every capture:
+    // a public host has SEO URL rewriting (urlRewriteSeoRulesEnabled, urlRewriteRemoveCmsPrefix)
+    // and usually a reverse proxy, and those rewrite or refuse the /cms/render/... paths this
+    // fetcher asks for. It reports FAILED and says nothing about why, which cost a real
+    // investigation several rounds on the backfill script before the address was questioned.
+
+    @Test
+    @DisplayName("a loopback capture base URL is accepted without complaint")
+    void loopbackBaseUrlsAreFine() {
+        assertTrue(GuestMarkdownFetcher.reachesJahiaDirectly("http://127.0.0.1:8080"));
+        assertTrue(GuestMarkdownFetcher.reachesJahiaDirectly("http://localhost:8080"));
+        assertTrue(GuestMarkdownFetcher.reachesJahiaDirectly("https://127.0.0.1:8443"));
+        assertTrue(GuestMarkdownFetcher.reachesJahiaDirectly("http://127.0.0.1:8080/context"));
+        assertTrue(GuestMarkdownFetcher.reachesJahiaDirectly("http://[::1]:8080"));
+    }
+
+    @Test
+    @DisplayName("a public hostname is flagged, because every render will 404")
+    void publicBaseUrlsAreFlagged() {
+        assertFalse(GuestMarkdownFetcher.reachesJahiaDirectly("https://academypp.jahia.com"));
+        assertFalse(GuestMarkdownFetcher.reachesJahiaDirectly("http://www.example.com:8080"));
+    }
+
+    @Test
+    @DisplayName("a host that merely begins with localhost is not loopback")
+    void lookalikeHostnamesAreFlagged() {
+        // localhost.example.com resolves wherever its DNS says, which is not this machine.
+        assertFalse(GuestMarkdownFetcher.reachesJahiaDirectly("https://localhost.example.com"));
+        assertFalse(GuestMarkdownFetcher.reachesJahiaDirectly("http://127.0.0.1.example.com"));
+    }
+
+    @Test
+    @DisplayName("nothing configured is treated as fine, because the default is derived")
+    void absentBaseUrlIsNotFlagged() {
+        // resolveBaseUrl only consults this when an override is set; the derived default is always
+        // loopback, so a null must not produce a warning on every start.
+        assertTrue(GuestMarkdownFetcher.reachesJahiaDirectly(null));
+        assertTrue(GuestMarkdownFetcher.reachesJahiaDirectly("   "));
+    }
 }

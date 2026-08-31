@@ -13,6 +13,7 @@ import java.lang.management.ManagementFactory;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.net.URLEncoder;
+import java.util.regex.Pattern;
 import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashSet;
 import java.util.Set;
@@ -250,12 +251,48 @@ final class GuestMarkdownFetcher {
     private static String resolveBaseUrl() {
         String override = System.getProperty(RevisionHistoryConstants.SYSPROP_CAPTURE_BASE_URL);
         if (override != null && !override.trim().isEmpty()) {
-            return stripTrailingSlash(override.trim());
+            String configured = stripTrailingSlash(override.trim());
+            if (!reachesJahiaDirectly(configured)) {
+                logger.warn("{} is set to {}, which is not this node's own connector."
+                        + " Capture asks for /cms/render/... paths, and a public host rewrites or"
+                        + " refuses those (SEO rewriting, a reverse proxy), so EVERY capture will"
+                        + " report FAILED on a flat HTTP 404 whatever the page. Point it at the"
+                        + " loopback connector, e.g. http://127.0.0.1:8080, or unset it and let the"
+                        + " port be detected.",
+                        RevisionHistoryConstants.SYSPROP_CAPTURE_BASE_URL, configured);
+            }
+            return configured;
         }
         int port = detectHttpPort();
         String contextPath = safeContextPath();
         return "http://127.0.0.1:" + port + contextPath;
     }
+
+    /**
+     * Does this base URL address Jahia directly, rather than through whatever serves the public site?
+     *
+     * <p>Only a loopback host does. A public hostname reaches the site through SEO URL rewriting
+     * (and usually a reverse proxy), which rewrites or refuses {@code /cms/render/...} — so every
+     * capture gets a flat 404 and reports {@code FAILED}, with nothing pointing at the address.
+     *
+     * <p>A blank value is accepted: {@code resolveBaseUrl} only consults this when an override is
+     * set, and the derived default is always loopback, so a null must not warn on every start.
+     *
+     * <p>Matched on the host alone, and anchored. {@code localhost.example.com} resolves wherever
+     * its DNS says, which is not this machine, so a prefix match would be wrong.
+     *
+     * <p>Package-private so the rule is pinned by a test rather than left to whoever edits it next.
+     */
+    static boolean reachesJahiaDirectly(String baseUrl) {
+        if (baseUrl == null || baseUrl.trim().isEmpty()) {
+            return true;
+        }
+        return LOOPBACK_BASE_URL.matcher(baseUrl.trim()).matches();
+    }
+
+    /** Host must be exactly a loopback literal; a port and a context path may follow. */
+    private static final Pattern LOOPBACK_BASE_URL = Pattern.compile(
+            "(?i)https?://(127\\.0\\.0\\.1|localhost|\\[::1])(:\\d+)?(/.*)?");
 
     private static String safeContextPath() {
         try {
