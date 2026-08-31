@@ -494,6 +494,6 @@ class GuestMarkdownFetcherTest {
         String message = GuestMarkdownFetcher.misconfigurationMessage(probe);
 
         assertTrue(message.contains("ajp"), message);
-        assertTrue(message.contains(RevisionHistoryConstants.SYSPROP_CAPTURE_BASE_URL), message);
+        assertTrue(message.contains(CaptureEndpoint.PROP_BASE_URL), message);
     }
 }
