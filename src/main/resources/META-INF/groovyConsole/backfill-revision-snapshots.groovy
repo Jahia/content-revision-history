@@ -90,8 +90,15 @@ boolean DRY_RUN  = true        // false actually writes snapshots
 String RENDER_USER   = ''
 String RENDER_SECRET = ''      // that account's password
 
-// This node's own HTTP connector. Change it if Jahia is not on 8080, or if the loopback
-// interface is not the one serving plain HTTP.
+// This node's own HTTP connector -- NOT the site's public address.
+//
+// It has to bypass whatever sits in front of Jahia. A public host normally has SEO URL rewriting
+// enabled (urlRewriteSeoRulesEnabled, urlRewriteRemoveCmsPrefix) and often a reverse proxy in
+// addition, and those rewrite or refuse the /cms/render/... paths this script asks for. The symptom
+// is a flat HTTP 404 on every node, in both workspaces, whatever its type, version count or the
+// rights of the account -- which looks exactly like a broken node and is not one.
+//
+// Change it if Jahia is not on 8080, or if the loopback interface is not the one serving plain HTTP.
 String BASE_URL = 'http://127.0.0.1:8080'
 
 // Proceed even if the validation below cannot explain a difference. Read the report first: an
@@ -159,6 +166,16 @@ def encodePath = { String path ->
     }.join('/')
 }
 
+// A public-looking BASE_URL is the single most common way this script fails, and it fails late and
+// misleadingly. Say so before any work is done rather than after the first render.
+if (!(baseUrl ==~ /(?i)https?:\/\/(127\.0\.0\.1|localhost|\[::1\])(:\d+)?/)) {
+    report << "WARNING: BASE_URL is ${baseUrl}, which is not this node's loopback connector.\n"
+    report << "  It must reach Jahia directly. A public host rewrites or refuses /cms/render/...\n"
+    report << "  paths (SEO rewriting, a reverse proxy), which produces a flat 404 on every node in\n"
+    report << "  both workspaces, whatever its type, version count, or the rights of the account.\n"
+    report << "  If renders below fail with 404, set BASE_URL to http://127.0.0.1:8080 and re-run.\n\n"
+}
+
 def fetchMarkdown = { String path, long millis ->
     def url = new URL("${baseUrl}/cms/render/default/${language}${encodePath(path)}.markdown?v=${millis}")
     def conn = url.openConnection()
@@ -174,13 +191,58 @@ def fetchMarkdown = { String path, long millis ->
         // answer to a failed render is to refuse the whole run.
         throw new IllegalStateException(
             "Render of ${path} at ${millis} returned HTTP ${code}. Refusing to continue: a " +
-            "partial reconstruction would be stored as evidence. " +
+            "partial reconstruction would be stored as evidence.\n" +
+            // The exact request, so it can be replayed by hand without reconstructing it from the
+            // path and the instant. Credentials are NOT included: the header is built from
+            // RENDER_USER / RENDER_SECRET, and an exception message ends up in logs.
+            "  URL  : ${url}\n" +
+            "  curl : curl -i -u '<RENDER_USER>:<RENDER_SECRET>' '${url}'\n" +
             ((code == 401 || code == 403)
                 ? "Check RENDER_USER / RENDER_SECRET -- that account must be able to read the " +
                   "default workspace of ${path}."
-                : "Check BASE_URL (${baseUrl}) and that ${path} renders in the default workspace."))
+                : (code == 404
+                    ? "Check BASE_URL first: it is ${baseUrl}. It must be THIS NODE'S OWN HTTP " +
+                      "connector, not the site's public address. A public host rewrites or refuses " +
+                      "/cms/render/... paths (SEO rewriting, a reverse proxy), and the symptom is a " +
+                      "flat 404 on every node in both workspaces whatever its type or rights. Try " +
+                      "the URL above against http://127.0.0.1:8080 and compare. If the loopback " +
+                      "answers 200, that is the whole problem. Only if BOTH answer 404 is this " +
+                      "about the node itself."
+                    : "Check BASE_URL (${baseUrl}) and that ${path} renders in the default workspace.")))
     }
     return conn.inputStream.getText('UTF-8')
+}
+
+// Checkpoints per node, filled by the gather pass below and read by compose and unresolvableAt.
+// Declared here rather than beside the rest of the gather state because a Groovy closure captures
+// script variables lexically: compose is defined before that block and could not see them there.
+def nodeVersions  = [:]  // path -> sorted checkpoint millis of the node itself
+def transVersions = [:]  // path -> sorted checkpoint millis of its j:translation_<lang>
+
+/**
+ * Did this node exist at that instant?
+ *
+ * compose walks the CURRENT subtree -- setVersionDate on a system session does not produce frozen
+ * wrappers, so there is no historical tree to walk -- and renders each child at the instant. A node
+ * added AFTER the instant has no version at or before it, Jahia has nothing to resolve, and the
+ * render answers 404. Reported from a real run:
+ *
+ *   Render of .../jsa-2026-0013/document-area/github-content at 1786972166934 returned HTTP 404
+ *
+ * A node with no version history at all is still rendered: it is not versionable, so a pinned
+ * session resolves it to its current state rather than refusing.
+ */
+def existedAt = { String path, long millis ->
+    def own = nodeVersions[path]
+    if (own == null) {
+        // Not versionable at all: a pinned session resolves it to its current state, so there is
+        // nothing to decide.
+        return true
+    }
+    // Versionable: it was on the published page at that instant only if it has a checkpoint at or
+    // before it. An EMPTY history means it was never published, so it was never part of any
+    // historical state and must not appear in a reconstruction of one.
+    return own.any { it <= millis }
 }
 
 /** Mirrors jnt_content/markdown: emit a jcr:title heading, then recurse; leaves render themselves. */
@@ -190,13 +252,24 @@ compose = { JCRNodeWrapper node, long millis, StringBuilder sb ->
         if (child.name.startsWith('j:')) return
         if (!isRenderable(child)) return
 
+        // existedAt gates FETCHING, never recursion. Containers are routinely versionable with an
+        // empty history -- measured on a real page, both jnt:contentList areas and the page itself
+        // had zero checkpoints while their children had two each -- so gating the walk on it
+        // skipped every container and reconstructed pages as nothing but their title.
         if (SELF_RENDERING.contains(child.primaryNodeTypeName)) {
-            sb << fetchMarkdown(child.path, millis) << '\n'
+            if (existedAt(child.path, millis)) {
+                sb << fetchMarkdown(child.path, millis) << '\n'
+            }
             return
         }
         def grandChildren = child.nodes.findAll { !it.name.startsWith('j:') }
         if (grandChildren.isEmpty()) {
-            sb << fetchMarkdown(child.path, millis) << '\n'
+            // A leaf that has no checkpoint at or before this instant was not on the page then.
+            // Asking Jahia to render one answers 404 -- reported from a real run against a
+            // jnt:bigText that was never published, so its history was empty at every instant.
+            if (existedAt(child.path, millis)) {
+                sb << fetchMarkdown(child.path, millis) << '\n'
+            }
         } else {
             def title = child.getPropertyAsString('jcr:title')
             if (title) sb << '## ' << title << '\n\n'
@@ -226,8 +299,6 @@ def wantedTranslation = 'j:translation_' + java.util.Locale.forLanguageTag(langu
 def pageUuid = null, siteKey = null, folderPath = null
 def existing = [:]      // instant millis -> [name, markdown, capturedBy, generatorVersion]
 def candidates = [] as SortedSet
-def nodeVersions  = [:]  // path -> sorted checkpoint millis of the node itself
-def transVersions = [:]  // path -> sorted checkpoint millis of its j:translation_<lang>
 
 JCRTemplate.instance.doExecuteWithSystemSession(null, 'default', java.util.Locale.forLanguageTag(language), { s ->
     def page = s.getNode(pagePath)
@@ -311,8 +382,9 @@ JCRTemplate.instance.doExecuteWithSystemSession(null, 'default', java.util.Local
  * reads HEAD and the predicate never fires. It also refuses to be set twice on one thread.
  *
  * Known limit: the walk above is of the CURRENT subtree, so a node deleted since the instant is
- * not considered. Nodes ADDED since are handled -- their own history has nothing at or before the
- * instant, so they are skipped by the first test.
+ * not considered. Nodes ADDED since are skipped by compose, which asks existedAt before rendering
+ * one. An earlier version of this note said they were "handled" HERE, which was wrong: this
+ * predicate merely declines to judge them, and compose went on to render one and got a 404.
  */
 def unresolvableAt = { long millis ->
     def bad = []
