@@ -13,6 +13,7 @@ import java.lang.management.ManagementFactory;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.net.URLEncoder;
+import java.util.Locale;
 import java.util.regex.Pattern;
 import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashSet;
@@ -355,10 +356,16 @@ final class GuestMarkdownFetcher {
                 Object scheme = server.getAttribute(connector, "scheme");
                 Object port = server.getAttribute(connector, "port");
                 boolean usablePort = port instanceof Integer && (Integer) port > 0;
-                if ("http".equals(scheme) && usablePort) {
+                boolean ajp = speaksAjp(server, connector);
+                if ("http".equals(scheme) && usablePort && !ajp) {
                     return new ConnectorProbe((Integer) port, otherSchemes, null);
                 }
-                if (scheme != null) {
+                if (ajp) {
+                    // Recorded as "ajp" rather than as its scheme, so the operator message can say
+                    // what was actually found instead of claiming there was an http connector that
+                    // somehow did not qualify.
+                    otherSchemes.add("ajp");
+                } else if (scheme != null) {
                     otherSchemes.add(String.valueOf(scheme));
                 }
             } catch (Exception unreadable) {
@@ -370,6 +377,33 @@ final class GuestMarkdownFetcher {
             }
         }
         return new ConnectorProbe(null, otherSchemes, unreadableConnector);
+    }
+
+    /**
+     * Does this connector speak AJP rather than HTTP?
+     *
+     * <p>Tomcat's AJP connector reports {@code scheme="http"} -- that attribute describes how a
+     * request APPEARS to the application, not the wire protocol -- so matching on the scheme alone
+     * picks it whenever JMX enumerates it first. Reported from a real instance: capture asked
+     * {@code http://127.0.0.1:8009/...} and got {@code SocketException: Unexpected end of file from
+     * server}, which is what speaking HTTP at an AJP port sounds like.
+     *
+     * <p>{@code protocol} is matched loosely because containers report it either as a protocol
+     * string ({@code AJP/1.3}) or as an implementation class
+     * ({@code org.apache.coyote.ajp.AjpNioProtocol}).
+     *
+     * <p>An unreadable or absent {@code protocol} counts as NOT AJP. Rejecting on a missing
+     * attribute would break containers that do not expose it, which is a worse failure than the one
+     * this fixes: it would take out deployments that work today.
+     */
+    private static boolean speaksAjp(MBeanServer server, ObjectName connector) {
+        try {
+            Object protocol = server.getAttribute(connector, "protocol");
+            return protocol != null
+                    && String.valueOf(protocol).toLowerCase(Locale.ROOT).contains("ajp");
+        } catch (Exception protocolUnreadable) {
+            return false;
+        }
     }
 
     /**

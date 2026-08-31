@@ -411,4 +411,89 @@ class GuestMarkdownFetcherTest {
         assertTrue(GuestMarkdownFetcher.reachesJahiaDirectly(null));
         assertTrue(GuestMarkdownFetcher.reachesJahiaDirectly("   "));
     }
+
+    // --- AJP reports scheme "http" too -----------------------------------------------------
+    //
+    // Reported from a real instance: capture asked http://127.0.0.1:8009/... and got
+    // "SocketException: Unexpected end of file from server", which is what speaking HTTP to an AJP
+    // port sounds like. Tomcat's AJP connector reports scheme="http" -- the attribute describes how
+    // requests APPEAR to the application, not the wire protocol -- so a sweep matching on scheme
+    // alone picks it whenever it is enumerated first.
+
+    @Test
+    @DisplayName("an AJP connector is not mistaken for the HTTP one, though it reports scheme http")
+    void ajpConnectorIsNotMistakenForHttp() throws Exception {
+        // Arrange -- AJP first, so a sweep matching on scheme alone would take it
+        MBeanServer server = mock(MBeanServer.class);
+        ObjectName ajp = new ObjectName("Catalina:type=Connector,port=8009");
+        ObjectName http = new ObjectName("Catalina:type=Connector,port=8080");
+        LinkedHashSet<ObjectName> ordered = new LinkedHashSet<>();
+        ordered.add(ajp);
+        ordered.add(http);
+        when(server.queryNames(any(ObjectName.class), any())).thenReturn(ordered);
+        when(server.getAttribute(ajp, "scheme")).thenReturn("http");
+        when(server.getAttribute(ajp, "port")).thenReturn(8009);
+        when(server.getAttribute(ajp, "protocol")).thenReturn("AJP/1.3");
+        when(server.getAttribute(http, "scheme")).thenReturn("http");
+        when(server.getAttribute(http, "port")).thenReturn(8080);
+        when(server.getAttribute(http, "protocol")).thenReturn("HTTP/1.1");
+
+        // Act
+        GuestMarkdownFetcher.ConnectorProbe probe = GuestMarkdownFetcher.probeConnectors(server);
+
+        // Assert
+        assertEquals(Integer.valueOf(8080), probe.httpPort, "the HTTP connector must win");
+    }
+
+    @Test
+    @DisplayName("the AJP protocol class name is recognised as well as AJP/1.3")
+    void ajpProtocolClassNameIsRecognised() throws Exception {
+        // A container may report the implementation class rather than the protocol string.
+        MBeanServer server = mock(MBeanServer.class);
+        ObjectName ajp = new ObjectName("Catalina:type=Connector,port=8009");
+        when(server.queryNames(any(ObjectName.class), any())).thenReturn(Collections.singleton(ajp));
+        when(server.getAttribute(ajp, "scheme")).thenReturn("http");
+        when(server.getAttribute(ajp, "port")).thenReturn(8009);
+        when(server.getAttribute(ajp, "protocol"))
+                .thenReturn("org.apache.coyote.ajp.AjpNioProtocol");
+
+        GuestMarkdownFetcher.ConnectorProbe probe = GuestMarkdownFetcher.probeConnectors(server);
+
+        assertNull(probe.httpPort, "an AJP-only container has no usable HTTP connector");
+    }
+
+    @Test
+    @DisplayName("a connector whose protocol cannot be read is still accepted")
+    void unreadableProtocolIsNotTreatedAsAjp() throws Exception {
+        // Rejecting on a missing attribute would break containers that do not expose it, which is
+        // a worse failure than the one being fixed: it would take out working deployments.
+        MBeanServer server = mock(MBeanServer.class);
+        ObjectName http = new ObjectName("Catalina:type=Connector,port=8080");
+        when(server.queryNames(any(ObjectName.class), any())).thenReturn(Collections.singleton(http));
+        when(server.getAttribute(http, "scheme")).thenReturn("http");
+        when(server.getAttribute(http, "port")).thenReturn(8080);
+        when(server.getAttribute(http, "protocol"))
+                .thenThrow(new AttributeNotFoundException("protocol"));
+
+        GuestMarkdownFetcher.ConnectorProbe probe = GuestMarkdownFetcher.probeConnectors(server);
+
+        assertEquals(Integer.valueOf(8080), probe.httpPort);
+    }
+
+    @Test
+    @DisplayName("an AJP-only container is reported as such, not as having no connector")
+    void ajpOnlyContainerIsDiagnosed() throws Exception {
+        MBeanServer server = mock(MBeanServer.class);
+        ObjectName ajp = new ObjectName("Catalina:type=Connector,port=8009");
+        when(server.queryNames(any(ObjectName.class), any())).thenReturn(Collections.singleton(ajp));
+        when(server.getAttribute(ajp, "scheme")).thenReturn("http");
+        when(server.getAttribute(ajp, "port")).thenReturn(8009);
+        when(server.getAttribute(ajp, "protocol")).thenReturn("AJP/1.3");
+
+        GuestMarkdownFetcher.ConnectorProbe probe = GuestMarkdownFetcher.probeConnectors(server);
+        String message = GuestMarkdownFetcher.misconfigurationMessage(probe);
+
+        assertTrue(message.contains("ajp"), message);
+        assertTrue(message.contains(RevisionHistoryConstants.SYSPROP_CAPTURE_BASE_URL), message);
+    }
 }
