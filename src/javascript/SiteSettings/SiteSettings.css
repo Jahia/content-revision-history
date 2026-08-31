@@ -1,0 +1,18 @@
+/*
+ * moonstone supplies the page padding through LayoutContent and the field furniture through Field,
+ * but neither constrains width: an Input stretches to fill its parent and the long helper lines then
+ * push the whole layout past the viewport, which puts a horizontal scrollbar under the page and
+ * carries the header's Save button off-screen. A settings form also wants a readable measure rather
+ * than a full-width one, so it is capped here at the same 720px the securitytxt module uses.
+ */
+.form {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-medium, 16px);
+    max-width: 720px;
+}
+
+/* Field lays its own internals out; this only keeps consecutive fields from touching. */
+.form > * {
+    min-width: 0;
+}

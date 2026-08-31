@@ -31,6 +31,17 @@ module.exports = (env, argv) => {
                     type: 'javascript/auto'
                 },
                 {
+                    // This module's own stylesheets, as CSS modules. moonstone's rules above handle
+                    // .css too, but they are scoped with include: [its own dist], so the two never
+                    // compete for the same file.
+                    test: /\.css$/,
+                    include: [path.join(__dirname, 'src')],
+                    use: [
+                        'style-loader',
+                        {loader: 'css-loader', options: {modules: {mode: 'local'}}}
+                    ]
+                },
+                {
                     test: /\.jsx?$/,
                     include: [path.join(__dirname, 'src')],
                     use: {

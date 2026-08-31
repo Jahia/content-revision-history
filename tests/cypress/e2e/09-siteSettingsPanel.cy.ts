@@ -126,6 +126,40 @@ describe('Site administration panel for revision history', () => {
         );
     });
 
+    // Reported from a real instance: "the text is stuck to the left and top". The panel was built
+    // from plain divs, so it had none of the page furniture the shell's own panels get. It is now
+    // moonstone's LayoutContent with hasPadding, and this guards the two ways that regresses:
+    // losing the padding, and letting the form grow until the header actions leave the screen.
+    it('lays the form out with padding and without horizontal overflow', () => {
+        cy.login();
+        cy.visit(panelUrl);
+        cy.get(PANEL, {timeout: shellTimeoutMs}).should('exist');
+        cy.get(BASE_URL).should('exist');
+
+        cy.window().then(win => {
+            const doc = win.document.documentElement;
+            const box = (sel: string) => win.document.querySelector(sel)!.getBoundingClientRect();
+            const panel = box(PANEL);
+            const field = box('#crh-field-capture-enabled');
+
+            expect(doc.scrollWidth, 'the page must not scroll sideways')
+                .to.be.at.most(doc.clientWidth);
+            expect(field.left, 'the form must be inset from the panel edge, not flush against it')
+                .to.be.greaterThan(panel.left);
+            expect(field.top, 'and must sit below the header, not at the top edge')
+                .to.be.greaterThan(panel.top);
+            // A settings form read at full monitor width is unreadable, and an unconstrained one
+            // also pushes the header actions off screen.
+            expect(field.width, 'the form keeps a readable measure').to.be.at.most(760);
+
+            [SAVE, RESET].forEach(sel => {
+                const b = box(sel);
+                expect(b.right, `${sel} must be on screen`).to.be.at.most(doc.clientWidth);
+                expect(b.left, `${sel} must be on screen`).to.be.at.least(0);
+            });
+        });
+    });
+
     // Every assertion above runs as root, which is exactly how the jContent visibility bug survived
     // two releases. An editor holds jcr:write on the site and still must not administer capture:
     // the account the module authenticates with is configured here.
