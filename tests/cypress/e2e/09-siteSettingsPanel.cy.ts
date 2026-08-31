@@ -126,6 +126,94 @@ describe('Site administration panel for revision history', () => {
         );
     });
 
+    // The Save button lives in the page header, which is where the shell puts panel actions but is
+    // also a long way from the form and greyed out until something changes. It was missed on a real
+    // instance, so the form can also be committed from the keyboard without leaving the field.
+    it('saves with Ctrl+Enter from inside a field', () => {
+        cy.login();
+        cy.visit(panelUrl);
+        cy.get(PANEL, {timeout: shellTimeoutMs}).should('exist');
+
+        // Typed and committed without the pointer ever moving, which is the point of the shortcut.
+        cy.get(MAX_SNAPSHOTS).clear().type('13{ctrl}{enter}');
+
+        cy.waitUntil(
+            () => cy.apollo({query: settingsQuery, variables: {siteKey}})
+                .then(({data}) => data?.contentRevisionHistory?.siteSettings?.maxSnapshots === 13),
+            {timeout: 30000, interval: 1000, errorMsg: 'Ctrl+Enter did not save the form'}
+        );
+    });
+
+    it('advertises the shortcut rather than hiding it', () => {
+        cy.login();
+        cy.visit(panelUrl);
+        cy.get(PANEL, {timeout: shellTimeoutMs}).should('exist');
+        // A shortcut nobody can discover helps only the person who wrote it.
+        cy.get('[data-sel-role="crh-shortcut-hint"]').should('contain.text', 'Ctrl+Enter');
+    });
+
+    it('does nothing on Ctrl+Enter when there is nothing to save', () => {
+        cy.login();
+        // This test asserts on an ABSENCE, so it has to own its starting state. The preceding tests
+        // leave the site configured, and without this the assertion reads their writes and fails
+        // for a reason that has nothing to do with the shortcut.
+        resetSettings();
+        cy.visit(panelUrl);
+        cy.get(PANEL, {timeout: shellTimeoutMs}).should('exist');
+        cy.get(MAX_SNAPSHOTS).should('exist');
+
+        // No edit has been made, so the shortcut must not write. Otherwise it would create a
+        // per-site configuration for a site that had deliberately been left on the defaults.
+        cy.get('body').type('{ctrl}{enter}');
+        cy.wait(3000);
+        cy.apollo({query: settingsQuery, variables: {siteKey}}).then(({data}) => {
+            expect(data.contentRevisionHistory.siteSettings.configured,
+                'an unchanged form must not write a configuration').to.be.false;
+        });
+    });
+
+    // Reported from a real instance: the panel would not save. It was not the button. Apollo
+    // resolves a mutation whose response carries a GraphQL errors array instead of rejecting it, so
+    // the old .then() ran on failure exactly as on success: it cleared the draft and refetched,
+    // which discarded what had been typed, greyed out Save and showed nothing at all. The write
+    // looked like it had worked and had not.
+    it('reports a refused write instead of discarding it', () => {
+        cy.login();
+        cy.intercept('POST', '**/modules/graphql', req => {
+            // The shell's Apollo client BATCHES: the body is an array of operations, so a naive
+            // req.body.query is undefined and never matches. Getting this wrong makes the intercept
+            // silently pass everything through, and the test then proves nothing while looking green.
+            const ops = Array.isArray(req.body) ? req.body : [req.body];
+            const isSave = ops.some(o => typeof o?.query === 'string' && o.query.includes('saveSiteSettings'));
+            if (!isSave) {
+                req.continue();
+                return;
+            }
+
+            // The shape a real refusal takes: HTTP 200 carrying errors, not a transport failure.
+            const refusal = {
+                data: {contentRevisionHistory: {saveSiteSettings: null}},
+                errors: [{message: 'Could not write the settings for site digitall'}]
+            };
+            req.reply({
+                statusCode: 200,
+                body: Array.isArray(req.body) ? [refusal] : refusal
+            });
+        });
+
+        cy.visit(panelUrl);
+        cy.get(PANEL, {timeout: shellTimeoutMs}).should('exist');
+        cy.get(MAX_SNAPSHOTS).clear().type('42');
+        cy.get(SAVE).click();
+
+        cy.get('[data-sel-role="crh-write-error"]', {timeout: 20000})
+            .should('contain.text', 'Could not write the settings');
+        // The edit is the administrator's work: a failed write must not throw it away, and Save has
+        // to stay usable so the write can be retried once the cause is fixed.
+        cy.get(MAX_SNAPSHOTS).should('have.value', '42');
+        cy.get(SAVE).should('not.be.disabled');
+    });
+
     // Reported from a real instance: "the text is stuck to the left and top". The panel was built
     // from plain divs, so it had none of the page furniture the shell's own panels get. It is now
     // moonstone's LayoutContent with hasPadding, and this guards the two ways that regresses:

@@ -15,6 +15,8 @@
     "reset": "Use defaults",
     "baseUrl": "Address the server fetches its own pages from",
     "baseUrlPlaceholder": "http://127.0.0.1:8080",
-    "baseUrlHint": "Use a loopback address, not the public hostname. Capture is a request the server makes to itself, and the public hostname goes through SEO rewriting that answers 404 for the markdown view. Leave empty to use the module default."
+    "baseUrlHint": "Use a loopback address, not the public hostname. Capture is a request the server makes to itself, and the public hostname goes through SEO rewriting that answers 404 for the markdown view. Leave empty to use the module default.",
+    "saveFailed": "The settings could not be saved",
+    "saveShortcut": "Press Ctrl+Enter (Cmd+Enter on macOS) to save"
   }
 }

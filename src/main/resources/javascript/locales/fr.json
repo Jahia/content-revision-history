@@ -15,6 +15,8 @@
     "reset": "Valeurs par défaut",
     "baseUrl": "Adresse depuis laquelle le serveur récupère ses propres pages",
     "baseUrlPlaceholder": "http://127.0.0.1:8080",
-    "baseUrlHint": "Utilisez une adresse de bouclage, pas le nom d'hôte public. La capture est une requête que le serveur s'adresse à lui-même, et le nom d'hôte public passe par la réécriture SEO qui répond 404 pour la vue markdown. Laisser vide pour utiliser la valeur par défaut du module."
+    "baseUrlHint": "Utilisez une adresse de bouclage, pas le nom d'hôte public. La capture est une requête que le serveur s'adresse à lui-même, et le nom d'hôte public passe par la réécriture SEO qui répond 404 pour la vue markdown. Laisser vide pour utiliser la valeur par défaut du module.",
+    "saveFailed": "Les réglages n'ont pas pu être enregistrés",
+    "saveShortcut": "Appuyez sur Ctrl+Entrée (Cmd+Entrée sur macOS) pour enregistrer"
   }
 }

@@ -1,8 +1,8 @@
-import React, {useState} from 'react';
+import React, {useEffect, useRef, useState} from 'react';
 import {useQuery, useMutation} from '@apollo/client';
 import {useTranslation} from 'react-i18next';
 import {
-    Banner, Button, Field, Header, Input, LayoutContent, Separator, Switch
+    Banner, Button, Field, Header, Input, LayoutContent, Separator, Switch, Typography
 } from '@jahia/moonstone';
 
 import {DELETE_SITE_SETTINGS, GET_SITE_SETTINGS, SAVE_SITE_SETTINGS} from './SiteSettings.gql';
@@ -41,12 +41,43 @@ export const SiteSettings = () => {
     const [save, {loading: saving}] = useMutation(SAVE_SITE_SETTINGS);
     const [remove, {loading: removing}] = useMutation(DELETE_SITE_SETTINGS);
     const [draft, setDraft] = useState(null);
+    // What the last write failed with, if it did. Held separately from the query's own error so a
+    // failed save does not replace the form with an error page and lose what was typed into it.
+    const [writeError, setWriteError] = useState(null);
 
     const settings = data?.contentRevisionHistory?.siteSettings;
     const current = draft || settings;
     const busy = saving || removing;
 
-    const onSave = () => save({
+    /**
+     * Applies a write, or reports why it did not apply.
+     *
+     * <p>Both paths matter. Apollo resolves a mutation whose response carries a GraphQL errors array
+     * rather than rejecting it, so a plain .then() runs on failure exactly as it does on success:
+     * the earlier version cleared the draft and refetched, which threw away what the administrator
+     * had typed, greyed out Save and displayed nothing. The write appeared to succeed and silently
+     * had not. A rejected promise is also possible, for a transport failure, so both are handled.
+     *
+     * <p>The draft is deliberately kept on failure. The values in it are the user's work, and a
+     * failed write is precisely when they must not be discarded.
+     */
+    const applyWrite = run => {
+        setWriteError(null);
+        return run()
+            .then(result => {
+                const failure = result?.errors?.[0]?.message;
+                if (failure) {
+                    setWriteError(failure);
+                    return undefined;
+                }
+
+                setDraft(null);
+                return refetch();
+            })
+            .catch(rejected => setWriteError(rejected?.message || String(rejected)));
+    };
+
+    const onSave = () => applyWrite(() => save({
         variables: {
             siteKey,
             captureEnabled: current.captureEnabled,
@@ -54,17 +85,48 @@ export const SiteSettings = () => {
             captureUser: current.captureUser || null,
             baseUrl: current.baseUrl || null
         }
-    }).then(() => {
-        setDraft(null);
-        return refetch();
-    });
+    }));
 
-    const onReset = () => remove({variables: {siteKey}}).then(() => {
-        setDraft(null);
-        return refetch();
-    });
+    const onReset = () => applyWrite(() => remove({variables: {siteKey}}));
 
     const update = changes => setDraft({...current, ...changes});
+
+    // One decision, used by both the button and the keyboard shortcut. Computing it twice is how
+    // they drift, and a shortcut that saves while the button says it cannot is worse than no
+    // shortcut: it writes when the user has been told nothing will be written.
+    const canSave = Boolean(draft) && !busy;
+
+    // Ctrl+Enter, or Cmd+Enter on a Mac, saves.
+    //
+    // Held in a ref rather than closed over, so the listener is attached once for the life of the
+    // panel instead of being torn down and re-added on every keystroke, and still never fires a
+    // stale version of onSave.
+    //
+    // The listener is on window because the shortcut has to work while focus is inside a field,
+    // which is where it will be used: type a value, then commit it without reaching for the mouse.
+    // Unmounting removes it, so it is scoped to this route and cannot leak into the rest of the
+    // shell. A modifier combination is also exempt from WCAG 2.1.4, which governs single-character
+    // shortcuts; it needs no remapping control.
+    const saveNow = useRef(null);
+    saveNow.current = canSave ? onSave : null;
+
+    useEffect(() => {
+        const onKeyDown = event => {
+            if (event.key !== 'Enter' || !(event.ctrlKey || event.metaKey)) {
+                return;
+            }
+
+            if (!saveNow.current) {
+                return;
+            }
+
+            event.preventDefault();
+            saveNow.current();
+        };
+
+        window.addEventListener('keydown', onKeyDown);
+        return () => window.removeEventListener('keydown', onKeyDown);
+    }, []);
 
     const body = () => {
         if (!siteKey) {
@@ -91,6 +153,14 @@ export const SiteSettings = () => {
 
         return (
             <div className={styles.form}>
+                {writeError && (
+                    <Banner
+                        data-sel-role="crh-write-error"
+                        variant="danger"
+                        title={t('settings.saveFailed')}
+                    >{writeError}</Banner>
+                )}
+
                 <Banner
                     variant={current.configured ? 'info' : 'neutral'}
                     title={current.configured ? t('settings.configured') : t('settings.usingDefaults')}
@@ -147,6 +217,10 @@ export const SiteSettings = () => {
                         onChange={e => update({baseUrl: e.target.value})}
                     />
                 </Field>
+
+                <Typography variant="caption" data-sel-role="crh-shortcut-hint">
+                    {t('settings.saveShortcut')}
+                </Typography>
             </div>
         );
     };
@@ -173,7 +247,8 @@ export const SiteSettings = () => {
                                 data-sel-role="crh-save"
                                 size="big"
                                 label={t('settings.save')}
-                                isDisabled={busy || !draft}
+                                title={t('settings.saveShortcut')}
+                                isDisabled={!canSave}
                                 onClick={onSave}
                             />
                         </>
