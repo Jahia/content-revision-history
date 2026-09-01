@@ -45,9 +45,11 @@ public class GqlSiteSettings {
     }
 
     @GraphQLField
-    @GraphQLDescription("The account capture renders as, or null when capture is anonymous")
+    @GraphQLDescription("The account capture renders as for this site, or null when capture is"
+            + " anonymous. Effective, not literal: a site with no account of its own captures with"
+            + " the module-wide one, and this reports that.")
     public String getCaptureUser() {
-        return settings.getCaptureUser();
+        return settings.getEffectiveCaptureUser();
     }
 
     /**
@@ -58,7 +60,7 @@ public class GqlSiteSettings {
     @GraphQLDescription("True when a usable secret resolved, so capture can authenticate."
             + " The secret itself is never returned.")
     public boolean isCredentialResolved() {
-        return settings.hasResolvedCredential();
+        return settings.hasEffectiveCredential();
     }
 
     @GraphQLField

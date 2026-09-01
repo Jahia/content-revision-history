@@ -59,6 +59,28 @@ public class SiteSettingsRegistry implements ManagedServiceFactory {
     static final String PROP_SITE_KEY = "siteKey";
     static final String PROP_ENABLED = "capture.enabled";
     static final String PROP_MAX_SNAPSHOTS = "retention.maxSnapshots";
+
+    /**
+     * The lowest cap retention can actually deliver.
+     *
+     * <p>Not 1, though the previous message promised it was. {@code prune} never deletes a page's
+     * newest snapshot, and it runs before the incoming one is written, so a cap of 1 leaves the
+     * existing snapshot in place and the folder settles at 2 forever. Accepting 1 advertised a
+     * retention level the mechanism cannot reach.
+     */
+    public static final int MIN_MAX_SNAPSHOTS = 2;
+
+    /**
+     * @return whether a capture endpoint addresses this node itself, which is the only thing
+     *         {@link #save} accepts
+     *
+     * <p>Exists so the GraphQL layer can refuse the value with a validation error naming the field,
+     * rather than letting {@code save} throw and surface as an opaque internal error. The rule
+     * itself stays in {@code GuestMarkdownFetcher}, which is the class that has to live by it.
+     */
+    public static boolean addressesThisNode(String baseUrl) {
+        return GuestMarkdownFetcher.reachesJahiaDirectly(baseUrl);
+    }
     static final String PROP_USER = "capture.user";
     static final String PROP_SECRET = "capture.secret";
     static final String PROP_SECRET_FILE = "capture.secretFile";
@@ -278,17 +300,34 @@ public class SiteSettingsRegistry implements ManagedServiceFactory {
         if (!Files.exists(target)) {
             return kept;
         }
+        // A run of comment lines is held until the next real key decides its fate, and travels
+        // with that key when the key is kept. Dropping comments outright cost real information: an
+        // operator annotating a hand-added capture.secret ("rotated 2026-01-05, owner SecOps")
+        // found the secret preserved across a panel save and the note explaining it gone, so the
+        // provenance of a live credential was lost with nothing recording that it had been.
+        // A run with no key after it annotated nothing and is not carried.
+        List<String> pendingComments = new ArrayList<>();
         try {
             for (String line : Files.readAllLines(target, StandardCharsets.ISO_8859_1)) {
                 String trimmed = line.trim();
-                if (trimmed.isEmpty() || trimmed.startsWith("#") || trimmed.startsWith("!")) {
+                if (trimmed.startsWith("#") || trimmed.startsWith("!")) {
+                    pendingComments.add(line);
+                    continue;
+                }
+                if (trimmed.isEmpty()) {
                     continue;
                 }
                 int separator = indexOfSeparator(trimmed);
                 String key = separator < 0 ? trimmed : trimmed.substring(0, separator).trim();
-                if (!MANAGED_KEYS.contains(key)) {
-                    kept.add(line);
+                if (MANAGED_KEYS.contains(key)) {
+                    // These lines are rewritten from the settings, so a comment describing one
+                    // would end up above a value it no longer matches.
+                    pendingComments.clear();
+                    continue;
                 }
+                kept.addAll(pendingComments);
+                pendingComments.clear();
+                kept.add(line);
             }
         } catch (IOException unreadable) {
             // Better to refuse than to rewrite a file whose other settings could not be read: a
@@ -321,9 +360,32 @@ public class SiteSettingsRegistry implements ManagedServiceFactory {
         // reflectively instantiated backfill service as well, and a value written below 1 would sit
         // in the file as invalid until FileInstall next reloaded it and silently substituted the
         // default. Refusing at every entry point is what makes the file trustworthy.
-        if (settings.getMaxSnapshots() < 1) {
-            throw new IllegalArgumentException("maxSnapshots must be at least 1, not "
-                    + settings.getMaxSnapshots() + ": a lower value would keep no history at all");
+        if (settings.getMaxSnapshots() < MIN_MAX_SNAPSHOTS) {
+            throw new IllegalArgumentException("maxSnapshots must be at least " + MIN_MAX_SNAPSHOTS
+                    + ", not " + settings.getMaxSnapshots() + ": retention never deletes a page's"
+                    + " newest snapshot, so a cap of 1 cannot be honoured and the effective floor"
+                    + " is " + MIN_MAX_SNAPSHOTS);
+        }
+        // Refused, not merely warned about. This is the path the settings panel and the GraphQL
+        // mutation write through, and it is reachable by a SITE administrator -- a role scoped to
+        // one site, not to the server. capture.baseUrl decides which host this node issues an HTTP
+        // GET to, and whatever answers is normalised and stored as that site's public revision
+        // snapshot: an arbitrary outbound GET from inside the network (a metadata endpoint, an
+        // internal service) plus a forged record of what the page said. GuestMarkdownFetcher's own
+        // Javadoc claimed "no SSRF surface: the caller cannot influence the host", and that claim
+        // was only true before this value became site-configurable.
+        //
+        // updated() deliberately still ACCEPTS a non-loopback value from the file itself and only
+        // warns: a server administrator who owns karaf/etc is the one the escape hatch exists for
+        // (a container whose connector is not reachable on loopback), and they already have every
+        // privilege this would grant.
+        if (settings.getBaseUrl() != null
+                && !GuestMarkdownFetcher.reachesJahiaDirectly(settings.getBaseUrl())) {
+            throw new IllegalArgumentException(PROP_BASE_URL + " must address this node's own"
+                    + " loopback connector, not " + settings.getBaseUrl() + ". Capture fetches"
+                    + " /cms/render/... from this node itself; a value pointing anywhere else would"
+                    + " store another host's response as this site's revision history. Use"
+                    + " http://127.0.0.1:<port>, or clear the field to let the port be detected.");
         }
         Path target = configFile(siteKey);
         String captureUser = singleLine(PROP_USER, settings.getCaptureUser());
@@ -361,6 +423,18 @@ public class SiteSettingsRegistry implements ManagedServiceFactory {
             Files.deleteIfExists(temp);
             throw atomicUnsupported;
         }
+        // Applied to the in-memory map now, rather than waiting for FileInstall to notice the
+        // file and call updated(). The write is already durable at this point, so the map would
+        // have converged on this value anyway; the only thing waiting achieved was a window in
+        // which the module still answered with the OLD settings. Two consequences, both reported:
+        // a panel that refetches immediately after Save snapped back to the previous values and
+        // flipped its banner to "this site has no settings of its own", so an administrator saved
+        // again believing the write had failed; and a publication landing inside that window was
+        // captured under settings the operator had just turned off.
+        //
+        // updated() remains the authority: when FileInstall does deliver the file it overwrites
+        // this with whatever was actually parsed, so a value this method got wrong cannot persist.
+        bySite.put(siteKey, settings);
         logger.info("Wrote per-site revision capture settings for {} to {}", siteKey, target);
     }
 

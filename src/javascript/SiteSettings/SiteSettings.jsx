@@ -82,8 +82,14 @@ export const SiteSettings = () => {
             siteKey,
             captureEnabled: current.captureEnabled,
             maxSnapshots: Number(current.maxSnapshots),
-            captureUser: current.captureUser || null,
-            baseUrl: current.baseUrl || null
+            // '' means "clear it", null means "leave it alone" -- see the note on the
+            // saveSiteSettings mutation. Sending `|| null` for an emptied field meant a field
+            // could never be cleared once set: the server read the null as an omission and wrote
+            // the old value straight back, so an administrator who mistyped the capture endpoint
+            // had no way to empty it. ?? '' keeps a deliberately emptied field distinguishable
+            // from one this panel never loaded.
+            captureUser: current.captureUser ?? '',
+            baseUrl: current.baseUrl ?? ''
         }
     }));
 
@@ -186,8 +192,14 @@ export const SiteSettings = () => {
                     // as a side effect of saving, so it must not interrupt.
                     role="status"
                     variant={current.configured ? 'info' : 'neutral'}
-                    title={current.configured ? t('settings.configured') : t('settings.usingDefaults')}
-                >{''}</Banner>
+                    // The message is the CHILDREN, and the title is a fixed heading. It used to be
+                    // the other way round, with `{''}` for children: Banner surfaces title as the
+                    // region's aria-label, so the only thing that changed when this flipped after a
+                    // Save was an attribute the region draws its own name from. A live region
+                    // announces changed CONTENT, so most screen readers said nothing at all -- the
+                    // same defect already fixed on the two Banners above this one.
+                    title={t('settings.settingsSource')}
+                >{current.configured ? t('settings.configured') : t('settings.usingDefaults')}</Banner>
 
                 <Separator spacing="medium" invisible="firstOrLastChild"/>
 

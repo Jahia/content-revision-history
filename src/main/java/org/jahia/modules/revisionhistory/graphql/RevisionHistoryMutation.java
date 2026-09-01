@@ -31,10 +31,21 @@ public class RevisionHistoryMutation {
         // only when FileInstall re-parsed the file did the positiveInt helper notice, and it then
         // substituted the module default and logged a warning that never reached the UI, leaving
         // the operator believing a value the running system was not using.
-        if (maxSnapshots != null && maxSnapshots < 1) {
+        if (maxSnapshots != null && maxSnapshots < SiteSettingsRegistry.MIN_MAX_SNAPSHOTS) {
             throw new BaseGqlClientException(
-                    "maxSnapshots must be at least 1; " + maxSnapshots + " would keep no history"
-                    + " at all. Leave it unset to use the module default.",
+                    "maxSnapshots must be at least " + SiteSettingsRegistry.MIN_MAX_SNAPSHOTS + "; "
+                    + maxSnapshots + " cannot be honoured, because retention never deletes a page's"
+                    + " newest snapshot. Leave it unset to use the module default.",
+                    ErrorType.ValidationError);
+        }
+        // Refused here as well as in save(), so the administrator gets a validation error naming
+        // the field instead of an "Internal Server Error(s) while executing query".
+        if (isPresent(baseUrl) && !SiteSettingsRegistry.addressesThisNode(baseUrl)) {
+            throw new BaseGqlClientException(
+                    "baseUrl must address this node's own loopback connector, not " + baseUrl
+                    + ". Capture fetches the page from this node itself, so any other host's"
+                    + " response would be stored as this site's revision history. Use"
+                    + " http://127.0.0.1:<port>, or send an empty value to clear the setting.",
                     ErrorType.ValidationError);
         }
         SiteSettingsRegistry registry = SiteSettingsAccess.registry();
@@ -42,6 +53,11 @@ public class RevisionHistoryMutation {
 
         // Absent means "leave as it is", not "clear it". A panel that only edits one field must not
         // silently reset the rest, and a null from GraphQL cannot be told apart from an omission.
+        // An EMPTY STRING is how a field is cleared, and it has to be: with null as the only way to
+        // say "no value", neither captureUser nor baseUrl could ever be emptied once set. An
+        // administrator who mistyped baseUrl had no way back except "Use defaults", which also
+        // discards maxSnapshots and captureEnabled -- and with baseUrl now refused unless it
+        // addresses this node, being unable to clear a bad one would have been a dead end.
         // The secret is never written from here: it belongs in a file whose permissions an
         // administrator controls, and a GraphQL argument would end up in request logs. withChanges
         // carries the already-resolved credential across without exposing it.
@@ -49,8 +65,8 @@ public class RevisionHistoryMutation {
                 siteKey,
                 captureEnabled != null ? captureEnabled : current.isCaptureEnabled(),
                 maxSnapshots != null ? maxSnapshots : current.getMaxSnapshots(),
-                captureUser != null ? captureUser : current.getCaptureUser(),
-                baseUrl != null ? baseUrl : current.getBaseUrl());
+                captureUser != null ? emptyToNull(captureUser) : current.getCaptureUser(),
+                baseUrl != null ? emptyToNull(baseUrl) : current.getBaseUrl());
         try {
             registry.save(updated);
         } catch (IOException couldNotWrite) {
@@ -58,6 +74,16 @@ public class RevisionHistoryMutation {
                     + ": " + couldNotWrite.getMessage(), couldNotWrite);
         }
         return new GqlSiteSettings(siteKey, true, updated);
+    }
+
+    /** Empty means "clear this setting"; see the note in {@link #saveSiteSettings}. */
+    private static String emptyToNull(String value) {
+        return value.trim().isEmpty() ? null : value.trim();
+    }
+
+    /** True when the caller sent a value to apply, as opposed to omitting or clearing the field. */
+    private static boolean isPresent(String value) {
+        return value != null && !value.trim().isEmpty();
     }
 
     @GraphQLField
