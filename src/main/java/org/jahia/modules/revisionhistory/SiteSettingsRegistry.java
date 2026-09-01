@@ -14,10 +14,15 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Dictionary;
 import java.util.Enumeration;
+import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.Set;
 import java.util.regex.Pattern;
 
 /**
@@ -114,7 +119,11 @@ public class SiteSettingsRegistry implements ManagedServiceFactory {
             throw new ConfigurationException(PROP_SITE_KEY,
                     "required: it is what says which site this file configures");
         }
-        if (!SAFE_SITE_KEY.matcher(siteKey).matches()) {
+        // SAFE_SITE_KEY guarantees the key is a safe single path segment for the .cfg file name.
+        // isValidSiteKey is the capture path's own rule, checked here too so this module cannot
+        // accept and persist settings for a site whose every capture would then be refused.
+        if (!SAFE_SITE_KEY.matcher(siteKey).matches()
+                || !RevisionSnapshotService.isValidSiteKey(siteKey)) {
             throw new ConfigurationException(PROP_SITE_KEY,
                     "'" + siteKey + "' is not a valid site key");
         }
@@ -129,8 +138,18 @@ public class SiteSettingsRegistry implements ManagedServiceFactory {
                         string(properties, PROP_SECRET_FILE),
                         string(properties, PROP_SECRET)),
                 endpoint(string(properties, PROP_BASE_URL), siteKey));
+        // A file keeps its pid when it is edited, so changing the siteKey INSIDE it re-points the
+        // same pid at another site. Without this, the site it used to name kept the old settings
+        // for the life of the process: deleted() only ever clears what siteByPid currently maps,
+        // so nothing would remove it, and forSite() went on reporting settings from a file that no
+        // longer named that site at all. Only drop it if no other file still names it.
+        String previous = siteByPid.put(pid, siteKey);
+        if (previous != null && !previous.equals(siteKey) && !siteByPid.containsValue(previous)) {
+            bySite.remove(previous);
+            logger.info("Configuration {} now names site {}; {} falls back to the module defaults.",
+                    pid, siteKey, previous);
+        }
         bySite.put(siteKey, settings);
-        siteByPid.put(pid, siteKey);
         logger.info("Applied per-site revision capture settings: {}", settings);
     }
 
@@ -195,22 +214,107 @@ public class SiteSettingsRegistry implements ManagedServiceFactory {
      * delivers a configuration missing half its properties. The move target is derived from the
      * validated site key, never from caller-supplied text.
      */
+    /**
+     * A value this module writes into a {@code .cfg} line, rejected if it could forge more lines.
+     *
+     * <p>The file is a Java properties file, so a value carrying a newline does not stay a value:
+     * everything after it is parsed as further keys. These values arrive from GraphQL, from a site
+     * administrator, so without this a site administrator of one site could write
+     * {@code capture.user = x\ncapture.secretFile = /some/server/path} and have the module read
+     * that file's first line and send it as an Authorization header to a host they also control, or
+     * {@code x\nsiteKey = otherSite} and re-key the whole file onto a site they administer nothing
+     * on. A carriage return alone does the same on the platforms that accept it.
+     */
+    private static String singleLine(String property, String value) {
+        if (value == null) {
+            return null;
+        }
+        if (value.indexOf('\n') >= 0 || value.indexOf('\r') >= 0) {
+            throw new IllegalArgumentException(property + " may not contain a line break: the file"
+                    + " is a properties file, so a line break in a value forges further settings");
+        }
+        return value;
+    }
+
+    /**
+     * The keys this module owns and rewrites. Everything else in the file is preserved verbatim.
+     *
+     * <p>{@code capture.secret} and {@code capture.secretFile} are the reason this exists.
+     * SiteCaptureSettings carries only the already-resolved Authorization header, never the secret
+     * or its path, so a save built purely from that object silently dropped them. An administrator
+     * who hand-added a credential so a restricted site could be captured, then toggled anything at
+     * all in the settings panel, lost it: FileInstall reloaded a file with a user and no secret,
+     * capture fell back to anonymous, and every restricted page quietly stopped being recorded.
+     */
+    private static final Set<String> MANAGED_KEYS = new HashSet<>(Arrays.asList(
+            PROP_SITE_KEY, PROP_ENABLED, PROP_MAX_SNAPSHOTS, PROP_USER, PROP_BASE_URL));
+
+    /** Lines of the existing file that this module does not own, so a rewrite keeps them. */
+    private List<String> preservedLines(Path target) {
+        List<String> kept = new ArrayList<>();
+        if (!Files.isReadable(target)) {
+            return kept;
+        }
+        try {
+            for (String line : Files.readAllLines(target, StandardCharsets.UTF_8)) {
+                String trimmed = line.trim();
+                if (trimmed.isEmpty() || trimmed.startsWith("#") || trimmed.startsWith("!")) {
+                    continue;
+                }
+                int separator = indexOfSeparator(trimmed);
+                String key = separator < 0 ? trimmed : trimmed.substring(0, separator).trim();
+                if (!MANAGED_KEYS.contains(key)) {
+                    kept.add(line);
+                }
+            }
+        } catch (IOException unreadable) {
+            // Better to refuse than to rewrite a file whose other settings could not be read: a
+            // silent drop here is exactly the credential loss this method exists to prevent.
+            throw new IllegalStateException("Refusing to rewrite " + target
+                    + ": its current contents could not be read, and saving would discard any"
+                    + " settings this module does not manage, including a capture secret.",
+                    unreadable);
+        }
+        return kept;
+    }
+
+    private static int indexOfSeparator(String line) {
+        int eq = line.indexOf('=');
+        int colon = line.indexOf(':');
+        if (eq < 0) {
+            return colon;
+        }
+        if (colon < 0) {
+            return eq;
+        }
+        return Math.min(eq, colon);
+    }
+
     public void save(SiteCaptureSettings settings) throws IOException {
         String siteKey = settings.getSiteKey();
         Path target = configFile(siteKey);
+        String captureUser = singleLine(PROP_USER, settings.getCaptureUser());
+        String baseUrl = singleLine(PROP_BASE_URL, settings.getBaseUrl());
+        List<String> preserved = preservedLines(target);
         StringBuilder body = new StringBuilder()
                 .append("# Content Revision History -- settings for site ").append(siteKey)
                 .append("\n# Written by the module. Safe to edit by hand; changes apply without a restart.\n\n")
                 .append(PROP_SITE_KEY).append(" = ").append(siteKey).append('\n')
                 .append(PROP_ENABLED).append(" = ").append(settings.isCaptureEnabled()).append('\n')
                 .append(PROP_MAX_SNAPSHOTS).append(" = ").append(settings.getMaxSnapshots()).append('\n');
-        if (settings.getCaptureUser() != null) {
-            body.append(PROP_USER).append(" = ").append(settings.getCaptureUser()).append('\n');
+        if (captureUser != null) {
+            body.append(PROP_USER).append(" = ").append(captureUser).append('\n');
         }
         // Omitted rather than written empty when unset: an empty value would read back as an empty
         // string and override the node default, whereas an absent key means "use the default".
-        if (settings.getBaseUrl() != null) {
-            body.append(PROP_BASE_URL).append(" = ").append(settings.getBaseUrl()).append('\n');
+        if (baseUrl != null) {
+            body.append(PROP_BASE_URL).append(" = ").append(baseUrl).append('\n');
+        }
+        if (!preserved.isEmpty()) {
+            body.append("\n# Kept from the previous file: settings this module does not manage.\n");
+            for (String line : preserved) {
+                body.append(line).append('\n');
+            }
         }
         Path temp = Files.createTempFile(target.getParent(), target.getFileName().toString(), ".tmp");
         Files.write(temp, body.toString().getBytes(StandardCharsets.UTF_8));

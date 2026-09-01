@@ -339,6 +339,20 @@ public class RevisionSnapshotService {
      * second, subtly different copy of this check elsewhere is how a path-traversal hole gets
      * introduced later by someone who only reads one of them.
      */
+    /**
+     * The one rule for what a site key may look like, so callers cannot disagree with capture.
+     *
+     * <p>SiteSettingsRegistry had its own, subtly different pattern: it accepted a dot and required
+     * an alphanumeric first character, this one rejects a dot and allows a leading underscore. A key
+     * with a dot was therefore accepted and persisted by the settings panel and then rejected by
+     * every capture for that site, and a key starting with an underscore captured fine but could
+     * never be given settings. Whichever way it fell, the two halves of the module disagreed about
+     * a site that plainly exists.
+     */
+    static boolean isValidSiteKey(String siteKey) {
+        return siteKey != null && SITE_KEY.matcher(siteKey).matches();
+    }
+
     static void validate(String siteKey, String pageUuid, String language) {
         require(siteKey != null && SITE_KEY.matcher(siteKey).matches(), "siteKey", siteKey);
         require(pageUuid != null && UUID.matcher(pageUuid).matches(), "pageUuid", pageUuid);
@@ -367,8 +381,15 @@ public class RevisionSnapshotService {
         // Binary, not string: every metadata read of a snapshot node would otherwise drag the
         // whole page's Markdown into memory with it.
         Binary binary = session.getValueFactory().createBinary(new ByteArrayInputStream(payload));
-        Value value = session.getValueFactory().createValue(binary);
-        snapshot.setProperty(PROP_MARKDOWN, value);
+        try {
+            snapshot.setProperty(PROP_MARKDOWN, session.getValueFactory().createValue(binary));
+        } finally {
+            // Every read path in this module disposes (SnapshotPayload, SnapshotChoiceListInitializer);
+            // the write path, which creates one on every stored capture, did not. The property keeps
+            // its own copy once set, so releasing the handle here is safe and is what stops a busy
+            // publishing site accumulating them.
+            binary.dispose();
+        }
     }
 
     private void updateFolderState(JCRNodeWrapper folder, String name, String contentHash,
