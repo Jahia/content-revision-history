@@ -169,6 +169,20 @@ final class GuestMarkdownFetcher {
             String authorization = site.getAuthorization() != null
                     ? site.getAuthorization()
                     : CaptureIdentity.authorization();
+            // The credential goes ONLY to this node's own connector. capture.baseUrl is settable by
+            // a site administrator through the settings panel, and a non-loopback value was merely
+            // warned about, so a site admin could point it at a host they control and receive
+            // Authorization: Basic with the operator's capture password on the next publication.
+            // Withholding the header here closes that whichever way baseUrl was set, and because
+            // the principal is derived below from what is actually sent, the record stays truthful:
+            // the snapshot is marked guest, which is what the render will really have been.
+            if (authorization != null && !reachesJahiaDirectly(getBaseUrl())) {
+                logger.warn("Not sending the capture credential to {}: it is not this node's own"
+                        + " loopback connector. The render will be anonymous, so restricted pages"
+                        + " will report NOT_PUBLIC until capture.baseUrl points at the loopback"
+                        + " connector.", getBaseUrl());
+                authorization = null;
+            }
             String principal = principalFor(site, authorization);
             if (authorization != null) {
                 connection.setRequestProperty("Authorization", authorization);

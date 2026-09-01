@@ -22,8 +22,12 @@ script='src/main/resources/META-INF/groovyConsole/backfill-revision-snapshots.gr
 if git diff --cached --name-only | grep -qx "$script"; then
     staged=$(git show ":$script" 2>/dev/null || true)
     while IFS= read -r field; do
-        value=$(printf '%s\n' "$staged" | grep -E "^String ${field} *= *'" | head -1 \
-                | sed "s/^String ${field} *= *'\([^']*\)'.*/\1/")
+        # Both quote styles. Only single quotes were recognised, so the exact recurrence this
+        # exists to stop passed when the operator used double quotes -- the natural choice when a
+        # password contains an apostrophe.
+        value=$(printf '%s\n' "$staged" \
+                | grep -E "^String ${field} *= *['\"]" | head -1 \
+                | sed -E "s/^String ${field} *= *['\"]([^'\"]*)['\"].*/\1/")
         if [ -n "${value:-}" ]; then
             say "BLOCKED: ${script}"
             say "  ${field} is committed with a value. It must be empty in the repository."
@@ -38,8 +42,9 @@ RENDER_SECRET
 FIELDS
     # PAGE_PATH is not a credential, but it is the same class of leak: it committed a real
     # customer content path once, in the same sweep.
-    page=$(printf '%s\n' "$staged" | grep -E "^String PAGE_PATH *= *'" | head -1 \
-           | sed "s/^String PAGE_PATH *= *'\([^']*\)'.*/\1/")
+    page=$(printf '%s\n' "$staged" \
+           | grep -E "^String PAGE_PATH *= *['\"]" | head -1 \
+           | sed -E "s/^String PAGE_PATH *= *['\"]([^'\"]*)['\"].*/\1/")
     if [ -n "${page:-}" ]; then
         say "BLOCKED: ${script} commits a real PAGE_PATH ('${page}'). Ship it empty."
         fail=1
@@ -48,7 +53,7 @@ fi
 
 # 2. A general net, so the next leak in a different file is caught too. Deliberately narrow:
 #    it looks for an assignment of a non-placeholder-looking literal to a secret-ish name.
-if git diff --cached -U0 -- . ':(exclude)*.env.example' ':(exclude)tests/**' \
+if git diff --cached -U0 -- . ':(exclude)*.env.example' ':(exclude)tests/**' ':(exclude)src/test/**' \
    | grep -nEi '^\+.*(password|passwd|secret|api[_-]?key|token)[[:space:]]*[:=][[:space:]]*.?[A-Za-z0-9/+_-]{12,}' \
    | grep -viE 'changeme|placeholder|example|xxxx|<[a-z]|\$\{|getenv|System\.getProperty|process\.env' >/dev/null
 then

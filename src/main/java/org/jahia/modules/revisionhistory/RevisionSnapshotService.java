@@ -430,8 +430,27 @@ public class RevisionSnapshotService {
      * is gone there is nothing left to consult.
      */
     private boolean hasEntryReferences(JCRNodeWrapper snapshot) throws RepositoryException {
-        return snapshot.hasProperty(PROP_ENTRY_REFS)
-                && snapshot.getProperty(PROP_ENTRY_REFS).getValues().length > 0;
+        if (!snapshot.hasProperty(PROP_ENTRY_REFS)) {
+            return false;
+        }
+        // A reference whose entry has been deleted protects nothing, and treating it as protection
+        // made retention unenforceable: crh:entryRefs holds weak references and the binder
+        // deliberately leaves dangling ones, so repeatedly adding an entry, publishing and deleting
+        // the entry would pin every snapshot forever and the cap would never bite again.
+        //
+        // Only ItemNotFoundException counts as gone. Any other RepositoryException propagates: an
+        // unrelated read failure must not be read as permission to delete the evidence behind a
+        // published revision.
+        for (javax.jcr.Value reference : snapshot.getProperty(PROP_ENTRY_REFS).getValues()) {
+            try {
+                snapshot.getSession().getNodeByIdentifier(reference.getString());
+                return true;
+            } catch (javax.jcr.ItemNotFoundException entryDeleted) {
+                logger.debug("Snapshot {} references entry {}, which no longer exists",
+                        snapshot.getName(), reference.getString());
+            }
+        }
+        return false;
     }
 
     private long pruneIfNeeded(JCRNodeWrapper folder, String siteKey) throws RepositoryException {

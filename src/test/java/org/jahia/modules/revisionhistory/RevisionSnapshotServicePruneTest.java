@@ -2,14 +2,17 @@ package org.jahia.modules.revisionhistory;
 
 import org.jahia.services.content.JCRNodeIteratorWrapper;
 import org.jahia.services.content.JCRPropertyWrapper;
+import org.jahia.services.content.JCRSessionWrapper;
 import org.jahia.services.content.JCRValueWrapper;
 import org.jahia.services.content.JCRNodeWrapper;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
+import javax.jcr.ItemNotFoundException;
 import javax.jcr.RepositoryException;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -44,6 +47,12 @@ class RevisionSnapshotServicePruneTest {
     /** A folder of snapshots; those whose index is in `referenced` carry a crh:entryRefs value. */
     private Map<String, JCRNodeWrapper> folderOf(JCRNodeWrapper folder, int howMany,
                                                  List<Integer> referenced) throws RepositoryException {
+        return folderOf(folder, howMany, referenced, Collections.emptyList());
+    }
+
+    private Map<String, JCRNodeWrapper> folderOf(JCRNodeWrapper folder, int howMany,
+                                                 List<Integer> referenced,
+                                                 List<Integer> deletedEntries) throws RepositoryException {
         Map<String, JCRNodeWrapper> byName = new LinkedHashMap<>();
         List<JCRNodeWrapper> children = new ArrayList<>();
         for (int i = 0; i < howMany; i++) {
@@ -54,8 +63,21 @@ class RevisionSnapshotServicePruneTest {
             when(snapshot.hasProperty(RevisionHistoryConstants.PROP_ENTRY_REFS)).thenReturn(isReferenced);
             if (isReferenced) {
                 JCRPropertyWrapper refs = mock(JCRPropertyWrapper.class);
-                when(refs.getValues()).thenReturn(new JCRValueWrapper[]{mock(JCRValueWrapper.class)});
+                JCRValueWrapper ref = mock(JCRValueWrapper.class);
+                when(ref.getString()).thenReturn("entry-uuid-" + i);
+                when(refs.getValues()).thenReturn(new JCRValueWrapper[]{ref});
                 when(snapshot.getProperty(RevisionHistoryConstants.PROP_ENTRY_REFS)).thenReturn(refs);
+                // The reference is resolved now, so a session has to answer for it. Entries whose
+                // index is in `deletedEntries` are gone, which must NOT protect the snapshot.
+                JCRSessionWrapper session = mock(JCRSessionWrapper.class);
+                if (deletedEntries.contains(i)) {
+                    when(session.getNodeByIdentifier("entry-uuid-" + i))
+                            .thenThrow(new ItemNotFoundException("entry deleted"));
+                } else {
+                    when(session.getNodeByIdentifier("entry-uuid-" + i))
+                            .thenReturn(mock(JCRNodeWrapper.class));
+                }
+                when(snapshot.getSession()).thenReturn(session);
             }
             byName.put(name(i), snapshot);
             children.add(snapshot);
@@ -149,6 +171,22 @@ class RevisionSnapshotServicePruneTest {
         // losing the content a published revision describes. The returned count must be honest
         // about that, or the folder's own bookkeeping would claim a size it does not have.
         assertEquals(4, remaining);
+    }
+
+    @Test
+    @DisplayName("a reference whose entry was deleted protects nothing")
+    void danglingReferenceDoesNotProtect() throws Exception {
+        // crh:entryRefs holds WEAK references and the binder deliberately leaves dangling ones, so
+        // treating any non-empty value as protection made retention unenforceable: repeatedly
+        // adding an entry, publishing and deleting the entry would pin every snapshot forever and
+        // the cap would never bite again.
+        JCRNodeWrapper folder = mock(JCRNodeWrapper.class);
+        Map<String, JCRNodeWrapper> snapshots =
+                folderOf(folder, 4, Arrays.asList(0), Arrays.asList(0));
+
+        service.prune(folder, 2);
+
+        verify(snapshots.get(name(0))).remove();
     }
 
     @Test

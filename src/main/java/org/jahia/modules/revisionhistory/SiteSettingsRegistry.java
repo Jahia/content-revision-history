@@ -243,6 +243,14 @@ public class SiteSettingsRegistry implements ManagedServiceFactory {
             throw new IllegalArgumentException(property + " may not contain a line break: the file"
                     + " is a properties file, so a line break in a value forges further settings");
         }
+        // A backslash is the properties escape character, and a trailing one continues the value
+        // onto the next line -- so it swallows whatever setting follows rather than forging a new
+        // one. Neither a username nor a URL needs one, so all of them are refused.
+        if (value.indexOf('\\') >= 0) {
+            throw new IllegalArgumentException(property + " may not contain a backslash: it is the"
+                    + " properties escape character, and a trailing one continues onto the next"
+                    + " line, consuming the setting written after it");
+        }
         return value;
     }
 
@@ -271,7 +279,7 @@ public class SiteSettingsRegistry implements ManagedServiceFactory {
             return kept;
         }
         try {
-            for (String line : Files.readAllLines(target, StandardCharsets.UTF_8)) {
+            for (String line : Files.readAllLines(target, StandardCharsets.ISO_8859_1)) {
                 String trimmed = line.trim();
                 if (trimmed.isEmpty() || trimmed.startsWith("#") || trimmed.startsWith("!")) {
                     continue;
@@ -294,15 +302,17 @@ public class SiteSettingsRegistry implements ManagedServiceFactory {
     }
 
     private static int indexOfSeparator(String line) {
-        int eq = line.indexOf('=');
-        int colon = line.indexOf(':');
-        if (eq < 0) {
-            return colon;
+        // '=', ':' AND whitespace are all legal key/value separators in a properties file. Reading
+        // only the first two classed `capture.enabled false` as an unmanaged key, so a rewrite
+        // re-appended it BELOW the module's own line -- and the last occurrence is the one that
+        // wins, so the file said the opposite of what the panel reported.
+        for (int i = 0; i < line.length(); i++) {
+            char c = line.charAt(i);
+            if (c == '=' || c == ':' || Character.isWhitespace(c)) {
+                return i;
+            }
         }
-        if (colon < 0) {
-            return eq;
-        }
-        return Math.min(eq, colon);
+        return -1;
     }
 
     public void save(SiteCaptureSettings settings) throws IOException {
@@ -340,7 +350,8 @@ public class SiteSettingsRegistry implements ManagedServiceFactory {
             }
         }
         Path temp = Files.createTempFile(target.getParent(), target.getFileName().toString(), ".tmp");
-        Files.write(temp, body.toString().getBytes(StandardCharsets.UTF_8));
+        // ISO-8859-1 to match how a properties file is read, here and by FileInstall.
+        Files.write(temp, body.toString().getBytes(StandardCharsets.ISO_8859_1));
         try {
             Files.move(temp, target, StandardCopyOption.ATOMIC_MOVE,
                     StandardCopyOption.REPLACE_EXISTING);
