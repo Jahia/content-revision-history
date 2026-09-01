@@ -469,6 +469,39 @@ class SiteSettingsRegistryTest {
     }
 
     @Test
+    @DisplayName("An operator's comment on a preserved key is preserved with it")
+    void saveKeepsCommentsOnUnmanagedKeys(@TempDir Path etc) throws Exception {
+        // The secret survived a save; the note explaining it did not. What that costs is the
+        // provenance of a live credential -- who owns it, when it was rotated -- silently, with
+        // nothing recording that anything was dropped. A comment run travels with the key it sits
+        // above, and a run above a key this module rewrites is discarded rather than left pointing
+        // at a value it no longer describes.
+        withEtc(etc, () -> {
+            Path file = registry.configFile("academy");
+            Files.write(file, ("siteKey = academy\n"
+                    + "# owner: SecOps, rotate quarterly\n"
+                    + "# last rotated 2026-01-05\n"
+                    + "capture.secretFile = /opt/jahia/etc/crh.secret\n"
+                    + "# this one describes a key the module rewrites\n"
+                    + "capture.enabled = true\n").getBytes(StandardCharsets.UTF_8));
+
+            registry.save(SiteCaptureSettings.DEFAULTS
+                    .withChanges("academy", false, 25, null, null));
+
+            String rewritten = new String(Files.readAllBytes(file), StandardCharsets.UTF_8);
+            assertTrue(rewritten.contains("# owner: SecOps, rotate quarterly"),
+                    "the note explaining a hand-added credential must survive: " + rewritten);
+            assertTrue(rewritten.contains("# last rotated 2026-01-05"),
+                    "a whole comment run travels with its key: " + rewritten);
+            assertTrue(rewritten.contains("capture.secretFile = /opt/jahia/etc/crh.secret"),
+                    "and the key itself, obviously: " + rewritten);
+            assertFalse(rewritten.contains("# this one describes a key the module rewrites"),
+                    "a comment above a managed key would end up above a rewritten value it no"
+                    + " longer matches: " + rewritten);
+        });
+    }
+
+    @Test
     @DisplayName("saving keeps the credential an administrator added by hand")
     void saveKeepsUnmanagedKeys(@TempDir Path etc) throws Exception {
         // The bug this replaces: SiteCaptureSettings carries only the RESOLVED authorization

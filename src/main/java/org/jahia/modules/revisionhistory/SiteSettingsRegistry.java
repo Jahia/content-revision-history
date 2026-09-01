@@ -308,26 +308,25 @@ public class SiteSettingsRegistry implements ManagedServiceFactory {
         // A run with no key after it annotated nothing and is not carried.
         List<String> pendingComments = new ArrayList<>();
         try {
+            // An if/else chain rather than early continues: three of them tripped java:S135, and
+            // the nesting is shallow enough that the guard-clause form bought nothing here.
             for (String line : Files.readAllLines(target, StandardCharsets.ISO_8859_1)) {
                 String trimmed = line.trim();
                 if (trimmed.startsWith("#") || trimmed.startsWith("!")) {
                     pendingComments.add(line);
-                    continue;
+                } else if (!trimmed.isEmpty()) {
+                    int separator = indexOfSeparator(trimmed);
+                    String key = separator < 0 ? trimmed : trimmed.substring(0, separator).trim();
+                    if (MANAGED_KEYS.contains(key)) {
+                        // These lines are rewritten from the settings, so a comment describing one
+                        // would end up above a value it no longer matches.
+                        pendingComments.clear();
+                    } else {
+                        kept.addAll(pendingComments);
+                        pendingComments.clear();
+                        kept.add(line);
+                    }
                 }
-                if (trimmed.isEmpty()) {
-                    continue;
-                }
-                int separator = indexOfSeparator(trimmed);
-                String key = separator < 0 ? trimmed : trimmed.substring(0, separator).trim();
-                if (MANAGED_KEYS.contains(key)) {
-                    // These lines are rewritten from the settings, so a comment describing one
-                    // would end up above a value it no longer matches.
-                    pendingComments.clear();
-                    continue;
-                }
-                kept.addAll(pendingComments);
-                pendingComments.clear();
-                kept.add(line);
             }
         } catch (IOException unreadable) {
             // Better to refuse than to rewrite a file whose other settings could not be read: a
