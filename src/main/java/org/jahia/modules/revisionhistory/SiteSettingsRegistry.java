@@ -262,7 +262,12 @@ public class SiteSettingsRegistry implements ManagedServiceFactory {
     /** Lines of the existing file that this module does not own, so a rewrite keeps them. */
     private List<String> preservedLines(Path target) {
         List<String> kept = new ArrayList<>();
-        if (!Files.isReadable(target)) {
+        // exists(), NOT isReadable(). isReadable answers false for BOTH "no file yet" and "a file
+        // that exists but this process cannot read", and treating the second as the first is exactly
+        // the failure this method exists to prevent: the save would proceed and write a fresh file
+        // with no capture.secret in it. An existing file now falls through to readAllLines, whose
+        // IOException is turned into a refusal below.
+        if (!Files.exists(target)) {
             return kept;
         }
         try {
@@ -302,6 +307,14 @@ public class SiteSettingsRegistry implements ManagedServiceFactory {
 
     public void save(SiteCaptureSettings settings) throws IOException {
         String siteKey = settings.getSiteKey();
+        // Also checked here, not only in the GraphQL mutation. This method is reachable from the
+        // reflectively instantiated backfill service as well, and a value written below 1 would sit
+        // in the file as invalid until FileInstall next reloaded it and silently substituted the
+        // default. Refusing at every entry point is what makes the file trustworthy.
+        if (settings.getMaxSnapshots() < 1) {
+            throw new IllegalArgumentException("maxSnapshots must be at least 1, not "
+                    + settings.getMaxSnapshots() + ": a lower value would keep no history at all");
+        }
         Path target = configFile(siteKey);
         String captureUser = singleLine(PROP_USER, settings.getCaptureUser());
         String baseUrl = singleLine(PROP_BASE_URL, settings.getBaseUrl());

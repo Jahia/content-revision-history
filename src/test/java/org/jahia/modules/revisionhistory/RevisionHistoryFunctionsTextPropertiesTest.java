@@ -161,8 +161,35 @@ class RevisionHistoryFunctionsTextPropertiesTest {
         when(title.getString()).thenReturn("A heading");
         when(node.getProperty("jcr:title")).thenReturn(title);
 
+        // Asserting the DECISION, not the returned list. hasTitle only gates the warning, so an
+        // assertion on textProperties(...) could not observe it at all: the previous version of
+        // this test was byte-identical in effect to the no-title test below, and would have passed
+        // with hasTitle deleted or always false.
         assertTrue(RevisionHistoryFunctions.textProperties(node).isEmpty(),
                 "it contributes no property text, which is correct");
+        assertFalse(
+                RevisionHistoryFunctions.nothingReachesTheSnapshot(node, Collections.emptyList()),
+                "a title IS emitted by the view, so this must not be reported as content lost");
+    }
+
+    @Test
+    @DisplayName("a node with neither text, children nor title IS reported as losing content")
+    void nothingAtAllIsReported() throws Exception {
+        JCRNodeWrapper node = nodeWith(Collections.emptyList(), false);
+
+        assertTrue(
+                RevisionHistoryFunctions.nothingReachesTheSnapshot(node, Collections.emptyList()),
+                "nothing of this node reaches the snapshot, which must be reported");
+    }
+
+    @Test
+    @DisplayName("a container with children is not reported, even with no text of its own")
+    void containerIsNotReported() throws Exception {
+        JCRNodeWrapper node = nodeWith(Collections.emptyList(), true);
+
+        assertFalse(
+                RevisionHistoryFunctions.nothingReachesTheSnapshot(node, Collections.emptyList()),
+                "its children carry the content; warning here would be noise on every page");
     }
 
     @Test

@@ -137,8 +137,17 @@ export const SiteSettings = () => {
             // The server refuses with a message naming the permission and the path, so showing it is
             // more useful than replacing it with a generic failure.
             return (
-                <Banner data-sel-role="crh-settings-error" role="alert" variant="danger"
-                        title={t('settings.label')}>
+                <Banner
+                    data-sel-role="crh-settings-error"
+                    role="alert"
+                    // Banner sets aria-label from its title prop on the region's own root div. On a
+                    // live region that name can be announced in place of the changed children, and
+                    // the children are where the reason lives -- so the reason goes into the name
+                    // too. Without this the alert fires and says only the panel's name.
+                    aria-label={`${t('settings.label')}: ${error.message}`}
+                    variant="danger"
+                    title={t('settings.label')}
+                >
                     {error.message}
                 </Banner>
             );
@@ -162,6 +171,11 @@ export const SiteSettings = () => {
                         // change applied. role="alert" is assertive because this reports that the
                         // write did NOT happen and the draft is still unsaved.
                         role="alert"
+                        // And the reason is put into the accessible name as well as the children.
+                        // Banner derives aria-label from title, which on a live region can be
+                        // announced instead of the changed children, leaving the user told that
+                        // saving failed but never why.
+                        aria-label={`${t('settings.saveFailed')}: ${writeError}`}
                         variant="danger"
                         title={t('settings.saveFailed')}
                     >{writeError}</Banner>

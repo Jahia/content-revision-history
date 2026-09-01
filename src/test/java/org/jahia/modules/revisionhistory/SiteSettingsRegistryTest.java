@@ -351,6 +351,74 @@ class SiteSettingsRegistryTest {
         }
     }
 
+    // ------------------------------------------------------------------ component lifecycle
+
+    @Test
+    @DisplayName("a stopping instance does not clear a newer one that already activated")
+    void deactivateDoesNotClearALiveReplacement() {
+        // During a bundle refresh the replacement activates before the old instance stops. An
+        // unconditional null would then clear the LIVE instance, and settingsFor would fall back to
+        // the module defaults for every site until the next activation -- silently.
+        SiteSettingsRegistry old = new SiteSettingsRegistry();
+        SiteSettingsRegistry replacement = new SiteSettingsRegistry();
+        old.activate();
+        replacement.activate();
+
+        old.deactivate();
+
+        assertSame(replacement, SiteSettingsRegistry.active(),
+                "the instance that is actually running must survive the other one stopping");
+        replacement.deactivate();
+        assertNull(SiteSettingsRegistry.active(), "and the last one out does clear it");
+    }
+
+    @Test
+    @DisplayName("the capture principal of record names the per-site account when one authenticated")
+    void principalOfRecordNamesThePerSiteAccount() throws Exception {
+        SiteSettingsRegistry running = new SiteSettingsRegistry();
+        running.activate();
+        try {
+            running.updated("pid-1", props(
+                    SiteSettingsRegistry.PROP_SITE_KEY, "academy",
+                    SiteSettingsRegistry.PROP_USER, "crh-academy",
+                    SiteSettingsRegistry.PROP_SECRET, "s3cret"));
+
+            SiteCaptureSettings site = SiteSettingsRegistry.settingsFor("academy");
+            assertNotNull(site.getAuthorization(), "the fixture must actually resolve a credential");
+            assertEquals("crh-academy",
+                    GuestMarkdownFetcher.principalFor(site, site.getAuthorization()),
+                    "the render authenticated as this account, so the snapshot must say so");
+        } finally {
+            running.deactivate();
+        }
+    }
+
+    @Test
+    @DisplayName("and records guest when the configured account had no credential to send")
+    void principalOfRecordSaysGuestWhenNothingResolved() throws Exception {
+        // The regression this guards: a configured capture.user whose secret does not resolve makes
+        // the fetch ANONYMOUS, because authorizationFor returns null and no header is sent. Recording
+        // the account name then told an editor a plain guest render had privileged provenance --
+        // and the inverse case told them restricted content was safe to publish.
+        SiteSettingsRegistry running = new SiteSettingsRegistry();
+        running.activate();
+        try {
+            running.updated("pid-1", props(
+                    SiteSettingsRegistry.PROP_SITE_KEY, "academy",
+                    SiteSettingsRegistry.PROP_USER, "crh-academy"));
+
+            SiteCaptureSettings site = SiteSettingsRegistry.settingsFor("academy");
+            assertNull(site.getAuthorization(),
+                    "a user without a secret must resolve no credential at all");
+            // No header goes out, so the render is anonymous whatever the configuration says.
+            assertEquals(RevisionHistoryConstants.CAPTURE_PRINCIPAL,
+                    GuestMarkdownFetcher.principalFor(site, null),
+                    "no credential resolved, so the render really was anonymous");
+        } finally {
+            running.deactivate();
+        }
+    }
+
     // ------------------------------------------------------------------ writing safely
 
     /** Runs a body with karaf.etc pointed at a temp directory, restoring it afterwards. */

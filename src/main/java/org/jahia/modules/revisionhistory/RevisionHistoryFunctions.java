@@ -196,9 +196,22 @@ public final class RevisionHistoryFunctions {
      * The loud fall-through the design asked for: a node contributing neither text nor children is
      * content that vanished from the record, and it must not do so in silence.
      */
+    /**
+     * Does this node contribute nothing at all to the snapshot?
+     *
+     * <p>Package-private and separate from the reporting so it can be asserted. It previously lived
+     * inline in the warning's guard, which made it unobservable: a test could only check the
+     * returned list, and hasTitle does not affect that list, so a test named for the title case was
+     * indistinguishable from one for the no-title case and would have passed with hasTitle deleted.
+     */
+    static boolean nothingReachesTheSnapshot(org.jahia.services.content.JCRNodeWrapper node,
+                                             java.util.List<String> values) {
+        return values.isEmpty() && !hasChildren(node) && !hasTitle(node);
+    }
+
     private static void reportIfNothingReachesTheSnapshot(
             org.jahia.services.content.JCRNodeWrapper node, java.util.List<String> values) {
-        if (!values.isEmpty() || hasChildren(node) || hasTitle(node)) {
+        if (!nothingReachesTheSnapshot(node, values)) {
             return;
         }
         // Guarded, not because a WARN is usually off, but because safePath and safeType each make a

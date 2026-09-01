@@ -60,20 +60,35 @@ final class GuestMarkdownFetcher {
         final CaptureStatus status;
         final String message;
         final String sourceUrl;
+        /**
+         * The account this render authenticated as, decided at the moment the header was set.
+         *
+         * <p>It travels with the result rather than being re-derived afterwards. The caller used to
+         * ask the configuration again once the body was back, so a configuration change in between
+         * -- an administrator deleting the site's settings, or FileInstall applying an edit -- made
+         * the recorded principal disagree with the one that actually fetched. Recording "guest" for
+         * a render that authenticated as a privileged account tells every contributor who reads the
+         * snapshot that restricted content is safe to show anybody.
+         */
+        final String principal;
 
-        private Fetched(String body, CaptureStatus status, String message, String sourceUrl) {
+        private Fetched(String body, CaptureStatus status, String message, String sourceUrl,
+                        String principal) {
             this.body = body;
             this.status = status;
             this.message = message;
             this.sourceUrl = sourceUrl;
+            this.principal = principal;
         }
 
-        static Fetched ok(String body, String sourceUrl) {
-            return new Fetched(body, CaptureStatus.STORED, null, sourceUrl);
+        static Fetched ok(String body, String sourceUrl, String principal) {
+            return new Fetched(body, CaptureStatus.STORED, null, sourceUrl, principal);
         }
 
         static Fetched problem(CaptureStatus status, String message, String sourceUrl) {
-            return new Fetched(null, status, message, sourceUrl);
+            // No snapshot is stored for a problem, so there is no principal to record.
+            return new Fetched(null, status, message, sourceUrl,
+                    RevisionHistoryConstants.CAPTURE_PRINCIPAL);
         }
 
         boolean isOk() {
@@ -148,7 +163,13 @@ final class GuestMarkdownFetcher {
             connection.setReadTimeout(READ_TIMEOUT_MILLIS);
             // No cookie, ever: a session would make the render resolve to whoever last used
             // it. The identity comes from configuration and nowhere else.
-            String authorization = authorizationFor(siteKeyForFetch.get());
+            // One read of the settings, used for both the header and the record of who sent it.
+            // Two reads could disagree, which is the whole point of carrying the principal along.
+            SiteCaptureSettings site = SiteSettingsRegistry.settingsFor(siteKeyForFetch.get());
+            String authorization = site.getAuthorization() != null
+                    ? site.getAuthorization()
+                    : CaptureIdentity.authorization();
+            String principal = principalFor(site, authorization);
             if (authorization != null) {
                 connection.setRequestProperty("Authorization", authorization);
             }
@@ -165,7 +186,7 @@ final class GuestMarkdownFetcher {
                 return Fetched.problem(CaptureStatus.OVERSIZE,
                         "Guest render exceeded " + RevisionHistoryConstants.MAX_MARKDOWN_BYTES + " bytes", url);
             }
-            return Fetched.ok(body, url);
+            return Fetched.ok(body, url, principal);
         } catch (IOException e) {
             // Was DEBUG, which is off in production, while the durable record carries only the
             // exception class and message. A systemic failure -- the connector throttling, TLS
@@ -479,6 +500,25 @@ final class GuestMarkdownFetcher {
      * <p>Package-private so the precedence is pinned by a test rather than inferred from two call
      * sites.
      */
+    /**
+     * Whose credential the given authorization header belongs to.
+     *
+     * <p>A name is returned only when a credential actually went out. A configured account whose
+     * secret did not resolve produces no header, so the render was anonymous however it was
+     * configured, and the record must say guest.
+     */
+    static String principalFor(SiteCaptureSettings site, String authorizationSent) {
+        if (authorizationSent == null) {
+            return RevisionHistoryConstants.CAPTURE_PRINCIPAL;
+        }
+        if (authorizationSent.equals(site.getAuthorization())) {
+            String perSite = site.getCaptureUser();
+            return perSite == null ? RevisionHistoryConstants.CAPTURE_PRINCIPAL : perSite;
+        }
+        String configured = CaptureIdentity.principal();
+        return configured == null ? RevisionHistoryConstants.CAPTURE_PRINCIPAL : configured;
+    }
+
     static String authorizationFor(String siteKey) {
         String perSite = SiteSettingsRegistry.settingsFor(siteKey).getAuthorization();
         return perSite != null ? perSite : CaptureIdentity.authorization();
