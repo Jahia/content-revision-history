@@ -516,9 +516,17 @@ silence. The folder's `crh:lastCaptureStatus` is what makes a gap in the record 
   invariant (`newestHash` relies on lexicographic order being chronological) across DST and
   across cluster nodes in different zones. The hash suffix also makes concurrent captures of
   the same publication compute the same node name, so a duplicate write is a harmless no-op.
-- **ACL locked down** at the root: snapshots are the evidentiary basis of a public claim, and
-  inheriting `/contents` ACLs would let any site contributor read every historical version of
-  every page — and silently rewrite them.
+- **ACL inheritance is deliberately NOT broken.** An earlier design broke it at the root, on the
+  reasoning that snapshots are the evidentiary basis of a public claim and contributors should not
+  read or rewrite them. That made the folder unreadable to the editors who must read a snapshot in
+  order to write the revision entry describing it, so
+  `RevisionSnapshotService.restoreInheritance` now restores inheritance on every capture, and
+  existing installations repair themselves the next time a page is published.
+
+  The consequence is worth stating plainly: **anyone with read on `/sites/<site>/contents` can read
+  every snapshot**, and a snapshot captured as a configured `capture.user` may contain content the
+  public cannot see. `crh:capturedBy` records which case a given snapshot is. If that is not
+  acceptable for a site, restrict `contents` itself rather than expecting this module to.
 
 ## Content types
 

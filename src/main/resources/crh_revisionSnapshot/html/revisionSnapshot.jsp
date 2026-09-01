@@ -20,11 +20,16 @@
   anything an editor ever typed, including markup. It has never been sanitised -- it was never
   meant to be rendered as HTML -- so it must not be emitted as any.
 
-  VISIBILITY: the revision-history tree has ACL inheritance broken and grants nobody, so in
-  practice only server administrators (who bypass ACLs) can reach this preview. That is the
-  storage design working as intended -- snapshots are the evidentiary basis of a public claim and
-  site contributors must not be able to read or rewrite them -- and it is a deliberate decision
-  rather than an oversight. Widening it is an ACL question, not a view question.
+  VISIBILITY: this preview is reachable by anyone with read on /sites/<site>/contents, which in
+  practice means every site contributor. The tree does NOT have its ACL inheritance broken;
+  RevisionSnapshotService.restoreInheritance actively restores it on every capture, because
+  breaking it made the folder unreadable to the very editors who must read a snapshot in order to
+  write the revision entry describing it.
+
+  Do not relax the escaping above on the assumption that only administrators see this. And note the
+  consequence for restricted content: a snapshot captured as a configured principal can hold text
+  the public cannot see, and it is then readable by any contributor. crh:capturedBy is what records
+  which case a given snapshot is.
 --%>
 <template:addResources type="css" resources="revision-history.css"/>
 
@@ -49,9 +54,12 @@
         <dt><fmt:message key="crh_snapshotPreview.language"/></dt>
         <dd><c:out value="${currentNode.properties['crh:language'].string}"/></dd>
 
-        <%-- Always "guest". Worth surfacing precisely because it is the guarantee the whole
-             capture design rests on: a snapshot is built from what the public can see, never
-             from the privileges of whoever triggered it. --%>
+        <%-- NOT always "guest". It was, when capture could only ever render anonymously, and the
+             claim survived the change that made the principal configurable. It now holds whichever
+             account the render actually authenticated as: the site's own capture.user, the
+             module-wide one, or "guest" when no credential resolved. That is exactly why it is
+             surfaced -- it is the only thing on the page that says whether this text is what the
+             public can see or what a privileged account could. --%>
         <dt><fmt:message key="crh_snapshotPreview.capturedBy"/></dt>
         <dd><c:out value="${currentNode.properties['crh:capturedBy'].string}"/></dd>
 

@@ -264,6 +264,57 @@ describe('Site administration panel for revision history', () => {
         });
     });
 
+    /** Posts one GraphQL operation as whoever is currently logged in, errors included. */
+    const asCurrentUser = (query: string) => cy.request({
+        method: 'POST',
+        url: '/modules/graphql',
+        headers: {'Content-Type': 'application/json', Origin: Cypress.config('baseUrl')},
+        body: {query},
+        failOnStatusCode: false
+    });
+
+    // Only the QUERY side was ever proven to refuse a non-admin. The guard is duplicated across
+    // three resolvers by design, so dropping it from one mutation is an easy mistake that would let
+    // any editor disable capture, redirect capture.baseUrl, or reset another site's configuration,
+    // with every existing test still green.
+    it('refuses saveSiteSettings to an editor, not just the query', () => {
+        cy.login('mathias', 'password');
+        asCurrentUser(`mutation { contentRevisionHistory { saveSiteSettings(siteKey: "${siteKey}", captureEnabled: false) { siteKey } } }`)
+            .then(res => {
+                const errors = res.body.errors || [];
+                expect(errors.length, 'an editor must not be able to write settings').to.be.greaterThan(0);
+                expect(errors[0].message).to.contain('siteAdminContentRevisionHistory');
+            });
+    });
+
+    it('refuses deleteSiteSettings to an editor', () => {
+        cy.login('mathias', 'password');
+        asCurrentUser(`mutation { contentRevisionHistory { deleteSiteSettings(siteKey: "${siteKey}") } }`)
+            .then(res => {
+                const errors = res.body.errors || [];
+                expect(errors.length, 'an editor must not be able to reset settings').to.be.greaterThan(0);
+                expect(errors[0].message).to.contain('siteAdminContentRevisionHistory');
+            });
+    });
+
+    // A value the running system will not use must be refused, not stored and echoed back. It was
+    // written verbatim to the .cfg and returned as the applied setting; only when FileInstall
+    // re-parsed the file did it get silently replaced by the module default.
+    it('refuses a retention value that would keep no history', () => {
+        cy.login();
+        asCurrentUser(`mutation { contentRevisionHistory { saveSiteSettings(siteKey: "${siteKey}", maxSnapshots: 0) { maxSnapshots } } }`)
+            .then(res => {
+                const errors = res.body.errors || [];
+                expect(errors.length, '0 must be refused').to.be.greaterThan(0);
+                expect(errors[0].message).to.contain('at least 1');
+            });
+
+        cy.apollo({query: settingsQuery, variables: {siteKey}}).then(({data}) => {
+            expect(data.contentRevisionHistory.siteSettings.maxSnapshots,
+                'a refused value must not reach the file').to.be.greaterThan(0);
+        });
+    });
+
     // Every assertion above runs as root, which is exactly how the jContent visibility bug survived
     // two releases. An editor holds jcr:write on the site and still must not administer capture:
     // the account the module authenticates with is configured here.

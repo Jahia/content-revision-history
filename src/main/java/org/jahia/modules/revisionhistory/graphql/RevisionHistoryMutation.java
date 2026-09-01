@@ -1,9 +1,11 @@
 package org.jahia.modules.revisionhistory.graphql;
 
+import graphql.ErrorType;
 import graphql.annotations.annotationTypes.GraphQLDescription;
 import graphql.annotations.annotationTypes.GraphQLField;
 import graphql.annotations.annotationTypes.GraphQLName;
 import graphql.annotations.annotationTypes.GraphQLNonNull;
+import org.jahia.modules.graphql.provider.dxm.BaseGqlClientException;
 import org.jahia.modules.revisionhistory.SiteCaptureSettings;
 import org.jahia.modules.revisionhistory.SiteSettingsRegistry;
 
@@ -24,6 +26,17 @@ public class RevisionHistoryMutation {
             @GraphQLName("captureUser") String captureUser,
             @GraphQLName("baseUrl") String baseUrl) {
         SiteSettingsAccess.requireSiteAdmin(siteKey);
+        // Refused here rather than written and quietly replaced later. An out-of-range value was
+        // persisted verbatim and echoed back, so the panel displayed it as the applied setting;
+        // only when FileInstall re-parsed the file did positiveInt() notice and substitute the
+        // module default, logging a warning that never reached the UI. The operator was left
+        // believing a value the running system was not using.
+        if (maxSnapshots != null && maxSnapshots < 1) {
+            throw new BaseGqlClientException(
+                    "maxSnapshots must be at least 1; " + maxSnapshots + " would keep no history"
+                    + " at all. Leave it unset to use the module default.",
+                    ErrorType.ValidationError);
+        }
         SiteSettingsRegistry registry = SiteSettingsAccess.registry();
         SiteCaptureSettings current = registry.forSite(siteKey);
 
