@@ -628,10 +628,16 @@ Two constraints that cost real debugging time, recorded so they don't again:
   namespace and **uninstalls the bundle a few hundred milliseconds after the install reports
   success** — with the "Invalid license check" ERROR logged *after* the uninstall lines, so
   log order actively misleads.
-- **The pom must declare the blueprint extender capability**
+- **A module that uses Spring must declare the blueprint extender capability**
   (`osgi.extender=org.jahia.bundles.blueprint.extender.config`). Without it the module gets no
-  Spring context and every code extension point is silently inert, while CNDs and views keep
-  working perfectly. Nothing is logged.
+  Spring context and every Spring-based extension point is silently inert, while CNDs and views
+  keep working perfectly. Nothing is logged.
+
+  **This module does not declare it, deliberately.** It has no Spring context: its code extension
+  points are Declarative Services components, and `maven-bundle-plugin`'s `_dsannotations` adds
+  the `osgi.extender=osgi.component` requirement that DS needs. The note is kept because the
+  symptom is so hard to diagnose from the outside, and because a future Spring-based extension
+  point here would need the capability added.
 
 jsoup is **embedded** in the bundle (`Bundle-ClassPath`), not imported: the platform ships
 jsoup but does not export `org.jsoup` to modules.

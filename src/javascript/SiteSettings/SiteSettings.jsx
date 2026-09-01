@@ -137,7 +137,7 @@ export const SiteSettings = () => {
             // The server refuses with a message naming the permission and the path, so showing it is
             // more useful than replacing it with a generic failure.
             return (
-                <Banner data-sel-role="crh-settings-error" variant="danger"
+                <Banner data-sel-role="crh-settings-error" role="alert" variant="danger"
                         title={t('settings.label')}>
                     {error.message}
                 </Banner>
@@ -156,12 +156,21 @@ export const SiteSettings = () => {
                 {writeError && (
                     <Banner
                         data-sel-role="crh-write-error"
+                        // moonstone's Banner renders a plain div: aria-label only, no role and no
+                        // aria-live. A failed save was therefore shown but never announced, so a
+                        // screen reader user had to re-explore the panel to discover whether their
+                        // change applied. role="alert" is assertive because this reports that the
+                        // write did NOT happen and the draft is still unsaved.
+                        role="alert"
                         variant="danger"
                         title={t('settings.saveFailed')}
                     >{writeError}</Banner>
                 )}
 
                 <Banner
+                    // Polite, not assertive: this reports which settings are in force and changes
+                    // as a side effect of saving, so it must not interrupt.
+                    role="status"
                     variant={current.configured ? 'info' : 'neutral'}
                     title={current.configured ? t('settings.configured') : t('settings.usingDefaults')}
                 >{''}</Banner>
@@ -188,34 +197,43 @@ export const SiteSettings = () => {
                     />
                 </Field>
 
-                <Field
-                    id="crh-field-capture-user"
-                    label={t('settings.captureUser')}
-                    helper={current.credentialResolved
-                        ? t('settings.credentialResolved')
-                        : t('settings.credentialMissing')}
-                >
+                {/*
+                    The helper is rendered here rather than through Field's `helper` prop. Field
+                    renders that prop as a caption with no id and never wires aria-describedby, so
+                    whether a credential resolved -- which decides whether restricted pages can be
+                    captured at all -- reached sighted users only. aria-describedby needs an element
+                    with an id, so the element is ours.
+                */}
+                <Field id="crh-field-capture-user" label={t('settings.captureUser')}>
                     <Input
                         data-sel-role="crh-capture-user"
                         aria-label={t('settings.captureUser')}
+                        aria-describedby="crh-capture-user-help"
                         value={current.captureUser || ''}
                         placeholder={t('settings.captureUserPlaceholder')}
                         onChange={e => update({captureUser: e.target.value})}
                     />
+                    <Typography id="crh-capture-user-help" variant="caption">
+                        {current.credentialResolved
+                            ? t('settings.credentialResolved')
+                            : t('settings.credentialMissing')}
+                    </Typography>
                 </Field>
 
-                <Field
-                    id="crh-field-base-url"
-                    label={t('settings.baseUrl')}
-                    helper={t('settings.baseUrlHint')}
-                >
+                <Field id="crh-field-base-url" label={t('settings.baseUrl')}>
                     <Input
                         data-sel-role="crh-base-url"
                         aria-label={t('settings.baseUrl')}
+                        aria-describedby="crh-base-url-help"
                         value={current.baseUrl || ''}
                         placeholder={t('settings.baseUrlPlaceholder')}
                         onChange={e => update({baseUrl: e.target.value})}
                     />
+                    {/* The loopback-versus-public-host warning explains why capture silently 404s
+                        when this is set wrong; it must not be sighted-only. */}
+                    <Typography id="crh-base-url-help" variant="caption">
+                        {t('settings.baseUrlHint')}
+                    </Typography>
                 </Field>
 
                 <Typography variant="caption" data-sel-role="crh-shortcut-hint">
