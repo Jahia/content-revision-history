@@ -23,7 +23,6 @@ public enum CaptureStatus {
     RATE_LIMITED,
     /** The guest render did not return 200, or the page is not publicly readable. */
     NOT_PUBLIC,
-    /** Rendering or storing threw. */
     /**
      * Capture is switched off for this site.
      *
@@ -33,5 +32,6 @@ public enum CaptureStatus {
      */
     DISABLED,
 
+    /** Rendering or storing threw. */
     FAILED
 }

@@ -62,12 +62,22 @@ public final class RevisionDiffView {
         return previousLabel;
     }
 
+    /**
+     * Copied on the way out, because {@link Calendar} is mutable and this class advertises that it
+     * is not. A view helper calling {@code setTimeZone} or {@code add} on the returned object would
+     * otherwise change what every later reader of the same instance sees.
+     */
     public Calendar getCurrentDate() {
-        return currentDate;
+        return copyOf(currentDate);
     }
 
+    /** @see #getCurrentDate() */
     public Calendar getPreviousDate() {
-        return previousDate;
+        return copyOf(previousDate);
+    }
+
+    private static Calendar copyOf(Calendar value) {
+        return value == null ? null : (Calendar) value.clone();
     }
 
     public MarkdownDiff.Result getDiff() {

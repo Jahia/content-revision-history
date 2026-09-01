@@ -36,15 +36,21 @@ final class SiteSettingsAccess {
     }
 
     /**
-     * @throws IllegalStateException when the module is not running, rather than reporting settings
+     * @throws BaseGqlClientException when the module is not running, rather than reporting settings
      *         that nothing is applying
+     *
+     * <p>A client error for the same reason {@link #requireSiteAdmin} is one: this is reachable in
+     * the ordinary course of events -- an administrator opening the panel during a bundle restart
+     * -- and a raw {@code IllegalStateException} reaches them as "Internal Server Error(s) while
+     * executing query", which reads as a bug in the module rather than "try again in a moment".
      */
     static SiteSettingsRegistry registry() {
         SiteSettingsRegistry registry = SiteSettingsRegistry.active();
         if (registry == null) {
-            throw new IllegalStateException(
-                    "Content Revision History is not running on this node, so its settings cannot be"
-                    + " read or written here.");
+            throw new BaseGqlClientException(
+                    "Content Revision History is not running on this node, so its settings cannot"
+                    + " be read or written here. If the module is being restarted, retry shortly.",
+                    ErrorType.ExecutionAborted);
         }
         return registry;
     }
