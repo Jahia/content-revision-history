@@ -28,9 +28,9 @@ public class RevisionHistoryMutation {
         SiteSettingsAccess.requireSiteAdmin(siteKey);
         // Refused here rather than written and quietly replaced later. An out-of-range value was
         // persisted verbatim and echoed back, so the panel displayed it as the applied setting;
-        // only when FileInstall re-parsed the file did positiveInt() notice and substitute the
-        // module default, logging a warning that never reached the UI. The operator was left
-        // believing a value the running system was not using.
+        // only when FileInstall re-parsed the file did the positiveInt helper notice, and it then
+        // substituted the module default and logged a warning that never reached the UI, leaving
+        // the operator believing a value the running system was not using.
         if (maxSnapshots != null && maxSnapshots < 1) {
             throw new BaseGqlClientException(
                     "maxSnapshots must be at least 1; " + maxSnapshots + " would keep no history"

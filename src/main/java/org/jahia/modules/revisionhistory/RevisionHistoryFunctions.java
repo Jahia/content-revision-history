@@ -12,6 +12,9 @@ import javax.jcr.RepositoryException;
  */
 public final class RevisionHistoryFunctions {
 
+    /** The title the generic markdown fallback emits as a heading. */
+    private static final String JCR_TITLE = "jcr:title";
+
     private static final org.slf4j.Logger LOGGER =
             org.slf4j.LoggerFactory.getLogger(RevisionHistoryFunctions.class);
 
@@ -208,9 +211,13 @@ public final class RevisionHistoryFunctions {
      */
     private static boolean hasTitle(org.jahia.services.content.JCRNodeWrapper node) {
         try {
-            return node.hasProperty("jcr:title")
-                    && node.getProperty("jcr:title").getString() != null
-                    && !node.getProperty("jcr:title").getString().trim().isEmpty();
+            if (!node.hasProperty(JCR_TITLE)) {
+                return false;
+            }
+            // Read once: the property was fetched three times, which is both the duplicate literal
+            // Sonar flags and three round trips where one will do.
+            String title = node.getProperty(JCR_TITLE).getString();
+            return title != null && !title.trim().isEmpty();
         } catch (RepositoryException unreadable) {
             // Assume it has one rather than emit a warning we cannot substantiate.
             return true;
