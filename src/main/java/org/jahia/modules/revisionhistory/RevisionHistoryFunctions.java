@@ -201,9 +201,14 @@ public final class RevisionHistoryFunctions {
         if (!values.isEmpty() || hasChildren(node) || hasTitle(node)) {
             return;
         }
-        LOGGER.warn("Node {} of type {} contributed NO text and has no children, so nothing of"
-                + " it reaches the snapshot. If it holds content, the markdown template type"
-                + " needs a view for that type.", safePath(node), safeType(node));
+        // Guarded, not because a WARN is usually off, but because safePath and safeType each make a
+        // repository call. Passing them as arguments evaluated them whether or not anything would
+        // be written, which is a real cost on a page of many unspecialised nodes.
+        if (LOGGER.isWarnEnabled()) {
+            LOGGER.warn("Node {} of type {} contributed NO text and has no children, so nothing of"
+                    + " it reaches the snapshot. If it holds content, the markdown template type"
+                    + " needs a view for that type.", safePath(node), safeType(node));
+        }
     }
 
     private static boolean hasChildren(org.jahia.services.content.JCRNodeWrapper node) {
