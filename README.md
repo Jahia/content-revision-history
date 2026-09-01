@@ -636,6 +636,23 @@ Two constraints that cost real debugging time, recorded so they don't again:
 jsoup is **embedded** in the bundle (`Bundle-ClassPath`), not imported: the platform ships
 jsoup but does not export `org.jsoup` to modules.
 
+## Before you commit
+
+Enable the repository's hook once per clone:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+It refuses a commit that would carry a credential into the repository. The backfill script has to
+be edited with a real account and password to run, and a later `git add` of that same file for an
+unrelated change has already swept such an edit into a public commit once. The script's own comment
+saying "there is deliberately NO default" sat three lines above the value that got committed, so a
+comment is not enough. The hook inspects staged content, so fixing the working tree afterwards does
+not satisfy it.
+
+If you need to keep your local edit, stage the rest with `git add -p` rather than the whole file.
+
 ## Tests
 
 - `mvn test` — unit tests for the Markdown pipeline (the pure, rule-bearing part).
