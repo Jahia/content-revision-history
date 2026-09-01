@@ -457,6 +457,12 @@ There is also no content-correctness reason to reach for the public host. Measur
 An absolute URL *does* appear in a snapshot when an editor authored one. That is the record being
 faithful, and the capture endpoint has no bearing on it.
 
+**Critical security note:** A capture credential (`capture.user`/`capture.secretFile`), if configured,
+is sent **only** to loopback addresses (127.0.0.1, localhost, [::1]). If `capture.baseUrl` points
+elsewhere, the credential is withheld and capture renders anonymously instead. This prevents a site
+administrator from receiving the operator's capture password. The rendered snapshot is recorded as
+guest, which is what the unauthenticated render will actually have been.
+
 A non-loopback value is accepted — an unusual deployment may genuinely need one — and logged as a
 warning naming the site.
 
