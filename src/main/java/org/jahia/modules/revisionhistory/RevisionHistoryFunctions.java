@@ -111,63 +111,99 @@ public final class RevisionHistoryFunctions {
         if (node == null) {
             return values;
         }
+        // Ordered by property name: JCR does not guarantee iteration order, and a snapshot is
+        // diffed against its neighbours, so a stable order matters more than a natural one.
         java.util.SortedMap<String, java.util.List<String>> byName = new java.util.TreeMap<>();
-        try {
-            javax.jcr.PropertyIterator properties = node.getProperties();
-            while (properties.hasNext()) {
-                javax.jcr.Property property = properties.nextProperty();
-                String name = property.getName();
-                if (name.startsWith("jcr:") || name.startsWith("j:")) {
-                    continue;
-                }
-                try {
-                    if (property.getType() != javax.jcr.PropertyType.STRING) {
-                        continue;
-                    }
-                    // Multi-valued properties are included, each value as its own block. Skipping
-                    // them was silent content loss of the worst kind: a type storing its bullet
-                    // points in a multi-valued string beside a single-valued heading would, when an
-                    // editor rewrote every bullet, still hash identically -- so capture recorded
-                    // UNCHANGED and the record stated that nothing in the page text had changed.
-                    // Values keep their stored order within the property; properties are ordered by
-                    // name because JCR does not guarantee iteration order.
-                    java.util.List<String> propertyValues = new java.util.ArrayList<>();
-                    if (property.isMultiple()) {
-                        javax.jcr.Value[] stored = property.getValues();
-                        for (javax.jcr.Value value : stored == null ? new javax.jcr.Value[0] : stored) {
-                            String text = value.getString();
-                            if (text != null && !text.trim().isEmpty()) {
-                                propertyValues.add(text);
-                            }
-                        }
-                    } else {
-                        String value = property.getString();
-                        if (value != null && !value.trim().isEmpty()) {
-                            propertyValues.add(value);
-                        }
-                    }
-                    if (!propertyValues.isEmpty()) {
-                        byName.put(name, propertyValues);
-                    }
-                } catch (RepositoryException unreadable) {
-                    // One unreadable property must not cost the whole node its content.
-                    LOGGER.warn("Could not read property {} of {}, skipping it", name, node.getPath(), unreadable);
-                }
-            }
-        } catch (RepositoryException cannotList) {
-            LOGGER.warn("Could not list the properties of {}; its text will be missing from the"
-                    + " snapshot", safePath(node), cannotList);
+        if (!collectInto(node, byName)) {
             return values;
         }
         byName.values().forEach(values::addAll);
-        if (values.isEmpty() && !hasChildren(node) && !hasTitle(node)) {
-            // The loud fall-through the design asked for. A node that contributes neither text nor
-            // children is content that vanished from the record, and it must not do so in silence.
-            LOGGER.warn("Node {} of type {} contributed NO text and has no children, so nothing of"
-                    + " it reaches the snapshot. If it holds content, the markdown template type"
-                    + " needs a view for that type.", safePath(node), safeType(node));
-        }
+        reportIfNothingReachesTheSnapshot(node, values);
         return values;
+    }
+
+    /**
+     * @return false when the node's properties could not be listed at all, so the caller can stop
+     *         rather than report an empty node as a fall-through
+     */
+    private static boolean collectInto(org.jahia.services.content.JCRNodeWrapper node,
+                                       java.util.Map<String, java.util.List<String>> byName) {
+        try {
+            javax.jcr.PropertyIterator properties = node.getProperties();
+            while (properties.hasNext()) {
+                collectOne(node, properties.nextProperty(), byName);
+            }
+            return true;
+        } catch (RepositoryException cannotList) {
+            LOGGER.warn("Could not list the properties of {}; its text will be missing from the"
+                    + " snapshot", safePath(node), cannotList);
+            return false;
+        }
+    }
+
+    private static void collectOne(org.jahia.services.content.JCRNodeWrapper node,
+                                   javax.jcr.Property property,
+                                   java.util.Map<String, java.util.List<String>> byName) {
+        String name = "(unnamed)";
+        try {
+            name = property.getName();
+            // jcr: and j: carry structure and publication bookkeeping, never prose. jcr:title is
+            // excluded with them because the view emits it separately as a heading; including it
+            // here would double every title in every snapshot.
+            if (name.startsWith("jcr:") || name.startsWith("j:")
+                    || property.getType() != javax.jcr.PropertyType.STRING) {
+                return;
+            }
+            java.util.List<String> text = textOf(property);
+            if (!text.isEmpty()) {
+                byName.put(name, text);
+            }
+        } catch (RepositoryException unreadable) {
+            // One unreadable property must not cost the whole node its content.
+            LOGGER.warn("Could not read property {} of {}, skipping it", name, safePath(node), unreadable);
+        }
+    }
+
+    /**
+     * The non-blank string values of one property, in stored order.
+     *
+     * <p>Multi-valued properties are included, each value becoming its own block. Skipping them was
+     * silent content loss of the worst kind: a type storing its bullet points in a multi-valued
+     * string beside a single-valued heading would, when an editor rewrote every bullet, still hash
+     * identically, so capture recorded UNCHANGED and the record stated that nothing in the page text
+     * had changed. Order within a property is preserved because it is editorial.
+     */
+    private static java.util.List<String> textOf(javax.jcr.Property property) throws RepositoryException {
+        java.util.List<String> text = new java.util.ArrayList<>();
+        if (property.isMultiple()) {
+            javax.jcr.Value[] stored = property.getValues();
+            for (javax.jcr.Value value : stored == null ? new javax.jcr.Value[0] : stored) {
+                addIfNotBlank(text, value.getString());
+            }
+        } else {
+            addIfNotBlank(text, property.getString());
+        }
+        return text;
+    }
+
+    private static void addIfNotBlank(java.util.List<String> into, String value) {
+        if (value != null && !value.trim().isEmpty()) {
+            into.add(value);
+        }
+    }
+
+    /**
+     * The loud fall-through the design asked for: a node contributing neither text nor children is
+     * content that vanished from the record, and it must not do so in silence.
+     */
+    private static void reportIfNothingReachesTheSnapshot(
+            org.jahia.services.content.JCRNodeWrapper node, java.util.List<String> values) {
+        if (!values.isEmpty() || hasChildren(node) || hasTitle(node)) {
+            return;
+        }
+        LOGGER.warn("Node {} of type {} contributed NO text and has no children, so nothing of"
+                + " it reaches the snapshot. If it holds content, the markdown template type"
+                + " needs a view for that type.", safePath(node), safeType(node));
     }
 
     private static boolean hasChildren(org.jahia.services.content.JCRNodeWrapper node) {
