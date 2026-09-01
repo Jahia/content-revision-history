@@ -33,7 +33,7 @@ describe('the generic markdown fallback emits content, not just titles', () => {
 
     before(() => {
         cy.login();
-        deleteNode({pathOrId: pagePath}).then(() => undefined, () => undefined);
+        deleteNode(pagePath).then(null, () => undefined);
         addNode({
             parentPathOrId: `/sites/${siteKey}/home`,
             name: 'crh-fallback',
@@ -56,12 +56,21 @@ describe('the generic markdown fallback emits content, not just titles', () => {
             ]
         });
         publishAndWaitJobEnding(pagePath, [language]);
-        cy.wait(3000);
+        // Wait for the render to actually carry the content rather than for a fixed interval:
+        // capture is asynchronous, and a fixed wait is both slower than it needs to be and
+        // unreliable under load.
+        cy.waitUntil(
+            () => cy.request({
+                url: `/cms/render/default/${language}${pagePath}.markdown`,
+                failOnStatusCode: false
+            }).then(r => r.status === 200 && String(r.body).includes(marker)),
+            {timeout: 30000, interval: 1000, errorMsg: 'the page never rendered its content'}
+        );
     });
 
     after(() => {
         cy.login();
-        deleteNode({pathOrId: pagePath}).then(() => undefined, () => undefined);
+        deleteNode(pagePath).then(null, () => undefined);
     });
 
     it('emits a text property that is not jcr:title', () => {
@@ -77,7 +86,7 @@ describe('the generic markdown fallback emits content, not just titles', () => {
         cy.login();
         renderMarkdown().then(response => {
             expect(response.body).to.contain(`## ${titleMarker}`);
-            // jcr:title is excluded from textProperties precisely so it is not emitted twice; a
+            // Jcr:title is excluded from textProperties precisely so it is not emitted twice; a
             // doubled title would corrupt every heading in every snapshot.
             const occurrences = response.body.split(titleMarker).length - 1;
             expect(occurrences, 'the title appears once, not twice').to.equal(1);

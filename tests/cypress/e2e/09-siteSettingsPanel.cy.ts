@@ -94,8 +94,10 @@ describe('Site administration panel for revision history', () => {
         cy.visit(panelUrl);
         cy.get(PANEL, {timeout: shellTimeoutMs}).should('exist');
 
-        cy.get(MAX_SNAPSHOTS).clear().type('7');
-        cy.get(BASE_URL).clear().type('http://127.0.0.1:8080');
+        cy.get(MAX_SNAPSHOTS).clear();
+        cy.get(MAX_SNAPSHOTS).type('7');
+        cy.get(BASE_URL).clear();
+        cy.get(BASE_URL).type('http://127.0.0.1:8080');
         cy.get(SAVE).click();
 
         // Asserted through the API rather than the DOM: the point of the panel is that it WRITES
@@ -135,7 +137,8 @@ describe('Site administration panel for revision history', () => {
         cy.get(PANEL, {timeout: shellTimeoutMs}).should('exist');
 
         // Typed and committed without the pointer ever moving, which is the point of the shortcut.
-        cy.get(MAX_SNAPSHOTS).clear().type('13{ctrl}{enter}');
+        cy.get(MAX_SNAPSHOTS).clear();
+        cy.get(MAX_SNAPSHOTS).type('13{ctrl}{enter}');
 
         cy.waitUntil(
             () => cy.apollo({query: settingsQuery, variables: {siteKey}})
@@ -164,8 +167,20 @@ describe('Site administration panel for revision history', () => {
 
         // No edit has been made, so the shortcut must not write. Otherwise it would create a
         // per-site configuration for a site that had deliberately been left on the defaults.
+        // Watching the network proves the absence; a fixed wait only proves that nothing had
+        // happened YET, and would pass under CI load even if the shortcut did write a moment later.
+        cy.intercept('POST', '**/modules/graphql', req => {
+            const ops = Array.isArray(req.body) ? req.body : [req.body];
+            if (ops.some(o => typeof o?.query === 'string' && o.query.includes('saveSiteSettings'))) {
+                throw new Error('Ctrl+Enter wrote settings when nothing had been edited');
+            }
+
+            req.continue();
+        });
+
         cy.get('body').type('{ctrl}{enter}');
-        cy.wait(3000);
+        // Round-trip a real query so any save the shortcut fired would already have been sent.
+        cy.apollo({query: settingsQuery, variables: {siteKey}});
         cy.apollo({query: settingsQuery, variables: {siteKey}}).then(({data}) => {
             expect(data.contentRevisionHistory.siteSettings.configured,
                 'an unchanged form must not write a configuration').to.be.false;
@@ -203,7 +218,8 @@ describe('Site administration panel for revision history', () => {
 
         cy.visit(panelUrl);
         cy.get(PANEL, {timeout: shellTimeoutMs}).should('exist');
-        cy.get(MAX_SNAPSHOTS).clear().type('42');
+        cy.get(MAX_SNAPSHOTS).clear();
+        cy.get(MAX_SNAPSHOTS).type('42');
         cy.get(SAVE).click();
 
         cy.get('[data-sel-role="crh-write-error"]', {timeout: 20000})
@@ -256,15 +272,27 @@ describe('Site administration panel for revision history', () => {
         cy.visit(adminRoot, {failOnStatusCode: false});
         // Waits for the shell to finish loading its remotes before asserting an absence, or this
         // passes simply because nothing has rendered yet.
-        cy.get('body', {timeout: shellTimeoutMs}).should('be.visible');
-        cy.wait(5000);
+        // Wait for a signal that does NOT depend on privilege: window.jahia exists only once the
+        // app shell has booted and loaded its remotes, for any user. An earlier version waited for
+        // the 'Administration' nav entry, which a mere editor never sees at all -- so it timed out
+        // on exactly the user this test is about. A fixed wait would have been worse still: it
+        // would pass simply because nothing had rendered yet.
+        cy.window({timeout: shellTimeoutMs}).should(win => {
+            expect((win as unknown as {jahia?: unknown}).jahia, 'the app shell must have booted')
+                .to.not.be.undefined;
+        });
         cy.contains('Revision history').should('not.exist');
+        // And the absence must be a permission decision, not a crash that stopped the render.
+        cy.then(() => {
+            expect(Cypress.env('uncaughtErrors') || [],
+                'the panel must be hidden by permission, not by a page error').to.be.empty;
+        });
     });
 
     it('refuses the settings API to an editor even when the URL is typed by hand', () => {
         // The hidden menu entry is not the security boundary; this is.
         cy.login('mathias', 'password');
-        // cy.request rather than cy.apollo: the refusal arrives as HTTP 200 carrying an errors
+        // Cy.request rather than cy.apollo: the refusal arrives as HTTP 200 carrying an errors
         // array, and the apollo helper does not hand that array back to the caller.
         cy.request({
             method: 'POST',
