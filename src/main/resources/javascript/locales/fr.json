@@ -1,22 +1,23 @@
 {
-  "settings": {
-    "label": "Historique des révisions",
-    "title": "Historique des révisions — {{site}}",
-    "noSite": "Ouvrez ce panneau depuis un site.",
-    "usingDefaults": "Ce site n'a pas de réglages propres et utilise ceux du module.",
-    "configured": "Ce site a ses propres réglages.",
-    "captureEnabled": "Capturer un instantané à la publication d'une page suivie",
-    "maxSnapshots": "Instantanés conservés par page et par langue",
-    "captureUser": "Compte de capture",
-    "captureUserPlaceholder": "Laisser vide pour capturer anonymement",
-    "credentialResolved": "Un identifiant a été résolu pour ce compte : les pages restreintes peuvent être capturées.",
-    "credentialMissing": "Aucun identifiant résolu. La capture reste anonyme et les pages non publiques rapporteront NOT_PUBLIC. Le secret se règle dans un fichier sur le serveur, jamais ici.",
-    "save": "Enregistrer",
-    "reset": "Valeurs par défaut",
-    "baseUrl": "Adresse depuis laquelle le serveur récupère ses propres pages",
-    "baseUrlPlaceholder": "http://127.0.0.1:8080",
-    "baseUrlHint": "Utilisez une adresse de bouclage, pas le nom d'hôte public. La capture est une requête que le serveur s'adresse à lui-même, et le nom d'hôte public passe par la réécriture SEO qui répond 404 pour la vue markdown. Laisser vide pour utiliser la valeur par défaut du module.",
-    "saveFailed": "Les réglages n'ont pas pu être enregistrés",
-    "saveShortcut": "Appuyez sur Ctrl+Entrée (Cmd+Entrée sur macOS) pour enregistrer"
-  }
+    "settings": {
+        "label": "Historique des révisions",
+        "title": "Historique des révisions — {{site}}",
+        "noSite": "Ouvrez ce panneau depuis un site.",
+        "usingDefaults": "Ce site n'a pas de réglages propres et utilise ceux du module.",
+        "configured": "Ce site a ses propres réglages.",
+        "settingsSource": "Réglages appliqués",
+        "captureEnabled": "Capturer un instantané à la publication d'une page suivie",
+        "maxSnapshots": "Instantanés conservés par page et par langue",
+        "captureUser": "Compte de capture",
+        "captureUserPlaceholder": "Laisser vide pour capturer anonymement",
+        "credentialResolved": "Un identifiant a été résolu pour ce compte : les pages restreintes peuvent être capturées.",
+        "credentialMissing": "Aucun identifiant résolu. La capture reste anonyme et les pages non publiques rapporteront NOT_PUBLIC. Le secret se règle dans un fichier sur le serveur, jamais ici.",
+        "save": "Enregistrer",
+        "reset": "Valeurs par défaut",
+        "baseUrl": "Adresse depuis laquelle le serveur récupère ses propres pages",
+        "baseUrlPlaceholder": "http://127.0.0.1:8080",
+        "baseUrlHint": "Utilisez une adresse de bouclage, pas le nom d'hôte public. La capture est une requête que le serveur s'adresse à lui-même, et le nom d'hôte public passe par la réécriture SEO qui répond 404 pour la vue markdown. Laisser vide pour utiliser la valeur par défaut du module.",
+        "saveFailed": "Les réglages n'ont pas pu être enregistrés",
+        "saveShortcut": "Appuyez sur Ctrl+Entrée (Cmd+Entrée sur macOS) pour enregistrer"
+    }
 }

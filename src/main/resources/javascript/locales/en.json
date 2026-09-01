@@ -1,22 +1,23 @@
 {
-  "settings": {
-    "label": "Revision history",
-    "title": "Revision history — {{site}}",
-    "noSite": "Open this panel from within a site.",
-    "usingDefaults": "This site has no settings of its own and is using the module defaults.",
-    "configured": "This site has its own settings.",
-    "captureEnabled": "Capture a snapshot when a revisioned page is published",
-    "maxSnapshots": "Snapshots kept per page and language",
-    "captureUser": "Capture account",
-    "captureUserPlaceholder": "Leave empty to capture anonymously",
-    "credentialResolved": "A credential resolved for this account, so restricted pages can be captured.",
-    "credentialMissing": "No credential resolved. Capture stays anonymous, and pages the public cannot read will report NOT_PUBLIC. The secret is set in a file on the server, never here.",
-    "save": "Save",
-    "reset": "Use defaults",
-    "baseUrl": "Address the server fetches its own pages from",
-    "baseUrlPlaceholder": "http://127.0.0.1:8080",
-    "baseUrlHint": "Use a loopback address, not the public hostname. Capture is a request the server makes to itself, and the public hostname goes through SEO rewriting that answers 404 for the markdown view. Leave empty to use the module default.",
-    "saveFailed": "The settings could not be saved",
-    "saveShortcut": "Press Ctrl+Enter (Cmd+Enter on macOS) to save"
-  }
+    "settings": {
+        "label": "Revision history",
+        "title": "Revision history — {{site}}",
+        "noSite": "Open this panel from within a site.",
+        "usingDefaults": "This site has no settings of its own and is using the module defaults.",
+        "configured": "This site has its own settings.",
+        "settingsSource": "Settings in force",
+        "captureEnabled": "Capture a snapshot when a revisioned page is published",
+        "maxSnapshots": "Snapshots kept per page and language",
+        "captureUser": "Capture account",
+        "captureUserPlaceholder": "Leave empty to capture anonymously",
+        "credentialResolved": "A credential resolved for this account, so restricted pages can be captured.",
+        "credentialMissing": "No credential resolved. Capture stays anonymous, and pages the public cannot read will report NOT_PUBLIC. The secret is set in a file on the server, never here.",
+        "save": "Save",
+        "reset": "Use defaults",
+        "baseUrl": "Address the server fetches its own pages from",
+        "baseUrlPlaceholder": "http://127.0.0.1:8080",
+        "baseUrlHint": "Use a loopback address, not the public hostname. Capture is a request the server makes to itself, and the public hostname goes through SEO rewriting that answers 404 for the markdown view. Leave empty to use the module default.",
+        "saveFailed": "The settings could not be saved",
+        "saveShortcut": "Press Ctrl+Enter (Cmd+Enter on macOS) to save"
+    }
 }

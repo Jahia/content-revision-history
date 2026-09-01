@@ -363,6 +363,24 @@
 }
 
 /*
+ * The focus ring, once the panel is a popup, is drawn ON the ::backdrop rather than on the page.
+ * The accent measures 7.40:1 against white, which is why it is used everywhere else -- but against
+ * the darkened backdrop it is only about 2.2:1 (accent luminance 0.0919; the backdrop composited
+ * over a white host is ~#8c8c8c, luminance 0.2622), under the 3:1 floor. That matters more here
+ * than anywhere else in the module, because this is the one element the enhancement script moves
+ * focus to on its own: on every successful comparison, and on every page arriving through a shared
+ * comparison link.
+ *
+ * White for the outline, which clears the floor against the backdrop over a light host (3.36:1) and
+ * has enormous headroom over a dark one (~21:1), with the accent kept as an inner ring so the
+ * indicator still has a high-contrast edge against the panel's own pale surface.
+ */
+.crh-diff-panel:popover-open:focus-visible {
+    outline-color: #fff;
+    box-shadow: 0 0 0 2px var(--crh-accent);
+}
+
+/*
  * The cross, top right. Absolute inside the panel, which is position:relative inline and
  * position:fixed as a popup -- absolute positioning resolves against either, so one rule covers
  * both states.
@@ -602,8 +620,12 @@
  * rather than widening the panel. pre-wrap keeps the record verbatim: leading spaces and blank
  * lines are structure in Markdown, and collapsing them would alter the evidence being inspected.
  */
+/* anywhere, like .crh-diff-side: captured Markdown can legitimately contain a URL or another
+   unbroken token longer than this narrow preview box, and without it the box scrolls sideways
+   instead of wrapping -- harder to operate, and the diff view was already fixed for this case. */
 .crh-snapshot-markdown {
     white-space: pre-wrap;
+    overflow-wrap: anywhere;
     overflow-x: auto;
     max-height: 60vh;
     margin: 0;
