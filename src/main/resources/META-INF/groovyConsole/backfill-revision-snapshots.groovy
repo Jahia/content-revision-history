@@ -168,18 +168,34 @@ def encodePath = { String path ->
 
 // A public-looking BASE_URL is the single most common way this script fails, and it fails late and
 // misleadingly. Say so before any work is done rather than after the first render.
-if (!(baseUrl ==~ /(?i)https?:\/\/(127\.0\.0\.1|localhost|\[::1\])(:\d+)?/)) {
+//
+// It also decides whether the credential is sent at all. The module's Java capture path withholds
+// the Authorization header from any endpoint that is not this node's own loopback connector, and
+// the README states as a critical security note that a capture credential goes only to loopback
+// addresses -- while this script, shipped in the same module, used to send it wherever BASE_URL
+// pointed. An operator following the natural instinct and setting BASE_URL to the address they know
+// ('https://www.example.com') base64-encoded a real Jahia account's password to a public host and
+// whatever reverse proxy, CDN or WAF logs sit in front of it. Warning about the value while still
+// sending the password to it made the warning worse than useless.
+def reachesJahiaDirectly = (baseUrl ==~ /(?i)https?:\/\/(127\.0\.0\.1|localhost|\[::1\])(:\d+)?/)
+if (!reachesJahiaDirectly) {
     report << "WARNING: BASE_URL is ${baseUrl}, which is not this node's loopback connector.\n"
     report << "  It must reach Jahia directly. A public host rewrites or refuses /cms/render/...\n"
     report << "  paths (SEO rewriting, a reverse proxy), which produces a flat 404 on every node in\n"
     report << "  both workspaces, whatever its type, version count, or the rights of the account.\n"
-    report << "  If renders below fail with 404, set BASE_URL to http://127.0.0.1:8080 and re-run.\n\n"
+    report << "  The credential will NOT be sent to it: renders below are anonymous, so any page the\n"
+    report << "  public cannot read will fail with 401/403/404 even though RENDER_USER is set.\n"
+    report << "  Set BASE_URL to http://127.0.0.1:8080 and re-run.\n\n"
 }
 
 def fetchMarkdown = { String path, long millis ->
     def url = new URL("${baseUrl}/cms/render/default/${language}${encodePath(path)}.markdown?v=${millis}")
     def conn = url.openConnection()
-    conn.setRequestProperty('Authorization', 'Basic ' + credentials.bytes.encodeBase64().toString())
+    // Only to this node itself. See the BASE_URL check above for why this is a refusal and not
+    // another warning.
+    if (reachesJahiaDirectly) {
+        conn.setRequestProperty('Authorization', 'Basic ' + credentials.bytes.encodeBase64().toString())
+    }
     conn.connectTimeout = 10000
     conn.readTimeout = 30000
     int code = conn.responseCode
