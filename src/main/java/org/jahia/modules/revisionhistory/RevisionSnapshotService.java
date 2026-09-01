@@ -421,29 +421,81 @@ public class RevisionSnapshotService {
      *
      * @return the number of snapshots remaining in the folder
      */
+    /**
+     * Does any revision entry name this snapshot as the content it describes?
+     *
+     * <p>{@code crh:entryRefs} lives on the snapshot rather than on the entry, so it is both the
+     * binding and the only record of it. That makes this check the whole protection: once the node
+     * is gone there is nothing left to consult.
+     */
+    private boolean hasEntryReferences(JCRNodeWrapper snapshot) throws RepositoryException {
+        return snapshot.hasProperty(PROP_ENTRY_REFS)
+                && snapshot.getProperty(PROP_ENTRY_REFS).getValues().length > 0;
+    }
+
     private long pruneIfNeeded(JCRNodeWrapper folder, String siteKey) throws RepositoryException {
         int maxSnapshots = SiteSettingsRegistry.settingsFor(siteKey).getMaxSnapshots();
         long count = longProperty(folder, PROP_SNAPSHOT_COUNT, -1);
         if (count >= 0 && count < maxSnapshots) {
             return count;
         }
+        return prune(folder, maxSnapshots);
+    }
+
+    /**
+     * The pruning mechanism, separated from the policy lookup so it can be tested against an
+     * explicit cap. Package-private for that reason, as {@link #validate} is.
+     */
+    long prune(JCRNodeWrapper folder, int maxSnapshots) throws RepositoryException {
         List<String> names = new ArrayList<>();
         for (JCRNodeWrapper child : folder.getNodes()) {
             if (child.isNodeType(SNAPSHOT_TYPE)) {
                 names.add(child.getName());
             }
         }
+        // Timestamp-prefixed names, so lexicographic order is chronological: oldest first.
         Collections.sort(names);
         int excess = names.size() - (maxSnapshots - 1);
         long pruned = 0;
-        for (int i = 0; i < excess; i++) {
-            folder.getNode(names.get(i)).remove();
+        long protectedByReference = 0;
+        // Oldest first, and NEVER the newest: it is the baseline the next capture's dedupe compares
+        // against. Walking the whole list rather than just the first `excess` entries is what lets a
+        // referenced snapshot be skipped and a younger unreferenced one taken in its place.
+        for (int i = 0; i < names.size() - 1 && pruned < excess; i++) {
+            JCRNodeWrapper candidate = folder.getNode(names.get(i));
+            if (hasEntryReferences(candidate)) {
+                // A snapshot named by a revision entry is the EVIDENCE behind a published claim,
+                // and deleting it does not merely lose the evidence: crh:entryRefs lives on the
+                // snapshot, so removing the node destroys the only record that the entry described
+                // it. The binder then sees that entry as never bound and, on the next capture,
+                // binds it to the CURRENT snapshot -- so a years-old revision silently begins
+                // claiming today's text, and a comparison against a recent revision reports the
+                // page as unchanged. That is worse than exceeding the cap: it is the record
+                // asserting something false, with no error anywhere.
+                //
+                // RevisionEntryBinder states the invariant this protects ("append-only: an entry
+                // that already has a snapshot is never rebound"); it cannot enforce it alone,
+                // because the property it relies on is deleted from underneath it.
+                protectedByReference++;
+                continue;
+            }
+            candidate.remove();
             pruned++;
         }
         if (pruned > 0) {
             folder.setProperty(PROP_PRUNED_COUNT, longProperty(folder, PROP_PRUNED_COUNT, 0) + pruned);
-            logger.warn("Pruned {} oldest snapshot(s) under {} to stay within the cap of {}",
-                    pruned, folder.getPath(), maxSnapshots);
+            logger.warn("Pruned {} oldest unreferenced snapshot(s) under {} to stay within the cap"
+                    + " of {}", pruned, folder.getPath(), maxSnapshots);
+        }
+        if (protectedByReference > 0) {
+            // Said once per capture and deliberately at WARN: retention is now advisory for this
+            // page, and an operator who set a cap expecting it to be honoured needs to know why it
+            // is not, rather than discovering the folder growing.
+            logger.warn("Kept {} snapshot(s) under {} that a revision entry references, so this"
+                    + " page holds {} snapshot(s) against a cap of {}. Retention will not delete"
+                    + " the evidence behind a published revision; remove the revision entry first"
+                    + " if a snapshot really must go.",
+                    protectedByReference, folder.getPath(), names.size() - pruned, maxSnapshots);
         }
         return names.size() - pruned;
     }
