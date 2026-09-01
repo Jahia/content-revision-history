@@ -27,7 +27,7 @@ public class RevisionHistoryMutation {
             @GraphQLName("baseUrl") String baseUrl) {
         SiteSettingsAccess.requireSiteAdmin(siteKey);
         // Refused here rather than written and quietly replaced later. An out-of-range value was
-        // persisted verbatim and echoed back, so the panel displayed it as the applied setting;
+        // persisted verbatim and echoed back, so the panel displayed it as the applied setting.
         // only when FileInstall re-parsed the file did the positiveInt helper notice, and it then
         // substituted the module default and logged a warning that never reached the UI, leaving
         // the operator believing a value the running system was not using.

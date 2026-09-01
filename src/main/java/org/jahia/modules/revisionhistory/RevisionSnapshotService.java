@@ -384,7 +384,8 @@ public class RevisionSnapshotService {
         try {
             snapshot.setProperty(PROP_MARKDOWN, session.getValueFactory().createValue(binary));
         } finally {
-            // Every read path in this module disposes (SnapshotPayload, SnapshotChoiceListInitializer);
+            // Every read path in this module disposes: SnapshotPayload and
+            // SnapshotChoiceListInitializer both do.
             // the write path, which creates one on every stored capture, did not. The property keeps
             // its own copy once set, so releasing the handle here is safe and is what stops a busy
             // publishing site accumulating them.
@@ -461,7 +462,10 @@ public class RevisionSnapshotService {
         // Oldest first, and NEVER the newest: it is the baseline the next capture's dedupe compares
         // against. Walking the whole list rather than just the first `excess` entries is what lets a
         // referenced snapshot be skipped and a younger unreferenced one taken in its place.
-        for (int i = 0; i < names.size() - 1 && pruned < excess; i++) {
+        for (int i = 0; i < names.size() - 1; i++) {
+            if (pruned >= excess) {
+                break;
+            }
             JCRNodeWrapper candidate = folder.getNode(names.get(i));
             if (hasEntryReferences(candidate)) {
                 // A snapshot named by a revision entry is the EVIDENCE behind a published claim,
