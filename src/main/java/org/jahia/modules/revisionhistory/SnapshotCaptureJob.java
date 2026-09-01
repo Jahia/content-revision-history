@@ -154,7 +154,7 @@ public class SnapshotCaptureJob extends BackgroundJob {
                     // whole-paragraph diff -- the exact thing semanticLineBreaks prevents.
                     language, MarkdownNormalizer.normalize(fetched.body,
                             MarkdownNormalizer.localeFor(language)), captureInstant,
-                    principalOfRecord(), fetched.sourceUrl);
+                    principalOfRecord(page.siteKey), fetched.sourceUrl);
             logger.info("Revision snapshot for {} [{}]: {}", page.path, language, status);
             // Only these two statuses mean the newest snapshot matches the live page, which is
             // the precondition for attaching an editor's revision entry to it. See
@@ -189,9 +189,38 @@ public class SnapshotCaptureJob extends BackgroundJob {
      * {@code crh:capturedBy} is what tells a later reader whose view of the page the text
      * represents, and therefore who may safely be shown it.
      */
-    private static String principalOfRecord() {
-        String configured = CaptureIdentity.principal();
-        return configured == null ? CAPTURE_PRINCIPAL : configured;
+    /**
+     * Whose view of the page the stored text represents, and therefore who may safely be shown it.
+     *
+     * <p>This has to agree with what {@link GuestMarkdownFetcher#authorizationFor} actually sent,
+     * because the editor-facing description of the property says exactly that: "guest means anyone
+     * could have read it, any other name means the snapshot may contain content the public cannot
+     * see". It previously read only the module-wide principal, so it was wrong in both directions:
+     *
+     * <ul>
+     *   <li>A site with its own {@code capture.user} and no global one fetched as that account and
+     *       recorded {@code guest}, telling an editor that a snapshot full of restricted content
+     *       was safe to show anybody.</li>
+     *   <li>A configured {@code capture.user} whose secret did not resolve fetched ANONYMOUSLY --
+     *       authorizationFor returns null and no header is sent -- yet recorded that account, so a
+     *       plain guest render looked like privileged provenance.</li>
+     * </ul>
+     *
+     * <p>So the decision is made from the resolved authorization, not from the configured name:
+     * a name is recorded only when a credential for it actually went out.
+     */
+    private static String principalOfRecord(String siteKey) {
+        SiteCaptureSettings site = SiteSettingsRegistry.settingsFor(siteKey);
+        if (site.getAuthorization() != null) {
+            String perSite = site.getCaptureUser();
+            return perSite == null ? CAPTURE_PRINCIPAL : perSite;
+        }
+        if (CaptureIdentity.authorization() != null) {
+            String configured = CaptureIdentity.principal();
+            return configured == null ? CAPTURE_PRINCIPAL : configured;
+        }
+        // Nothing resolved anywhere: the render really was anonymous, whatever is configured.
+        return CAPTURE_PRINCIPAL;
     }
 
     /** @return false when the cache could not be flushed, in which case do NOT capture */

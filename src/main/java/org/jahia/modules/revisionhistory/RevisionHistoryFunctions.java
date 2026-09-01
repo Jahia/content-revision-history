@@ -108,7 +108,7 @@ public final class RevisionHistoryFunctions {
         if (node == null) {
             return values;
         }
-        java.util.SortedMap<String, String> byName = new java.util.TreeMap<>();
+        java.util.SortedMap<String, java.util.List<String>> byName = new java.util.TreeMap<>();
         try {
             javax.jcr.PropertyIterator properties = node.getProperties();
             while (properties.hasNext()) {
@@ -118,12 +118,33 @@ public final class RevisionHistoryFunctions {
                     continue;
                 }
                 try {
-                    if (property.isMultiple() || property.getType() != javax.jcr.PropertyType.STRING) {
+                    if (property.getType() != javax.jcr.PropertyType.STRING) {
                         continue;
                     }
-                    String value = property.getString();
-                    if (value != null && !value.trim().isEmpty()) {
-                        byName.put(name, value);
+                    // Multi-valued properties are included, each value as its own block. Skipping
+                    // them was silent content loss of the worst kind: a type storing its bullet
+                    // points in a multi-valued string beside a single-valued heading would, when an
+                    // editor rewrote every bullet, still hash identically -- so capture recorded
+                    // UNCHANGED and the record stated that nothing in the page text had changed.
+                    // Values keep their stored order within the property; properties are ordered by
+                    // name because JCR does not guarantee iteration order.
+                    java.util.List<String> propertyValues = new java.util.ArrayList<>();
+                    if (property.isMultiple()) {
+                        javax.jcr.Value[] stored = property.getValues();
+                        for (javax.jcr.Value value : stored == null ? new javax.jcr.Value[0] : stored) {
+                            String text = value.getString();
+                            if (text != null && !text.trim().isEmpty()) {
+                                propertyValues.add(text);
+                            }
+                        }
+                    } else {
+                        String value = property.getString();
+                        if (value != null && !value.trim().isEmpty()) {
+                            propertyValues.add(value);
+                        }
+                    }
+                    if (!propertyValues.isEmpty()) {
+                        byName.put(name, propertyValues);
                     }
                 } catch (RepositoryException unreadable) {
                     // One unreadable property must not cost the whole node its content.
@@ -135,8 +156,8 @@ public final class RevisionHistoryFunctions {
                     + " snapshot", safePath(node), cannotList);
             return values;
         }
-        values.addAll(byName.values());
-        if (values.isEmpty() && !hasChildren(node)) {
+        byName.values().forEach(values::addAll);
+        if (values.isEmpty() && !hasChildren(node) && !hasTitle(node)) {
             // The loud fall-through the design asked for. A node that contributes neither text nor
             // children is content that vanished from the record, and it must not do so in silence.
             LOGGER.warn("Node {} of type {} contributed NO text and has no children, so nothing of"
@@ -174,6 +195,25 @@ public final class RevisionHistoryFunctions {
             return node.getPrimaryNodeTypeName();
         } catch (Exception unavailable) {
             return "(type unavailable)";
+        }
+    }
+
+    /**
+     * Does the fallback view already emit something for this node?
+     *
+     * <p>The view emits {@code ## <jcr:title>} when a title is set, so a node whose only text is
+     * its title DOES reach the snapshot and must not be reported as content vanishing. Warning
+     * about it trained an operator to filter the message, which then hid the genuine case: a
+     * content-bearing type contributing nothing at all.
+     */
+    private static boolean hasTitle(org.jahia.services.content.JCRNodeWrapper node) {
+        try {
+            return node.hasProperty("jcr:title")
+                    && node.getProperty("jcr:title").getString() != null
+                    && !node.getProperty("jcr:title").getString().trim().isEmpty();
+        } catch (RepositoryException unreadable) {
+            // Assume it has one rather than emit a warning we cannot substantiate.
+            return true;
         }
     }
 }
