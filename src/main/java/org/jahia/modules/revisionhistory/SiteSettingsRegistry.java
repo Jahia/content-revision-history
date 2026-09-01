@@ -22,6 +22,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.Set;
 import java.util.regex.Pattern;
 
@@ -81,16 +82,25 @@ public class SiteSettingsRegistry implements ManagedServiceFactory {
      * backfill script, neither of which DS can inject into. {@link CaptureIdentity} solves the same
      * problem the same way, and doing it differently here would leave two patterns for one need.
      */
-    private static volatile SiteSettingsRegistry instance;
+    // AtomicReference rather than a volatile field. volatile publishes the REFERENCE safely but
+    // says nothing about the object behind it, which is why Sonar's java:S3077 flags the idiom; the
+    // instance here happens to keep only ConcurrentHashMaps, so the volatile version was in fact
+    // sound, but a reader has to verify that to know it. A thread-safe holder needs no such
+    // reasoning, and compareAndSet buys a real improvement below.
+    private static final AtomicReference<SiteSettingsRegistry> INSTANCE = new AtomicReference<>();
 
     @Activate
     void activate() {
-        instance = this;
+        INSTANCE.set(this);
     }
 
     @Deactivate
     void deactivate() {
-        instance = null;
+        // compareAndSet, not set(null): during a bundle refresh the new instance can activate
+        // before the old one deactivates, and an unconditional null would then wipe the LIVE
+        // instance and leave every caller falling back to the module defaults until the next
+        // activation. Only clear the holder if it still points at us.
+        INSTANCE.compareAndSet(this, null);
     }
 
     /**
@@ -99,11 +109,11 @@ public class SiteSettingsRegistry implements ManagedServiceFactory {
      */
     /** @return the running component, or null when the module is not active on this node */
     public static SiteSettingsRegistry active() {
-        return instance;
+        return INSTANCE.get();
     }
 
     public static SiteCaptureSettings settingsFor(String siteKey) {
-        SiteSettingsRegistry current = instance;
+        SiteSettingsRegistry current = INSTANCE.get();
         return current == null ? SiteCaptureSettings.DEFAULTS : current.forSite(siteKey);
     }
 
