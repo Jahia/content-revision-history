@@ -462,11 +462,16 @@ public class RevisionSnapshotService {
         // Oldest first, and NEVER the newest: it is the baseline the next capture's dedupe compares
         // against. Walking the whole list rather than just the first `excess` entries is what lets a
         // referenced snapshot be skipped and a younger unreferenced one taken in its place.
-        for (int i = 0; i < names.size() - 1; i++) {
-            if (pruned >= excess) {
-                break;
-            }
-            JCRNodeWrapper candidate = folder.getNode(names.get(i));
+        // A while loop with a single if/else, deliberately. Expressed as a for loop this needs
+        // either `pruned < excess` in the condition, which java:S1994 objects to because `pruned`
+        // is updated in the body, or a break, which then joins the continue below and java:S135
+        // objects to two jumps. Both objections are about readability and both are fair; this form
+        // has neither, and reads as what it is: walk the oldest first, skip what is referenced,
+        // stop once enough is freed.
+        int index = 0;
+        while (index < names.size() - 1 && pruned < excess) {
+            JCRNodeWrapper candidate = folder.getNode(names.get(index));
+            index++;
             if (hasEntryReferences(candidate)) {
                 // A snapshot named by a revision entry is the EVIDENCE behind a published claim,
                 // and deleting it does not merely lose the evidence: crh:entryRefs lives on the
@@ -481,10 +486,10 @@ public class RevisionSnapshotService {
                 // that already has a snapshot is never rebound"); it cannot enforce it alone,
                 // because the property it relies on is deleted from underneath it.
                 protectedByReference++;
-                continue;
+            } else {
+                candidate.remove();
+                pruned++;
             }
-            candidate.remove();
-            pruned++;
         }
         if (pruned > 0) {
             folder.setProperty(PROP_PRUNED_COUNT, longProperty(folder, PROP_PRUNED_COUNT, 0) + pruned);
