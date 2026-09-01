@@ -87,21 +87,44 @@ public class SnapshotCaptureJob extends BackgroundJob {
         }
         String pageUuid = entry.substring(0, separator);
         String[] languages = entry.substring(separator + 1).split(",");
+
+        PageRef page;
         try {
-            PageRef page = resolvePage(pageUuid);
-            if (page == null) {
-                logger.info("Page {} is gone or no longer publicly revisioned; nothing to capture",
-                        pageUuid);
-                return;
-            }
-            for (String language : languages) {
-                capture(page, language.trim(), captureInstant, cacheBuster);
-            }
+            page = resolvePage(pageUuid);
         } catch (RepositoryException | RuntimeException e) {
+            // Resolution failed before any language was attempted, so no language of this page
+            // has a capture and recording FAILED for all of them states only what is true.
             logger.error("Revision snapshot capture failed for page {}", pageUuid, e);
             for (String language : languages) {
                 snapshotService.recordStatus(siteKeyOrUnknown(pageUuid), pageUuid, language.trim(),
                         CaptureStatus.FAILED, e.getClass().getSimpleName() + ": " + e.getMessage());
+            }
+            return;
+        }
+        if (page == null) {
+            logger.info("Page {} is gone or no longer publicly revisioned; nothing to capture",
+                    pageUuid);
+            return;
+        }
+
+        for (String language : languages) {
+            String code = language.trim();
+            try {
+                capture(page, code, captureInstant, cacheBuster);
+            } catch (RuntimeException e) {
+                // RuntimeException only: capture() handles RepositoryException itself, so nothing
+                // checked escapes it. Scoped to the language that actually threw, deliberately. capture()
+                // leaves settingsFor(), the rate limiter, the cache flush and fetch() outside
+                // its own try, so any of them can throw; when this catch sat around the whole
+                // loop it then wrote FAILED for EVERY language of the page, including ones that
+                // had already finished and durably recorded STORED. A page published in two
+                // languages could therefore end up with a stored snapshot whose folder says the
+                // capture failed -- the record asserting something untrue, which is the single
+                // outcome this module exists to prevent, and one no later capture corrects.
+                logger.error("Revision snapshot capture failed for page {} [{}]",
+                        page.uuid, code, e);
+                snapshotService.recordStatus(page.siteKey, page.uuid, code, CaptureStatus.FAILED,
+                        e.getClass().getSimpleName() + ": " + e.getMessage());
             }
         }
     }

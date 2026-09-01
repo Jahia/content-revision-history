@@ -9,6 +9,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Where capture addresses this node, when the port cannot be detected.
@@ -43,9 +44,23 @@ public class CaptureEndpoint {
 
     private static volatile String baseUrl;
 
+    /**
+     * Which component instance owns the static state above.
+     *
+     * <p>The same guard {@code PublicationSnapshotListener} and {@code SiteSettingsRegistry} use,
+     * and for the same reason: if a replacement instance configures itself before the outgoing one
+     * is deactivated, an unconditional clear in {@code @Deactivate} wipes live configuration. Those
+     * two classes hold a comment asserting that ordering is possible and guard against it; these
+     * two held equivalent state and did not, so either the guard was needed in all four or the
+     * comment was wrong in two. Made consistent, because the failure it prevents is silent:
+     * restricted pages quietly start reporting NOT_PUBLIC with nothing logged.
+     */
+    private static final AtomicReference<CaptureEndpoint> OWNER = new AtomicReference<>();
+
     @Activate
     @Modified
     public void configure(Map<String, Object> properties) {
+        OWNER.set(this);
         String configured = trimmedOrNull(properties);
         baseUrl = configured;
         if (configured == null) {
@@ -68,6 +83,10 @@ public class CaptureEndpoint {
 
     @Deactivate
     public void clear() {
+        // Only if this instance is still the one whose configuration is live; see OWNER.
+        if (!OWNER.compareAndSet(this, null)) {
+            return;
+        }
         // A capture still in flight must not address configuration the platform has withdrawn.
         baseUrl = null;
     }
