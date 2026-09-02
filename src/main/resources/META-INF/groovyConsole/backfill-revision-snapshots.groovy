@@ -343,6 +343,43 @@ compose = { JCRNodeWrapper node, long millis, StringBuilder sb ->
             return
         }
         def grandChildren = child.nodes.findAll { !it.name.startsWith('j:') }
+
+        // An EMPTY LIST contributes nothing, and must not be asked to prove it.
+        //
+        // A childless node is otherwise treated as a leaf and fetched, so an area with nothing in
+        // it -- jacademy:kbEntry's `relatedlinks` on an entry that has no related links, which is
+        // most of them -- rendered an empty body and aborted the whole run on the empty-200 guard.
+        // Reported from the Academy.
+        //
+        // The guard itself is right and stays: an empty body is indistinguishable from a
+        // misconfigured BASE_URL answering 200 with nothing, and splicing '' into a reconstruction
+        // is how a page that changed gets stored as one that did not. What was wrong is asking the
+        // renderer about a node whose emptiness is already knowable here.
+        //
+        // Keyed on jmix:list rather than on "childless and holds no text": a childless LEAF can
+        // still render content from properties that are not text -- an image emits ![alt](src) from
+        // a weakreference -- and skipping those would silently drop them. A list has nothing but
+        // its children by definition, so an empty one is empty with certainty.
+        //
+        // The separator is still emitted, because the live render emits one per child whatever the
+        // child produced. See the RENDERS_NOTHING branch above, which is the same reasoning.
+        //
+        // NOT COVERED BY A TEST, and the reason is worth recording so nobody assumes otherwise.
+        // Three attempts to reproduce it in the e2e harness failed, each differently: an empty
+        // jnt:contentList that is merely created is skipped before any fetch, because publication
+        // only checkpoints nodes that CHANGED and an empty container never does, so `existedAt`
+        // answers false; publishing it separately to force a checkpoint starved the module's
+        // per-page capture allowance and broke the fixture's own preconditions instead; and
+        // publishing it last produced no checkpoint either, a re-publish of unchanged content
+        // being a no-op. Reaching this branch needs a list that HELD content and no longer does --
+        // which is what the reported node is, and what a freshly built fixture is not.
+        if (grandChildren.isEmpty() && child.isNodeType('jmix:list')) {
+            if (existedAt(child.path, millis)) {
+                sb << '\n'
+            }
+            return
+        }
+
         if (grandChildren.isEmpty()) {
             // A leaf that has no checkpoint at or before this instant was not on the page then.
             // Asking Jahia to render one answers 404 -- reported from a real run against a
