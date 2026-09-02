@@ -1,6 +1,41 @@
 Changelog
 =========
 
+## [1.4.3](https://github.com/Jahia/content-revision-history/compare/1_4_2...1_4_3) (2026-09-02)
+
+Content that is published and visible without a page of its own can now carry a revision history.
+Nothing changes for pages, and no migration is needed: the storage was never page-shaped, it was
+always keyed on the marked node's UUID.
+
+### Features
+
+* **model**: `jmix:publiclyRevisioned` extends `jnt:content` as well as `jnt:page`, so a policy
+  block reused across pages, or any component with its own editorial lifecycle, is captured on
+  publication on the same terms as a page. Widening the mixin was not sufficient on its own: the
+  walk that resolves which node owns a history asked "am I a page?" before "am I revisioned?", so a
+  revisioned content node was walked straight past, resolved to no owner, and was never captured --
+  silently, because resolving to no owner is also the correct answer for content nobody asked to
+  revision. That question was answered in three places and two of them answered it differently, so
+  with the mixin widened capture would have keyed snapshots on the content node while the
+  comparison and the snapshot picker looked for them under the enclosing page, reporting "no
+  snapshot recorded" for a history whose snapshots exist and are correct. All three now go through
+  one resolver that checks the mixin first. Two behaviours are preserved deliberately: a page that
+  is NOT revisioned still ends the search, because a page owns its own content; and the nearest
+  owner wins, so a revisioned block inside a revisioned page keeps its own history rather than being
+  folded into the page's text. ([commit](https://github.com/Jahia/content-revision-history/commit/d67c4d5))
+
+### Other changes
+
+* **test**: 257 -> 265 unit tests and 94 -> 95 end-to-end. The new unit tests pin the resolution
+  order and both preserved behaviours, and are mutation-verified: restoring the previous
+  pages-before-mixin order fails exactly the two cases that state the consequences -- content never
+  captured, and a component's revisions attached to the whole page's text. The pre-existing test
+  that a deeply-nested non-page node maps to its owning page still passes, which is what proves
+  widening the mixin did not change how pages resolve. Verified against a running 8.2.4.0 as well:
+  the definition change deploys with no MAJOR-change refusal, the mixin applies to a `jnt:bigText`
+  under `/sites/<site>/contents`, and publishing it stores a snapshot keyed on its own UUID.
+  ([commit](https://github.com/Jahia/content-revision-history/commit/d67c4d5))
+
 ## [1.4.2](https://github.com/Jahia/content-revision-history/compare/1_4_1...1_4_2) (2026-09-02)
 
 The comparison rows show the snapshot's Markdown rendered instead of as its own syntax. Display
