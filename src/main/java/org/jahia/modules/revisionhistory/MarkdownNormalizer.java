@@ -54,11 +54,17 @@ public final class MarkdownNormalizer {
      * {@code SnapshotCaptureJob}, a background Quartz job that touches neither the publication
      * thread nor the request path, so there is no publish to fail and no latency to trade against.
      *
-     * <p>What that leaves is a silent truncation with nothing to recommend it, and it is
-     * inconsistent with {@link RevisionHistoryConstants#MAX_MARKDOWN_BYTES}, which REFUSES an
-     * oversized payload as {@code OVERSIZE} rather than storing part of it. Refusing is the right
-     * behaviour for a record: a snapshot missing its tail looks exactly like a shorter page.
-     * Left as truncation for now because changing it is a behaviour change, not a comment fix.
+     * <p>Exceeding it is now a REFUSAL, not a truncation: see {@link MarkdownTooLargeException}.
+     * It used to return the first {@code MAX_INPUT_CHARS} characters as though they were the whole
+     * document, which is inconsistent with {@link RevisionHistoryConstants#MAX_MARKDOWN_BYTES}
+     * (recorded as {@code OVERSIZE}, nothing stored) and with {@code MarkdownDiff.Result}, which
+     * flags a clipped comparison. A snapshot missing its tail is indistinguishable from a page that
+     * was genuinely shorter, so the truncation could not be noticed by anyone reading the record.
+     *
+     * <p>Keep this and {@code MAX_MARKDOWN_BYTES} in step. Live capture bounds the HTTP body at
+     * {@code MAX_MARKDOWN_BYTES} first, so on that path this cap is unreachable defence in depth;
+     * the path where it bites is the backfill script, which concatenates every leaf render of a
+     * page with no cap of its own -- and that is the path that writes authoritative history.
      */
     static final int MAX_INPUT_CHARS = 2_000_000;
 
@@ -138,7 +144,7 @@ public final class MarkdownNormalizer {
         if (rawViewOutput == null || rawViewOutput.trim().isEmpty()) {
             return "";
         }
-        String s = toMarkdown(capInputSize(rawViewOutput));
+        String s = toMarkdown(refuseIfTooLarge(rawViewOutput));
         s = collapseWhitespace(s);
         s = semanticLineBreaks(s, locale);
         return s.trim() + "\n";
@@ -173,8 +179,17 @@ public final class MarkdownNormalizer {
         return new Locale(parts[0], parts[1], parts[2]);
     }
 
-    private static String capInputSize(String input) {
-        return input.length() > MAX_INPUT_CHARS ? input.substring(0, MAX_INPUT_CHARS) : input;
+    /**
+     * @throws MarkdownTooLargeException rather than returning a prefix of the input
+     *
+     * <p>Checked before parsing, not after, because the cap exists to bound the parse cost as well
+     * as the output size.
+     */
+    private static String refuseIfTooLarge(String input) {
+        if (input.length() > MAX_INPUT_CHARS) {
+            throw new MarkdownTooLargeException(input.length(), MAX_INPUT_CHARS);
+        }
+        return input;
     }
 
     /** Converts the HTML that rich-text properties carry into Markdown equivalents. */

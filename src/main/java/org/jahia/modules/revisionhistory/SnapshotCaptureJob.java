@@ -179,14 +179,18 @@ public class SnapshotCaptureJob extends BackgroundJob {
         }
 
         try {
+            // Hoisted out of the call below so the refusal has somewhere to be caught, and so it is
+            // visible that this is where an oversized render stops.
+            //
+            // The locale-aware overload exists precisely so that languages which do not start a
+            // sentence with a Latin capital still get one-sentence-per-line output. Calling the
+            // locale-less one here left it inert on the only production path, so a one-word edit
+            // to a CJK page produced a whole-paragraph diff -- the exact thing semanticLineBreaks
+            // prevents.
+            String markdown = MarkdownNormalizer.normalize(fetched.body,
+                    MarkdownNormalizer.localeFor(language));
             CaptureStatus status = snapshotService.captureIfChanged(page.siteKey, page.uuid,
-                    // The locale-aware overload exists precisely so that languages which do
-                    // not start a sentence with a Latin capital still get one-sentence-per-line
-                    // output. Calling the locale-less one here left it inert on the only
-                    // production path, so a one-word edit to a CJK page produced a
-                    // whole-paragraph diff -- the exact thing semanticLineBreaks prevents.
-                    language, MarkdownNormalizer.normalize(fetched.body,
-                            MarkdownNormalizer.localeFor(language)), captureInstant,
+                    language, markdown, captureInstant,
                     fetched.principal, fetched.sourceUrl);
             logger.info("Revision snapshot for {} [{}]: {}", page.path, language, status);
             // Only these two statuses mean the newest snapshot matches the live page, which is
@@ -195,6 +199,14 @@ public class SnapshotCaptureJob extends BackgroundJob {
             if (status == CaptureStatus.STORED || status == CaptureStatus.UNCHANGED) {
                 entryBinder.bindNewEntries(page.siteKey, page.uuid, language);
             }
+        } catch (MarkdownTooLargeException tooLarge) {
+            // OVERSIZE, not FAILED: this is the same outcome as a render over MAX_MARKDOWN_BYTES --
+            // the page is too big for the record, nothing is stored, and nothing is broken. Filing
+            // it under FAILED would send an operator looking for a fault.
+            logger.warn("No snapshot for page {} [{}]: {}", page.path, language,
+                    tooLarge.getMessage());
+            snapshotService.recordStatus(page.siteKey, page.uuid, language, CaptureStatus.OVERSIZE,
+                    tooLarge.getMessage());
         } catch (RepositoryException | RuntimeException e) {
             logger.error("Storing the revision snapshot for {} [{}] failed", page.path, language, e);
             snapshotService.recordStatus(page.siteKey, page.uuid, language, CaptureStatus.FAILED,

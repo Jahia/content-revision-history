@@ -190,6 +190,34 @@ and unchanged; nothing is rewritten.
    git config core.hooksPath .githooks
    ```
 
+### Oversized pages are refused, never truncated
+
+A page whose rendered Markdown exceeds the normaliser's input cap is now recorded as `OVERSIZE`
+with nothing stored, where it previously had its tail silently dropped and the remainder stored as
+though it were the whole document.
+
+That truncation was the worst shape this kind of defect can take. A snapshot is a permanent,
+publicly served record, and one missing its tail is **indistinguishable from a page that was
+genuinely shorter** — it does not look like damage, it looks like history, and a later comparison
+reports text as having been removed on a date when nothing was removed. Every other size limit in
+the module already refused rather than truncating; this was the one that did not.
+
+Who is affected in practice:
+
+- **Live capture: nobody.** The guest render is bounded at `MAX_MARKDOWN_BYTES` (1 MB) before the
+  normaliser is reached, so its 2,000,000-character cap could never be hit on that path. It was
+  unreachable defence in depth.
+- **The backfill script: possibly.** It concatenates every leaf render of a page with no cap of its
+  own, so a large enough page could exceed the cap, be clipped, and then — because normalising
+  strips HTML and collapses whitespace — come back under the 1 MB write cap and be stored as
+  complete. The script's own validation gate could not catch it either: a page that size would have
+  been refused by live capture, so there was no captured snapshot to compare against. Such a run
+  now aborts with the size and the cap named, instead of writing a partial record.
+
+If a page really is that large, raise `MarkdownNormalizer.MAX_INPUT_CHARS` and
+`RevisionHistoryConstants.MAX_MARKDOWN_BYTES` together — raising only one moves the refusal rather
+than lifting it.
+
 ### Backward Compatibility
 
 - Sites with no per-site configuration keep the module-wide behaviour, with the one exception above:
