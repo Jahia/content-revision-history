@@ -411,6 +411,46 @@ describe('Revision comparison (entry binding + diff viewer)', () => {
         });
     });
 
+    it('renders the snapshot markdown instead of showing its syntax', () => {
+        // The rows used to show the module's own generated syntax literally: "# CRH e2e -
+        // comparison", "**bold**". Rendering it is presentation only -- the diff is still computed
+        // on the raw Markdown, which is what keeps one snapshot comparable to another regardless
+        // of how either is displayed.
+        renderLive(comparisonUrl(firstEntryUuid, thirdEntryUuid)).then(html => {
+            const heading = /class="crh-md crh-md-h1">([^<]*)/.exec(html);
+
+            expect(heading, 'the page-title line must be recognised as a level-1 heading').to.not.be
+                .null;
+            expect(
+                (heading?.[1] ?? '').trim(),
+                'the hashes are the syntax and must not reach the reader'
+            ).to.not.match(/^#/);
+            expect(
+                (heading?.[1] ?? ''),
+                'the heading text itself must survive being rendered'
+            ).to.contain('CRH e2e');
+
+            // Appearance only, and the assertion has to be scoped to the ROWS: the panel has a
+            // legitimate <h3> of its own naming the two revisions, and the surrounding page render
+            // is full of the page's real headings. What must not happen is a row emitting one,
+            // which would splice the snapshot's outline into the host page's and break heading
+            // order for anyone navigating by headings.
+            const rows = /<ol class="crh-diff-rows"[\s\S]*?<\/ol>/.exec(html);
+
+            expect(rows, 'the diff rows must be present to assert anything about them').to.not.be
+                .null;
+            expect(rows?.[0] ?? '', 'a diff row must not emit a real heading element').to.not.match(
+                /<h[1-6][ >]/
+            );
+
+            // Rendering must not have cost the word-level highlighting, which is the one thing
+            // that would make this a downgrade rather than an improvement.
+            expect(html, 'a changed word must still be marked').to.contain('<mark>');
+            expect(html, 'removals must still use <del>').to.contain('<del>');
+            expect(html, 'additions must still use <ins>').to.contain('<ins>');
+        });
+    });
+
     it('compares two NON-ADJACENT revisions, which is the point of the selector', () => {
         // The per-revision controls this replaced could only ever answer about adjacent pairs.
         // "What changed between the version I agreed to and today" is almost never adjacent.

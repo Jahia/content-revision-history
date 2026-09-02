@@ -311,16 +311,14 @@
                                                          now, which is also what makes the grid consistent. --%>
                                                     <c:when test="${row.unchanged}">
                                                         <span class="crh-diff-side"><span
-                                                            class="crh-visually-hidden"><fmt:message key="crh_diff.olderSide"/></span><c:out value="${row.left.text}"/></span>
+                                                            class="crh-visually-hidden"><fmt:message key="crh_diff.olderSide"/></span><%--
+                                                        --%><span class="crh-md<c:if test="${row.left.format.headingLevel gt 0}"> crh-md-h${row.left.format.headingLevel}</c:if><c:if test="${not empty row.left.format.listMarker}"> crh-md-item crh-md-depth-${row.left.format.listDepth}</c:if>"><c:if test="${not empty row.left.format.listMarker}"><span class="crh-md-marker"><c:out value="${row.left.format.listMarker}"/></span> </c:if><c:forEach items="${row.left.format.pieces}" var="piece"><c:choose><c:when test="${piece.changed and piece.bold}"><mark><strong><c:out value="${piece.text}"/></strong></mark></c:when><c:when test="${piece.changed}"><mark><c:out value="${piece.text}"/></mark></c:when><c:when test="${piece.bold}"><strong><c:out value="${piece.text}"/></strong></c:when><c:otherwise><c:out value="${piece.text}"/></c:otherwise></c:choose></c:forEach></span></span>
                                                     </c:when>
                                                     <c:otherwise>
                                                         <span class="crh-diff-side crh-diff-removed"><span
                                                             class="crh-visually-hidden"><fmt:message key="crh_diff.removed"/></span><span
                                                             class="crh-diff-marker" aria-hidden="true">-</span><del><%--
-                                                        --%><c:choose>
-                                                                <c:when test="${empty row.left.segments}"><c:out value="${row.left.text}"/></c:when>
-                                                                <c:otherwise><c:forEach items="${row.left.segments}" var="segment"><c:choose><c:when test="${segment.changed}"><mark><c:out value="${segment.text}"/></mark></c:when><c:otherwise><c:out value="${segment.text}"/></c:otherwise></c:choose></c:forEach></c:otherwise>
-                                                            </c:choose><%--
+                                                        --%><span class="crh-md<c:if test="${row.left.format.headingLevel gt 0}"> crh-md-h${row.left.format.headingLevel}</c:if><c:if test="${not empty row.left.format.listMarker}"> crh-md-item crh-md-depth-${row.left.format.listDepth}</c:if>"><c:if test="${not empty row.left.format.listMarker}"><span class="crh-md-marker"><c:out value="${row.left.format.listMarker}"/></span> </c:if><c:forEach items="${row.left.format.pieces}" var="piece"><c:choose><c:when test="${piece.changed and piece.bold}"><mark><strong><c:out value="${piece.text}"/></strong></mark></c:when><c:when test="${piece.changed}"><mark><c:out value="${piece.text}"/></mark></c:when><c:when test="${piece.bold}"><strong><c:out value="${piece.text}"/></strong></c:when><c:otherwise><c:out value="${piece.text}"/></c:otherwise></c:choose></c:forEach></span><%--
                                                         --%></del></span>
                                                     </c:otherwise>
                                                 </c:choose>
@@ -332,16 +330,14 @@
                                                     </c:when>
                                                     <c:when test="${row.unchanged}">
                                                         <span class="crh-diff-side"><span
-                                                            class="crh-visually-hidden"><fmt:message key="crh_diff.newerSide"/></span><c:out value="${row.right.text}"/></span>
+                                                            class="crh-visually-hidden"><fmt:message key="crh_diff.newerSide"/></span><%--
+                                                        --%><span class="crh-md<c:if test="${row.right.format.headingLevel gt 0}"> crh-md-h${row.right.format.headingLevel}</c:if><c:if test="${not empty row.right.format.listMarker}"> crh-md-item crh-md-depth-${row.right.format.listDepth}</c:if>"><c:if test="${not empty row.right.format.listMarker}"><span class="crh-md-marker"><c:out value="${row.right.format.listMarker}"/></span> </c:if><c:forEach items="${row.right.format.pieces}" var="piece"><c:choose><c:when test="${piece.changed and piece.bold}"><mark><strong><c:out value="${piece.text}"/></strong></mark></c:when><c:when test="${piece.changed}"><mark><c:out value="${piece.text}"/></mark></c:when><c:when test="${piece.bold}"><strong><c:out value="${piece.text}"/></strong></c:when><c:otherwise><c:out value="${piece.text}"/></c:otherwise></c:choose></c:forEach></span></span>
                                                     </c:when>
                                                     <c:otherwise>
                                                         <span class="crh-diff-side crh-diff-added"><span
                                                             class="crh-visually-hidden"><fmt:message key="crh_diff.added"/></span><span
                                                             class="crh-diff-marker" aria-hidden="true">+</span><ins><%--
-                                                        --%><c:choose>
-                                                                <c:when test="${empty row.right.segments}"><c:out value="${row.right.text}"/></c:when>
-                                                                <c:otherwise><c:forEach items="${row.right.segments}" var="segment"><c:choose><c:when test="${segment.changed}"><mark><c:out value="${segment.text}"/></mark></c:when><c:otherwise><c:out value="${segment.text}"/></c:otherwise></c:choose></c:forEach></c:otherwise>
-                                                            </c:choose><%--
+                                                        --%><span class="crh-md<c:if test="${row.right.format.headingLevel gt 0}"> crh-md-h${row.right.format.headingLevel}</c:if><c:if test="${not empty row.right.format.listMarker}"> crh-md-item crh-md-depth-${row.right.format.listDepth}</c:if>"><c:if test="${not empty row.right.format.listMarker}"><span class="crh-md-marker"><c:out value="${row.right.format.listMarker}"/></span> </c:if><c:forEach items="${row.right.format.pieces}" var="piece"><c:choose><c:when test="${piece.changed and piece.bold}"><mark><strong><c:out value="${piece.text}"/></strong></mark></c:when><c:when test="${piece.changed}"><mark><c:out value="${piece.text}"/></mark></c:when><c:when test="${piece.bold}"><strong><c:out value="${piece.text}"/></strong></c:when><c:otherwise><c:out value="${piece.text}"/></c:otherwise></c:choose></c:forEach></span><%--
                                                         --%></ins></span>
                                                     </c:otherwise>
                                                 </c:choose>

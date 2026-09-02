@@ -549,6 +549,59 @@
     overflow: hidden;
 }
 
+/*
+ * Rendered Markdown inside a diff row.
+ *
+ * The rows show the snapshot's own generated syntax rendered rather than literal, so a heading
+ * reads as a heading and **bold** reads as bold. Three constraints shape what is possible here.
+ *
+ * 1. HEADINGS ARE APPEARANCE ONLY. A row is a <span> carrying crh-md-h1..h6, never a real
+ *    <h1>-<h6>. The panel sits inside the host page, so emitting real headings would splice the
+ *    snapshot's outline into the page's own and break heading order for anyone navigating by it.
+ *    What is wanted is the look, not the semantics: the row's meaning is already carried by
+ *    <del>/<ins> and the +/- marker.
+ * 2. SCALE IS RESTRAINED. These sit inside a comparison, not a document. An h1 at document scale
+ *    would tower over the rows around it and cost the alignment that makes a diff readable, so
+ *    each level is a step in weight and at most a small step in size.
+ * 3. NOTHING HERE CARRIES MEANING ALONE. Formatting is decoration on top of the diff: it inherits
+ *    the row's colour and adds none of its own, so a row is still added or removed with this
+ *    stylesheet missing entirely.
+ */
+.crh-md-h1,
+.crh-md-h2,
+.crh-md-h3,
+.crh-md-h4,
+.crh-md-h5,
+.crh-md-h6 {
+    font-weight: 700;
+}
+
+.crh-md-h1 { font-size: 1.15em; }
+.crh-md-h2 { font-size: 1.1em; }
+.crh-md-h3 { font-size: 1.05em; }
+
+/* h4-h6 carry weight only: another size step would be indistinguishable from body text. */
+
+/*
+ * List items. The marker is emitted as TEXT rather than drawn with a pseudo-element, deliberately
+ * and for two reasons. An ordered list's number is information -- a list that renumbers has
+ * changed, and the reader has to be able to see it. And this module having no ::before of its own
+ * is what lets it neutralise a host theme's list decoration outright; see the note above
+ * .crh-revision-list.
+ */
+.crh-md-item {
+    display: inline-block;
+}
+
+.crh-md-marker {
+    color: var(--crh-text-muted);
+    font-variant-numeric: tabular-nums;
+}
+
+.crh-md-depth-1 { padding-left: 1rem; }
+.crh-md-depth-2 { padding-left: 2rem; }
+.crh-md-depth-3 { padding-left: 3rem; }
+
 .crh-diff-heads {
     display: grid;
     grid-template-columns: 1fr 1fr;
