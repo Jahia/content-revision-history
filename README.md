@@ -339,6 +339,20 @@ one-sentence diff rather than "this whole paragraph changed". Long unchanged run
 counted gap. The algorithm is Myers, from the platform's own `difflib` (`diffutils-1.3.0`, which
 is exported to modules) — so no dependency is added.
 
+The rows **display** that Markdown rendered rather than as its own syntax: a `##` line reads as a
+heading, `**bold**` as bold, a `- ` item as a bullet, and the normaliser's `\[`/`\]` escapes are
+unescaped. The comparison itself is still computed on the raw Markdown and always will be — that
+is what makes one snapshot comparable to another regardless of how either is displayed. Rendering
+is derived afterwards, and carries the word-level changed flags across so it costs no highlighting;
+`InlineMarkdown` reads only the closed grammar this module emits, which is why no Markdown parser
+is needed on a public page built from captured content.
+
+Two things are deliberately **not** rendered. Links and images keep their literal
+`[text](href)` form, because collapsing them to their text would hide an href change — same words,
+new destination, no visible difference — in a record whose purpose is showing what changed. And
+heading levels are styled with classes, never real `<h1>`–`<h6>`: the panel sits inside the host
+page, and real headings would splice the snapshot's outline into the page's own.
+
 `difflib` also ships a `DiffRowGenerator` that emits HTML directly. It is deliberately unused:
 the text being diffed is page content and can contain anything an editor typed, and a value that
 mixes generated markup with text-to-be-escaped has no safe rendering. `MarkdownDiff` carries text

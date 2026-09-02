@@ -110,6 +110,7 @@ public final class MarkdownDiff {
         private final int newNumber;
         private final int gapSize;
         private final List<Segment> segments;
+        private final InlineMarkdown.Parsed format;
 
         Line(LineType type, String text, int oldNumber, int newNumber, int gapSize,
              List<Segment> segments) {
@@ -121,6 +122,10 @@ public final class MarkdownDiff {
             this.segments = segments == null
                     ? Collections.<Segment>emptyList()
                     : Collections.unmodifiableList(segments);
+            // Computed here rather than in the view: this class is documented as immutable and as
+            // holding no JCR, and the view is a JSP with no session left to lean on. It also means
+            // the crossing of formatting against the word-level segments happens exactly once.
+            this.format = InlineMarkdown.parse(text, this.segments);
         }
 
         public LineType getType() {
@@ -153,6 +158,20 @@ public final class MarkdownDiff {
          */
         public List<Segment> getSegments() {
             return segments;
+        }
+
+        /**
+         * The same line read back as formatting: heading level, list marker, and inline runs with
+         * their delimiters removed.
+         *
+         * <p>{@link #getSegments()} is still the word-level breakdown over the RAW text, and both
+         * are kept because they answer different questions. The diff is computed on the raw
+         * Markdown and must stay that way -- it is what makes a snapshot comparable to another
+         * snapshot regardless of how either is displayed. This is presentation only, derived
+         * afterwards, and carries the changed flags across so rendering cannot cost the highlight.
+         */
+        public InlineMarkdown.Parsed getFormat() {
+            return format;
         }
 
         // Convenience predicates. JSTL comparison of an enum against a string literal depends
