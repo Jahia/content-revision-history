@@ -431,6 +431,64 @@ describe('Revision comparison (entry binding + diff viewer)', () => {
         });
     });
 
+    it('is not decorated by a host theme that numbers list items with a pseudo-element', () => {
+        // Reported from the Jahia Academy, whose theme numbers every ordered-list item with a
+        // blue badge drawn in a pseudo-element. Both of this module's lists already set
+        // `list-style: none`, which removes the NATIVE marker and does nothing about a generated
+        // one, so the badge painted on every revision in the list and on every row of every
+        // comparison -- and a diff can be hundreds of rows.
+        //
+        // This is really a specificity test. The host rule is (0,1,3) and the obvious
+        // `.crh-revision-list > li::before` override is (0,1,2), which loses; the fix names the
+        // component root as well to reach (0,2,2). Arithmetic is easy to get wrong, so this
+        // asserts what a browser actually computes.
+        cy.visit(`/cms/render/live/${language}${pagePath}.html`);
+
+        cy.document().then(doc => {
+            const style = doc.createElement('style');
+            style.textContent =
+                '.jac-content ol>li:before{content:counters(b,".");counter-increment:b;' +
+                'background-color:#209fda;border-radius:50rem;color:#fff;display:inline-block;' +
+                'height:22px;min-width:22px;position:absolute;left:-32px;top:4px}';
+            doc.head.appendChild(style);
+            doc.body.classList.add('jac-content');
+
+            // A list this module does not own, and the reason this test is not vacuous: if the
+            // injection above silently failed, every assertion below would report 'none' and pass
+            // for entirely the wrong reason. This proves the host rule is in force.
+            const control = doc.createElement('ol');
+            control.innerHTML = '<li id="crh-host-rule-control">control</li>';
+            doc.body.appendChild(control);
+        });
+
+        cy.get('#crh-host-rule-control').should($li => {
+            expect(
+                window.getComputedStyle($li[0], '::before').content,
+                'precondition: the injected host rule must actually be in force'
+            ).to.not.equal('none');
+        });
+
+        cy.get('summary.crh-revision-toggle').click();
+        cy.get('.crh-revision-list > li').first().should($li => {
+            expect(
+                window.getComputedStyle($li[0], '::before').content,
+                'the revision list must not carry the host theme\'s numbering'
+            ).to.equal('none');
+        });
+
+        cy.get('select[name="crhFrom"]').select(firstEntryUuid);
+        cy.get('select[name="crhTo"]').select(thirdEntryUuid);
+        cy.get('button.crh-compare-btn').click();
+        cy.get('.crh-diff-panel').should('be.visible');
+
+        cy.get('.crh-diff-rows > li').first().should($li => {
+            expect(
+                window.getComputedStyle($li[0], '::before').content,
+                'every comparison row would otherwise carry a numbered badge'
+            ).to.equal('none');
+        });
+    });
+
     it('shows the comparison without putting anything in the address bar', () => {
         // The comparison used to arrive by navigation, so ?crhFrom=&crhTo=&#crh-comparison-
         // ended up in the URL of a page the visitor was only reading.

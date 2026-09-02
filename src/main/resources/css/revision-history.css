@@ -76,6 +76,42 @@
 
 /* ------------------------------------------------------------------ revision list */
 
+/*
+ * Host list decoration must not reach our lists.
+ *
+ * Both lists below already set `list-style: none`, which removes the NATIVE marker and does
+ * nothing at all about a generated one. A host stylesheet that numbers list items with a
+ * pseudo-element therefore paints straight through it. Reported from the Jahia Academy, whose
+ * theme carries:
+ *
+ *     .jac-content ol>li:before { content: counters(b,"."); counter-increment: b;
+ *                                 background-color:#209fda; border-radius:50rem; ... }
+ *
+ * which puts a numbered blue badge on every revision in the list AND on every line of every
+ * comparison -- the diff can be hundreds of rows, so the panel is the worse of the two.
+ *
+ * SPECIFICITY IS THE WHOLE POINT OF THE SELECTORS BELOW, so do not simplify them.
+ * `.jac-content ol>li:before` is (0,1,3): one class, two element names, one pseudo-element.
+ * The obvious `.crh-revision-list > li::before` is only (0,1,2) and LOSES -- it would look like
+ * the fix simply did not work. Naming the component root as well makes each selector (0,2,2),
+ * and two classes beat one whatever the source order, which matters because a host stylesheet
+ * may well load after this one. If some other host rule ever outranks even this, the answer is
+ * another level of specificity, not `!important`: this module has no business winning an
+ * arms race inside someone else's theme by force.
+ *
+ * `content: none` means the pseudo-element is never generated, so its position, colour and
+ * counter-increment all go with it. counter-increment is restated anyway, because the host rule
+ * advances a counter it shares with the page's own ordered lists: left running, our rows would
+ * silently renumber a real list further down the page.
+ *
+ * This module deliberately renders no ::before of its own, so nothing of ours is lost here.
+ */
+.crh-revision-history .crh-revision-list > li::before,
+.crh-revision-history .crh-diff-rows > li::before {
+    content: none;
+    counter-increment: none;
+}
+
 .crh-revision-list {
     list-style: none;
     margin: 0;
