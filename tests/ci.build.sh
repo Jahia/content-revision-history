@@ -17,6 +17,18 @@ if [[ -e ../target ]]; then
     -exec cp {} ./artifacts/ \;
 fi
 
+# 11-backfillScript.cy.ts executes the SHIPPED backfill script, and the test image is built from
+# this directory only -- there is no ../src inside the container. Stage it as a fixture, copied at
+# build time from the one source of truth: a second copy committed in tests/ would drift, and the
+# spec would then prove that the copy runs rather than that the shipped script does.
+backfill='../src/main/resources/META-INF/groovyConsole/backfill-revision-snapshots.groovy'
+if [[ -e "$backfill" ]]; then
+  mkdir -p ./cypress/fixtures
+  cp "$backfill" ./cypress/fixtures/
+else
+  echo "WARNING: $backfill not found; 11-backfillScript.cy.ts will fail on a missing fixture" >&2
+fi
+
 version=$(node -p "require('./package.json').devDependencies['@jahia/cypress']")
 echo Using @jahia/cypress@$version...
 npx --yes --package @jahia/cypress@$version ci.build

@@ -10,3 +10,6 @@ nyc_output
 results/
 run-artifacts
 .yarn/
+
+# Staged at build time by ci.build.sh from src/main/resources (see 11-backfillScript.cy.ts)
+cypress/fixtures/backfill-revision-snapshots.groovy
