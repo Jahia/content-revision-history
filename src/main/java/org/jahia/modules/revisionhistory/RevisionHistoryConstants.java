@@ -41,8 +41,9 @@ public final class RevisionHistoryConstants {
      *
      * <p>This said "always {@code guest} by construction" until capture became configurable. It
      * is now the DEFAULT rather than a guarantee: see {@code CaptureIdentity}, and
-     * {@code SnapshotCaptureJob#principalOfRecord} for what actually reaches
-     * {@code crh:capturedBy}.
+     * {@code GuestMarkdownFetcher#principalFor} for what actually reaches
+     * {@code crh:capturedBy}. (This pointed at {@code SnapshotCaptureJob#principalOfRecord}, a
+     * method that no longer exists; the rule moved when the credential became per-site.)
      */
     public static final String PROP_CAPTURED_BY = "crh:capturedBy";
     public static final String PROP_SOURCE_URL = "crh:sourceUrl";
@@ -94,10 +95,18 @@ public final class RevisionHistoryConstants {
     // ---------------------------------------------------------------- capture identity
 
     /**
-     * The one and only principal a capture may run as.
+     * The principal a capture runs as when none is configured, and the name stamped on a snapshot
+     * whose render carried no credential.
      *
-     * <p>A snapshot is published to the world, so it must be built from what the world can
-     * see. Rendering as anybody else -- in particular as whoever happened to trigger the
+     * <p>This said "the one and only principal a capture may run as" and stopped being true when
+     * capture became configurable. Left standing it invited the opposite of its intent: a
+     * maintainer reading it as the invariant would hard-code this back into {@code createSnapshot},
+     * stamping {@code guest} on snapshots taken by a privileged account -- telling every later
+     * reader that restricted content is safe to show anybody.
+     *
+     * <p>The reasoning below still explains why anonymous is the DEFAULT. A snapshot is published
+     * to the world, so it is built from what the world can see. Rendering as anybody else -- in
+     * particular as whoever happened to trigger the
      * capture -- would let ACL-filtered content leak into a public record.
      */
     public static final String CAPTURE_PRINCIPAL = "guest";

@@ -239,9 +239,13 @@ Three rules worth knowing:
   *capture* must never rewrite what an existing revision claims the page said. An editor
   re-pointing an entry is the opposite: a deliberate correction, and history assembled by hand
   after a backfill is exactly where a wrong choice is most likely.
-- **A choice that no longer resolves leaves the entry unbound**, and says so in the log. It does
-  not quietly fall back to the current snapshot, which would attach a revision to content it does
-  not describe.
+- **A choice that no longer resolves never attaches the entry to something else.** For an entry
+  being bound for the first time it stays unbound; for one already bound, re-pointing it at a
+  snapshot that cannot be resolved leaves it on the snapshot it already had. Either way the module
+  says so in the log and never falls back to the *current* snapshot, which would attach a revision
+  to content it does not describe. (This previously promised "leaves the entry unbound" for both
+  cases, which is not what re-pointing does — and re-pointing is the case the surrounding section
+  is about.)
 - **Only that page and language.** The value is a name resolved inside the page's own snapshot
   folder, never a path, so it cannot reach another page's history.
 
@@ -549,9 +553,15 @@ silence. The folder's `crh:lastCaptureStatus` is what makes a gap in the record 
 reordering outright, so editors cannot drag entries into order and the newest-first convention
 both views depend on is unachievable.
 
-Snapshot types carry `jmix:hiddenType` so they never appear in the components tree.
-They keep `jmix:droppableContent` only because `jnt:contentFolder` accepts no other child
-type — it is a structural requirement, not an editorial affordance.
+Snapshot types do **not** carry `jmix:hiddenType`; it was dropped so the store can be browsed and
+previewed in jContent, which is what makes backfilled history describable — an editor has to be
+able to read a snapshot before writing the revision entry for it. (This paragraph said the
+opposite, contradicting the section above and the CND. Read as written, it told an operator the
+snapshot tree was hidden from contributors and therefore that `/sites/<site>/contents` needed no
+restricting — while a configured `capture.user` may have filled those snapshots with content those
+contributors cannot see on the live page.) The snapshot folder keeps `jmix:droppableContent` only
+because `jnt:contentFolder` accepts no other child type — a structural requirement, not an
+editorial affordance.
 
 Snapshot properties are `indexed=no` / `nofulltext` so historical copies never pollute site
 search, and `crh:markdown` is `binary` so metadata reads don't drag the payload.

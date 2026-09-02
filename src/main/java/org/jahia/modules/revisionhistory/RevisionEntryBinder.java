@@ -56,8 +56,10 @@ import static org.jahia.modules.revisionhistory.RevisionHistoryConstants.*;
  *
  * <p><b>Concurrency, and its bound.</b> Two capture jobs for the same page and language could in
  * principle both see an entry as unbound and bind it to two different snapshots, leaving the
- * lookup to pick whichever it met last. The capture rate limiter serialises attempts for a given
- * page and language to one per second, which is what keeps that window shut in practice; and the
+ * lookup to pick whichever it met last. The capture rate limiter REJECTS a second attempt for the
+ * same page and language within its minimum interval -- it rejects, it does not serialise, and it
+ * puts no bound on how long an accepted capture then runs, so two publications far enough apart to
+ * both be admitted can still overlap. It narrows the window rather than closing it; and the
  * consequence if it ever opened is a comparison against a neighbouring snapshot, not a lost or
  * altered record. Locking a page for the duration of a background walk would cost more than that.
  */

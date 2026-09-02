@@ -125,15 +125,15 @@ public class SiteSettingsRegistry implements ManagedServiceFactory {
         INSTANCE.compareAndSet(this, null);
     }
 
-    /**
-     * @return the settings for a site, or the module defaults when the component is not running.
-     *         Never null: capture must keep working while configuration is being replaced.
-     */
     /** @return the running component, or null when the module is not active on this node */
     public static SiteSettingsRegistry active() {
         return INSTANCE.get();
     }
 
+    /**
+     * @return the settings for a site, or the module defaults when the component is not running.
+     *         Never null: capture must keep working while configuration is being replaced.
+     */
     public static SiteCaptureSettings settingsFor(String siteKey) {
         SiteSettingsRegistry current = INSTANCE.get();
         return current == null ? SiteCaptureSettings.DEFAULTS : current.forSite(siteKey);

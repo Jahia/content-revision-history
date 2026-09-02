@@ -50,7 +50,18 @@ The capture endpoint (`capture.baseUrl`) was previously set via a JVM system pro
 
 This prevents a site administrator from configuring a public hostname and receiving the operator's capture password on every publication. The rendered snapshot is correctly recorded as guest, which reflects what the unauthenticated render actually was.
 
-When capture renders anonymously due to a non-loopback URL, restricted pages report `NOT_PUBLIC` status, which signals the operator to correct the `capture.baseUrl` setting.
+The endpoint itself is now refused as well, not only the credential. `capture.baseUrl` decides
+which host this node issues its capture GET to, and whatever answers is normalised and stored as
+that site's public revision snapshot — so accepting an arbitrary host handed a **site**
+administrator an outbound GET from inside the network plus a forged record of what a page said.
+`saveSiteSettings` and the settings panel now reject any value that does not address this node's
+own loopback connector. A `.cfg` file edited by hand is still accepted with a warning: that escape
+hatch exists for a server administrator who owns `karaf/etc`, and they already hold every privilege
+it would grant.
+
+When capture does render anonymously because of a non-loopback URL, the durable record now says so:
+the message on the language folder names `capture.baseUrl` as the cause instead of reading as a
+plain `NOT_PUBLIC`, which was indistinguishable from a page the public genuinely cannot read.
 
 ### ACL Inheritance Restored
 
@@ -126,6 +137,24 @@ captured. Point `capture.baseUrl` at the loopback connector, or remove it and le
 detected. This is deliberate — see *Capture credential bound to loopback* above — but it is a
 behaviour change, not a no-op.
 
+**Two smaller ones, if either applies to you.**
+
+- If any site's `capture.baseUrl` is not this node's own loopback connector, the **next save from
+  the settings panel for that site will be refused** until the value is corrected or cleared. The
+  file keeps working in the meantime; it is the write path that refuses. A field can now be cleared
+  by emptying it, which previously was not possible — an emptied value was read as "leave
+  unchanged", so a mistyped endpoint could not be removed at all.
+- If any site sets `retention.maxSnapshots = 1`, that value is **now refused; the minimum is 2**.
+  It was never honoured: retention does not delete a page's newest snapshot and runs before the
+  incoming one is written, so a cap of 1 always settled at 2. Nothing about your stored history
+  changes — only the setting stops advertising a level it could not deliver.
+
+Also worth knowing, though neither needs action: a site that names its own `capture.user` no longer
+falls back to the module-wide credential when its own secret fails to resolve (it captures
+anonymously, as the documentation always said it would), and the settings panel now reports the
+account capture *actually* uses rather than only this site's own — so a site inheriting the
+module-wide account is no longer described as anonymous.
+
 Everything else upgrades without operator action, with one visible consequence described next.
 
 ### What you will see on the first publication after upgrading
@@ -187,7 +216,12 @@ If you restrict which editors see snapshot history, restrict `/sites/<site>/cont
 Retention rules (`retention.maxSnapshots`, default 500) are applied consistently and correctly:
 
 - Per page and language (as before).
-- Snapshots referenced by revision entries are no longer pinned indefinitely; retention applies normally.
+- Retention skips a snapshot that a revision entry still references, and says so at WARN. It does
+  NOT delete it: deleting the evidence behind a published revision also deletes `crh:entryRefs`,
+  which is the only record that the entry described it, after which the binder re-attaches that
+  revision to the current text. Retention is therefore advisory for such a page. (An earlier draft
+  of these notes said referenced snapshots are no longer pinned and that retention applies
+  normally; the code never did that.)
 - Pruned snapshots are counted in `crh:prunedCount` on the language folder.
 
 ## Known Limitations

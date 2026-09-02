@@ -45,12 +45,20 @@ public final class MarkdownNormalizer {
     public static final String GENERATOR_VERSION = "5";
 
     /**
-     * Defensive cap on raw view output accepted for normalization. This runs on a live render
-     * thread for every publish, so an oversized or pathological payload (accidental or
-     * malicious) must not be allowed to consume unbounded memory/CPU. 2,000,000 characters
-     * (~2 MB of UTF-16) comfortably covers any realistic rendered page while bounding the
-     * worst-case parse cost; input beyond this is truncated rather than rejected so a snapshot
-     * is still captured (partial data beats a failed publish).
+     * Defensive cap on raw view output accepted for normalization. 2,000,000 characters (~2 MB of
+     * UTF-16) comfortably covers any realistic rendered page while bounding the worst-case parse
+     * cost against an oversized or pathological payload.
+     *
+     * <p>The justification used to read "this runs on a live render thread for every publish, so
+     * partial data beats a failed publish". Neither half is true any more: capture moved to
+     * {@code SnapshotCaptureJob}, a background Quartz job that touches neither the publication
+     * thread nor the request path, so there is no publish to fail and no latency to trade against.
+     *
+     * <p>What that leaves is a silent truncation with nothing to recommend it, and it is
+     * inconsistent with {@link RevisionHistoryConstants#MAX_MARKDOWN_BYTES}, which REFUSES an
+     * oversized payload as {@code OVERSIZE} rather than storing part of it. Refusing is the right
+     * behaviour for a record: a snapshot missing its tail looks exactly like a shorter page.
+     * Left as truncation for now because changing it is a behaviour change, not a comment fix.
      */
     static final int MAX_INPUT_CHARS = 2_000_000;
 

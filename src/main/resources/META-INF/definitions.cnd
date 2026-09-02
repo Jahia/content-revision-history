@@ -39,8 +39,8 @@
  // are written afterwards -- so an editor can pin the one an entry actually describes. The
  // choicelist is served by SnapshotChoiceListInitializer, which registers itself under this key.
  - crh:snapshotRef (string, choicelist[crhSnapshots])
- // NOTE: there is deliberately NO snapshotRef property here any more. The link between a
- // revision entry and the snapshot it describes is stored on the SNAPSHOT
+ // NOTE: the property above is the EXPLICIT PIN, and it is not how an entry is normally bound.
+ // Automatic binding stores the link on the SNAPSHOT
  // (crh:revisionSnapshot / crh:entryRefs), pointing back at the entry, for one decisive
  // reason: a crh:revisionEntry is editorial content, so any programmatic write to it bumps
  // jcr:lastModified and the page reads as "modified" in jContent the instant capture binds
@@ -58,11 +58,17 @@
 // `+ * (jmix:droppableContent)` and `+ * (jnt:contentFolder)`, so without it the root folder
 // cannot be created at all (verified: ConstraintViolationException "No child node definition
 // for revision-history").
-// crh:revisionSnapshot carries it too, and for a different reason: jContent's browse filter is
-// includeTypes [jmix:droppableContent, jnt:page, jnt:file], so a snapshot without it is invisible
-// in the content browser even though its folders are visible. 1.3.0 dropped jmix:hiddenType from
-// both types and verified only the FOLDER against that filter, which left 28 snapshots present
-// and 0 shown -- folders you can open onto an empty list. Neither type appears as a component an
+// crh:revisionSnapshot does NOT carry it, and the filter named above is not the one that decides
+// whether a snapshot is visible. That belief shipped here for two releases and this comment was
+// the last place still holding it: includeTypes [jmix:droppableContent, jnt:page, jnt:file] is the
+// content PICKER's filter. The content BROWSER filters flat views on
+// [jmix:editorialContent, jmix:queryContent] and recurses the tree only into
+// [jnt:page, jnt:contentFolder, jnt:folder, ...]. That is why crh:revisionSnapshot carries
+// jmix:editorialContent (so the flat view lists it) and the folder is a contentFolder type (so the
+// tree can recurse into it). 1.3.0 verified only the FOLDER, against the wrong filter, which left
+// 28 snapshots present and 0 shown -- folders you can open onto an empty list.
+// Pinned by tests/cypress/e2e/07-jcontentUi.cy.ts, which drives jContent in a browser precisely
+// because a GraphQL assertion proves only what the author believed the filter was. Neither type appears as a component an
 // editor can add: this module generates no components node at all (verified across every
 // deployed version), and the child definitions below are explicit, so nothing may be created
 // inside a snapshot folder except what capture puts there.

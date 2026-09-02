@@ -188,11 +188,18 @@ public class RevisionDiffService {
     /**
      * Does the <em>current</em> user have read access to this revision history?
      *
-     * <p>Everything below this point runs with a system session that bypasses ACLs, and the
-     * snapshots it reads are locked down so that no ordinary user can read them directly. That
-     * was self-evidently safe while captures rendered as {@code guest}: a snapshot could not
-     * contain anything the anonymous public was not already entitled to see, so who was asking
-     * did not matter.
+     * <p>Everything below this point runs with a system session that bypasses ACLs. This used to
+     * add "and the snapshots it reads are locked down so that no ordinary user can read them
+     * directly", which is no longer true and was dangerous left standing: a reviewer weighing
+     * whether a configured capture principal is safe for a site would read it as a guarantee that
+     * snapshots are unreadable to contributors, and enable privileged capture on that basis.
+     * {@code RevisionSnapshotService.restoreInheritance} repairs the pre-1.4 lockdown on every
+     * capture, so any contributor with read on {@code /sites/<site>/contents} can open a snapshot
+     * in jContent and read it.
+     *
+     * <p>The gate was self-evidently safe while captures rendered as {@code guest}: a snapshot
+     * could not contain anything the anonymous public was not already entitled to see, so who was
+     * asking did not matter.
      *
      * <p>It stops being self-evident the moment a capture runs as anything else. A snapshot is a
      * single artifact flattened to text by a single principal, so it cannot answer "what may

@@ -27,8 +27,18 @@ import static org.jahia.modules.revisionhistory.RevisionHistoryConstants.*;
  * {@code SchedulerService.scheduleJobNow(detail, true)} -- RAM scheduler, because this work is
  * transient: if the node dies mid-capture the right answer is not to replay it later against
  * content that has since moved on, it is to let the next publication capture the current
- * state. What must not be lost is the <em>knowledge</em> that a capture was owed, and that is
- * durable: a missing snapshot always leaves a status on the per-language folder.
+ * state. What must not be lost is the <em>knowledge</em> that a capture was owed, and every
+ * capture that RUNS records its outcome durably on the per-language folder.
+ *
+ * <p>Stated as "a missing snapshot always leaves a status", that was too strong, and the gap it
+ * papers over is worth knowing about: a job that never executes at all writes nothing anywhere. A
+ * module stop deletes still-pending jobs, and a RAM job dies with its JVM if the node is fenced --
+ * in both cases the folder still shows the PREVIOUS publication's status, so the gap is
+ * indistinguishable from "the content did not change", which is the one distinction this feature
+ * exists to make. Closing it needs a reconciliation pass on activate (compare each revisioned
+ * page's last publication against its last capture), not a status write on the way down: the only
+ * moment to make one is during deactivation, where a JCR write can block, and a module stop that
+ * hangs is worse than the gap.
  *
  * <p>Publication latency is untouched: the listener only enqueues.
  *
@@ -202,15 +212,6 @@ public class SnapshotCaptureJob extends BackgroundJob {
      * text and, because the hash would match the previous snapshot, silently record "no
      * change" for a change. Flushing here makes the ordering deterministic; it costs nothing
      * extra, since publication was about to flush exactly these entries anyway.
-     */
-    /**
-     * The principal to stamp on the snapshot: the configured capture user, or {@code guest}.
-     *
-     * <p>This used to be the constant {@code guest} unconditionally, which was true while capture
-     * could only ever be anonymous. Once a deployment configures a capture user it stops being
-     * true, and a record that names the wrong principal is worse than one that names none:
-     * {@code crh:capturedBy} is what tells a later reader whose view of the page the text
-     * represents, and therefore who may safely be shown it.
      */
 
     /** @return false when the cache could not be flushed, in which case do NOT capture */
