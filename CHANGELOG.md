@@ -1,6 +1,41 @@
 Changelog
 =========
 
+## [1.4.4](https://github.com/Jahia/content-revision-history/compare/1_4_3...1_4_4) (2026-09-02)
+
+A revisioned node now has a legal place to put its revision history. Nothing changes for pages,
+which already had one, and no migration is needed: an optional child definition can only permit
+more.
+
+### Features
+
+* **model**: `jmix:publiclyRevisioned` carries the slot as well as the marker --
+  `+ revisionHistory (crh:revisionHistory)`. Ticking "Public revision history" is what should make
+  it possible to put the list on the node, and until now it was not: a page has wildcard areas so
+  the component can simply be dropped into one, but a structured content type usually cannot.
+  `jacademy:kbEntry`, for instance, declares one named child and no wildcard, so it could be
+  revisioned and still have nowhere to render its own history. The list has to live INSIDE the
+  revisioned node rather than beside it on the page, which is why this is a slot and not a note in
+  the documentation: the owner of a history is resolved by walking UP from the component and
+  stopping at the first page, so a history in a page area next to a revisioned content node
+  resolves to no owner and reports "no snapshot recorded" permanently. Declared on the mixin rather
+  than in each consuming module on purpose -- the alternative makes every module owning a
+  revisionable type refuse to start unless this one is deployed, a hard dependency for one optional
+  feature on one content type. Single and named rather than a wildcard: one node has one
+  authoritative public revision history. ([commit](https://github.com/Jahia/content-revision-history/commit/94880cc))
+
+### Other changes
+
+* **test**: 95 -> 96 end-to-end tests. The new case asserts both halves, and the negative control
+  is the one that matters: without the mixin the same mutation fails with "No child node definition
+  for revisionHistory", so the test cannot pass because some parent happened to allow any child.
+  Verified against a running 8.2.4.0 as well -- adding a child definition is a compatible change
+  with no MAJOR-change refusal, and existing content is unaffected: on one revisioned page all
+  three placements were accepted together (a history in a page area, which is the shape every
+  existing install has; a direct child named exactly `revisionHistory`; and a direct child under
+  the page's own wildcard), after which publishing captured normally and entries from two different
+  histories bound to the same snapshot. ([commit](https://github.com/Jahia/content-revision-history/commit/94880cc))
+
 ## [1.4.3](https://github.com/Jahia/content-revision-history/compare/1_4_2...1_4_3) (2026-09-02)
 
 Content that is published and visible without a page of its own can now carry a revision history.

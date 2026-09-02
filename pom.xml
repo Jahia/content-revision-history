@@ -17,7 +17,7 @@
          Jahia imports a module's initial content ONCE PER VERSION, so a new import (or any
          change to an existing one) only takes effect on a version bump. Redeploying the same
          version leaves the repository untouched and the change looks silently ignored. -->
-    <version>1.5.0-SNAPSHOT</version>
+    <version>1.4.4</version>
 
     <!-- Without these the parent's own SCM is inherited, so the module advertises Jahia's
          internal repository as its source. A store listing that offers a source link would send
