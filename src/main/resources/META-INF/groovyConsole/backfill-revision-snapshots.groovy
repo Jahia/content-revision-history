@@ -420,8 +420,31 @@ def reconstruct = { long millis ->
         s.setVersionDate(new Date(millis))
         def page = s.getNode(pagePath)
         def sb = new StringBuilder()
-        sb << '# ' << page.displayableName << '\n\n'
-        compose(page, millis, sb)
+
+        // WHICH view the revisioned node itself renders through, because this has to mirror that
+        // one and there are three answers. Composing a page's shape for a content node emitted the
+        // heading and nothing else -- reported from a jacademy:kbEntry whose whole body is the
+        // i18n `answer` property ON the node, which `compose` never sees because it walks children.
+        // Since content nodes became revisionable, the top level can be any of these:
+        if (page.isNodeType('jnt:page')) {
+            // jnt_page/markdown/page.jsp: the page heading, then its areas.
+            sb << '# ' << page.displayableName << '\n\n'
+            compose(page, millis, sb)
+        } else if (SELF_RENDERING.contains(page.primaryNodeTypeName)) {
+            // A type whose own markdown view renders it WITHOUT recursing -- jnt:bigText. Fetching
+            // is right here and only here: the header's warning that `?v=` renders a container's
+            // children at CURRENT content does not apply to a node that has none.
+            sb << fetchMarkdown(page.path, millis) << '\n'
+        } else {
+            // jnt_content/markdown/content.jsp, the generic fallback: the node's own title, then
+            // its own text properties, then its children. The text properties are the half that
+            // was missing, and they are read through the same crh:textProperties the view calls,
+            // so the two cannot disagree about which properties hold text.
+            def ownTitle = page.getPropertyAsString('jcr:title')
+            if (ownTitle) sb << '## ' << ownTitle << '\n\n'
+            textProperties(page).each { sb << it << '\n\n' }
+            compose(page, millis, sb)
+        }
         raw = sb.toString()
         return null
     } as JCRCallback)
