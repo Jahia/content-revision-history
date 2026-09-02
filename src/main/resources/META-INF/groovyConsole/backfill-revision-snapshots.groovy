@@ -67,6 +67,13 @@ def normalizerClass = moduleBundle.loadClass('org.jahia.modules.revisionhistory.
 // rules, so a reconstructed zh or ja page never matched the captured one. The byte-for-byte gate
 // then reported an unexplained MISMATCH and aborted the run -- or, forced through with
 // ALLOW_UNEXPLAINED, stored snapshots that diff spuriously against every future live capture.
+// The SAME function jnt_content/markdown/content.jsp calls. Reimplementing "which properties hold
+// text" in Groovy is how the script and the view drift apart, and a drift here does not show up as
+// a bug -- it shows up as a snapshot missing text, stored as an authoritative record.
+def functionsClass = moduleBundle.loadClass('org.jahia.modules.revisionhistory.RevisionHistoryFunctions')
+def textPropertiesMethod = functionsClass.getMethod('textProperties', JCRNodeWrapper)
+def textProperties = { JCRNodeWrapper n -> textPropertiesMethod.invoke(null, n) as List }
+
 def localeForMethod = normalizerClass.getMethod('localeFor', String)
 def normalizeMethod = normalizerClass.getMethod('normalize', String, java.util.Locale)
 // The language is a parameter rather than a captured constant: LANGUAGE is a typed local declared
@@ -144,11 +151,30 @@ if (!(RENDER_USER ?: '').trim() || !(RENDER_SECRET ?: '')) {
 
 /**
  * Types whose markdown view renders WITHOUT recursing into children. They must be fetched, never
- * walked, or the reconstruction would include content the real snapshot deliberately omits --
- * crh:revisionHistory renders empty on purpose, so that a page's own changelog never lands inside
- * the record it describes.
+ * walked, or the reconstruction would include content the real snapshot deliberately omits.
  */
-def SELF_RENDERING = ['jnt:bigText', 'crh:revisionHistory'] as Set
+def SELF_RENDERING = ['jnt:bigText'] as Set
+
+/**
+ * Types whose markdown view deliberately renders NOTHING. Neither fetched nor walked.
+ *
+ * crh:revisionHistory used to sit in SELF_RENDERING, which put two correct intentions in direct
+ * collision: its view renders empty on purpose, and fetchMarkdown refuses an empty 200 body
+ * because splicing '' into a record is how a page that changed gets stored as one that did not.
+ * So every page carrying a Revision history component aborted the run -- and that is EVERY page
+ * with captured history, which is precisely the page the README tells you to backfill first to
+ * prove the composition is faithful.
+ *
+ * Walking it instead would be worse than the abort: the entries would be rendered by the generic
+ * fallback, so each revision's own summary would land inside the snapshot it describes, and every
+ * later diff would show the changelog rather than the change.
+ *
+ * The live views emit one line separator per child regardless of what the child rendered, so an
+ * empty child still contributes that separator. Emitting it here and skipping the fetch is
+ * byte-identical to what the old code would have produced had fetchMarkdown returned '' instead
+ * of refusing.
+ */
+def RENDERS_NOTHING = ['crh:revisionHistory'] as Set
 
 /**
  * Is this node something the markdown template type can actually render?
@@ -304,6 +330,12 @@ compose = { JCRNodeWrapper node, long millis, StringBuilder sb ->
         // empty history -- measured on a real page, both jnt:contentList areas and the page itself
         // had zero checkpoints while their children had two each -- so gating the walk on it
         // skipped every container and reconstructed pages as nothing but their title.
+        if (RENDERS_NOTHING.contains(child.primaryNodeTypeName)) {
+            if (existedAt(child.path, millis)) {
+                sb << '\n'
+            }
+            return
+        }
         if (SELF_RENDERING.contains(child.primaryNodeTypeName)) {
             if (existedAt(child.path, millis)) {
                 sb << fetchMarkdown(child.path, millis) << '\n'
@@ -321,7 +353,25 @@ compose = { JCRNodeWrapper node, long millis, StringBuilder sb ->
         } else {
             def title = child.getPropertyAsString('jcr:title')
             if (title) sb << '## ' << title << '\n\n'
+            // content.jsp emits the container's OWN text properties between its title and its
+            // children. Omitting them here was a mirror drift introduced when the fallback view
+            // stopped emitting jcr:title alone (generator 5): a container carrying, say, a
+            // subtitle rendered that text live and lost it in reconstruction, so the
+            // byte-for-byte gate reported an unexplained MISMATCH and aborted -- or, forced past
+            // with ALLOW_UNEXPLAINED, stored snapshots permanently missing text live capture records.
+            textProperties(child).each { sb << it << '\n\n' }
             compose(child, millis, sb)
+            // NOTE, deliberately not acted on. Reading the views, the parent emits one line
+            // separator after EVERY child module including a container, while this branch emits
+            // none after recursing -- which would put a container and the sibling after it on
+            // adjacent lines where live capture leaves a blank one, and BLANK_RUN only collapses
+            // runs of three or more newlines, so it would survive normalisation. But content.jsp
+            // also emits literal template newlines between its own top-level lines, which this
+            // mirror does not reproduce anywhere, so the true delta is not derivable by reading:
+            // it needs a real run. The byte-for-byte gate is exactly that measurement, and it
+            // aborts rather than storing a mismatch, so if this is wrong it announces itself
+            // safely on the first validated page. Changing it on an incomplete trace could
+            // instead break a composition that currently agrees.
         }
     }
 }
