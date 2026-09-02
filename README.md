@@ -418,6 +418,19 @@ unless a deployment configures a capture user. An earlier version of this sectio
 capture became configurable so that restricted pages could have a history at all, and it was never
 what kept the read path safe. `RevisionDiffService#viewerMayReadHistory` is, by checking the
 current user's own JCR rights before any snapshot is read.
+
+**In the workspace being rendered** -- and leaving that unsaid was a real defect, not a wording
+nicety. Up to 1.4.5 the gate asked `JCRSessionFactory.getCurrentUserSession()`, whose no-argument
+form resolves the current *user* from the thread but hard-defaults the *workspace* to `default`
+(verified in the 8.2.3.2 bytecode: a null workspace is replaced by the literal `"default"`, with
+no inference of the render's own workspace anywhere). Jahia does not grant `jcr:read_default` to
+`guest`, so a visitor was asked whether they could read the history in the **edit** workspace, the
+answer was always no, and every anonymous comparison answered "One of the selected revisions is
+not part of this history." on entirely public content. Editors passed the same gate, which is why
+it survived review and a green suite -- every Cypress spec logs in first, so `cy.request` carried
+a session and the public surface was never actually exercised. The workspace now comes from the
+view's own `renderContext`, because the view is the only party that knows it; `04-revisionComparison`
+compares as a genuine guest and proves it is one by asserting the edit workspace refuses it.
 Deliberately not rendered as HTML: this module generates Markdown and never parses it, so
 rendering would mean adding a parser to turn an archived record back into markup, and any
 difference between that parser and the original page would make the preview quietly unfaithful.

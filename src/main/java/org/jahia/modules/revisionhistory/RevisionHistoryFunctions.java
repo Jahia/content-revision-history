@@ -80,11 +80,18 @@ public final class RevisionHistoryFunctions {
      * <p>Both identifiers come from the visitor's form selection and are therefore untrusted; the
      * history node is server-supplied and is what constrains them to entries of that history.
      *
+     * <p>The workspace is passed in from {@code renderContext} rather than looked up, because the
+     * view is the only party that knows it: the session factory's no-argument accessor answers
+     * "the edit workspace" no matter what is being rendered, and the permission gate built on that
+     * refused every anonymous visitor.
+     *
      * @return always a view; ask {@link RevisionDiffView#isAvailable()} before reading the diff
      */
     public static RevisionDiffView compare(String historyIdentifier, String oneIdentifier,
-                                           String otherIdentifier, String language) {
-        return DIFF_SERVICE.compare(historyIdentifier, oneIdentifier, otherIdentifier, language);
+                                           String otherIdentifier, String language,
+                                           String workspace) {
+        return DIFF_SERVICE.compare(historyIdentifier, oneIdentifier, otherIdentifier, language,
+                workspace);
     }
 
     /**

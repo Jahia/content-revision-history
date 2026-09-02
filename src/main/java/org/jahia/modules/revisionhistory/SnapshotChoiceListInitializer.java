@@ -371,8 +371,17 @@ public class SnapshotChoiceListInitializer implements ChoiceListInitializer {
     }
 
     /**
-     * Mirrors {@code RevisionDiffService#viewerMayReadHistory}: everything below reads with a
-     * system session that bypasses ACLs, so the current user's own rights have to be asked first.
+     * Same purpose as {@code RevisionDiffService#viewerMayReadHistory}: everything below reads with
+     * a system session that bypasses ACLs, so the current user's own rights have to be asked first.
+     *
+     * <p><b>Not the same call, and the difference is deliberate.</b> This runs in the Content
+     * Editor, which is always the {@code default} workspace, so the no-argument
+     * {@code getCurrentUserSession()} -- which resolves the current user but hard-defaults the
+     * workspace to {@code default} -- asks exactly the right question here. On a PUBLIC render it
+     * asks the wrong one, and did: a visitor was tested against the edit workspace, which Jahia
+     * never lets a guest read, so every anonymous comparison was refused. That gate now takes the
+     * workspace from the view's {@code renderContext}. Do not copy this form into anything a
+     * visitor reaches, and do not "align" the other one back to it.
      *
      * <p>Package-private so a test can assert the verdict directly rather than through the whole
      * initializer, which denies for a dozen reasons at once when there is no repository.

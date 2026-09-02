@@ -150,9 +150,48 @@ describe('Revision comparison (entry binding + diff viewer)', () => {
             });
     };
 
-    /** Renders the LIVE page -- the public surface the comparison is actually served from. */
+    /**
+     * Renders the LIVE page as the logged-in user.
+     *
+     * NOT as the public. `beforeEach` logs in, `cy.request` sends the browser's cookies, so every
+     * render below is an EDITOR looking at a public page. That is worth knowing before adding
+     * anything here: it is what let a defect that broke the comparison for every anonymous
+     * visitor pass 31 of 31 tests in this file, repeatedly. Use `renderLiveAsGuest` to assert
+     * anything about the public surface.
+     */
     const renderLive = (query = ''): Cypress.Chainable<string> =>
         cy.request<string>({url: `/cms/render/live/${language}${pagePath}.html${query}`}).then(r => r.body);
+
+    /**
+     * Renders the LIVE page as a genuinely anonymous visitor, and proves it is one.
+     *
+     * The proof is not decoration. Dropping the session is invisible in the result -- a request
+     * that quietly stayed authenticated returns exactly the same HTML as this one is supposed to
+     * on a correct build -- so a guest test with no precondition passes just as well when it is
+     * not actually a guest test, which is the failure mode this whole helper exists to answer.
+     * Jahia does not grant `jcr:read_default` to `guest`, so an anonymous principal gets 404 on
+     * the edit workspace and an authenticated one gets 200: that difference is the assertion.
+     */
+    const renderLiveAsGuest = (query = ''): Cypress.Chainable<string> =>
+        cy.logout().then(() =>
+            cy
+                .request({
+                    url: `/cms/render/default/${language}${pagePath}.html`,
+                    failOnStatusCode: false
+                })
+                .then(editWorkspace => {
+                    expect(
+                        editWorkspace.status,
+                        'this request is still authenticated, so nothing below is about the ' +
+                            'public surface; the edit workspace answered instead of refusing'
+                    ).to.eq(404);
+                    return cy
+                        .request<string>({
+                            url: `/cms/render/live/${language}${pagePath}.html${query}`
+                        })
+                        .then(r => r.body);
+                })
+        );
 
     const setCollapsedByDefault = (value: boolean) =>
         cy
@@ -468,6 +507,62 @@ describe('Revision comparison (entry binding + diff viewer)', () => {
             expect(html, 'a text alternative to the +/- markers must be present').to.contain(
                 'Removed line:'
             );
+        });
+    });
+
+    it('serves the comparison to an anonymous visitor, which is who it is for', () => {
+        // The defect this pins, reported from a live site: comparing two revisions answered
+        // "One of the selected revisions is not part of this history." for anyone not logged in,
+        // on entirely public content. The cause was the permission gate asking
+        // JCRSessionFactory.getCurrentUserSession(), whose no-argument form resolves the current
+        // USER but hard-defaults the WORKSPACE to `default` -- so the gate asked whether a
+        // visitor could read the history in the EDIT workspace. Jahia never grants guests
+        // `jcr:read_default`, so the answer was always no, and the module refused the public the
+        // one feature it exists to provide. Every editor passed the same gate, which is why it
+        // survived review, 266 unit tests and 31 tests in this file.
+        renderLiveAsGuest(comparisonUrl(firstEntryUuid, thirdEntryUuid)).then(html => {
+            expect(
+                html,
+                'the exact regression: a public comparison refused as though the revisions were ' +
+                    'not part of the history the visitor just chose them from'
+            ).to.not.contain('not part of this history');
+
+            // Not just "no error": the comparison has to actually be there. Asserting only the
+            // absence of the message would pass for a panel that renders empty, which is the
+            // other way this has broken.
+            expect(html, 'the comparison panel must render').to.contain('id="crh-comparison-');
+            expect(html, 'the diff rows must render').to.contain('class="crh-diff-rows"');
+            expect(html, 'the word removed two revisions ago must be marked').to.contain(
+                '<mark>twelve</mark>'
+            );
+            expect(html, 'the word present in the newest revision must be marked').to.contain(
+                '<mark>eighteen</mark>'
+            );
+        });
+    });
+
+    it('shows an anonymous visitor the same comparison it shows an editor', () => {
+        // The stronger property, and the one that survives a partial fix. A gate that denies the
+        // page rather than the history component returns an empty panel instead of a refusal:
+        // no error message, no rows, nothing to assert against unless the two are compared. Both
+        // reads are of published, public content, so anything but equality here is a leak in one
+        // direction or a silent omission in the other.
+        const rowsOf = (html: string) =>
+            /<ol class="crh-diff-rows"[\s\S]*?<\/ol>/.exec(html)?.[0] ?? '';
+
+        // Authenticated first: renderLiveAsGuest drops the session for the rest of the test.
+        renderLive(comparisonUrl(firstEntryUuid, thirdEntryUuid)).then(asEditor => {
+            const editorRows = rowsOf(asEditor);
+
+            expect(editorRows, 'the authenticated render must have rows to compare against').to.not
+                .be.empty;
+
+            renderLiveAsGuest(comparisonUrl(firstEntryUuid, thirdEntryUuid)).then(asGuest => {
+                expect(
+                    rowsOf(asGuest),
+                    'a visitor must see the whole comparison, not a trimmed or empty one'
+                ).to.eq(editorRows);
+            });
         });
     });
 
