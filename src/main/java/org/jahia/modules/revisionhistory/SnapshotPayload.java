@@ -35,30 +35,39 @@ public final class SnapshotPayload {
     }
 
     /**
-     * @return the snapshot's Markdown, or an empty string when it has none
+     * @return the snapshot's payload, and whether all of it was read
      * @throws RepositoryException if the payload cannot be read at all
+     *
+     * <p>Returns {@link SnapshotContent} rather than the Markdown alone so a caller cannot show a
+     * shortened payload without knowing it is shortened; see that class for why that mattered.
      */
-    public static String read(JCRNodeWrapper snapshot) throws RepositoryException {
+    public static SnapshotContent read(JCRNodeWrapper snapshot) throws RepositoryException {
         if (snapshot == null || !snapshot.hasProperty(PROP_MARKDOWN)) {
-            return "";
+            return SnapshotContent.EMPTY;
         }
         Binary binary = snapshot.getProperty(PROP_MARKDOWN).getBinary();
         try (InputStream in = binary.getStream()) {
             ByteArrayOutputStream buffer = new ByteArrayOutputStream();
             byte[] chunk = new byte[8192];
             int read;
+            boolean truncated = false;
             while ((read = in.read(chunk)) != -1) {
                 // Re-applied on read even though capture enforces it on write: these are public
                 // and editor-facing request paths, and neither may become a way to pull an
                 // arbitrarily large binary into heap because something else wrote one.
                 if (buffer.size() + read > MAX_MARKDOWN_BYTES) {
-                    logger.warn("Snapshot {} exceeds the {} byte cap on read; payload truncated",
+                    // Still logged, but the log is no longer the ONLY place it is said. A WARN
+                    // reaches an operator reading logs at the time; it never reached the visitor
+                    // being shown the result, which is who the record is for.
+                    logger.warn("Snapshot {} exceeds the {} byte cap on read; only its start is"
+                            + " returned, and every surface showing it must say so",
                             snapshot.getPath(), MAX_MARKDOWN_BYTES);
+                    truncated = true;
                     break;
                 }
                 buffer.write(chunk, 0, read);
             }
-            return new String(buffer.toByteArray(), StandardCharsets.UTF_8);
+            return new SnapshotContent(new String(buffer.toByteArray(), StandardCharsets.UTF_8), truncated);
         } catch (IOException e) {
             throw new RepositoryException("Could not read snapshot " + snapshot.getPath(), e);
         } finally {

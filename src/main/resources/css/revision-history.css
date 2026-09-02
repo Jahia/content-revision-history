@@ -475,6 +475,22 @@
     margin: 0.5rem 0;
 }
 
+/*
+ * The stronger of the two notices: it does not say "there is more to see", it says the comparison
+ * on screen was computed from incomplete text and can report removals that never happened.
+ *
+ * Reuses the removed-line tokens rather than introducing a colour, so the palette stays audited:
+ * --crh-removed-text on --crh-removed-bg measures 12.16:1, well past the 7:1 AAA threshold. The
+ * severity is carried by the wording and by role="alert" in the markup, never by the colour alone
+ * -- this has to remain legible and complete with the stylesheet missing.
+ */
+.crh-diff-notice--warning {
+    background: var(--crh-removed-bg);
+    color: var(--crh-removed-text);
+    border-left-color: var(--crh-removed-text);
+    font-weight: 600;
+}
+
 .crh-diff-stats {
     font-weight: 700;
     color: var(--crh-text-muted);

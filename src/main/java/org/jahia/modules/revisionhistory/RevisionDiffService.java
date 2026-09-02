@@ -177,15 +177,21 @@ public class RevisionDiffService {
             return RevisionDiffView.unavailable(REASON_NO_PREVIOUS_SNAPSHOT, olderLabel);
         }
 
-        MarkdownDiff.Result diff = MarkdownDiff.compare(
-                SnapshotPayload.read(olderSnapshot), SnapshotPayload.read(newerSnapshot));
+        SnapshotContent olderPayload = SnapshotPayload.read(olderSnapshot);
+        SnapshotContent newerPayload = SnapshotPayload.read(newerSnapshot);
+        // Either side being incomplete invalidates the whole comparison, not half of it: a diff
+        // against a payload missing its tail reports every missing line as removed. One flag,
+        // because there is one thing the reader needs to be told.
+        boolean sourceTruncated = olderPayload.isTruncated() || newerPayload.isTruncated();
+
+        MarkdownDiff.Result diff = MarkdownDiff.compare(olderPayload.getMarkdown(), newerPayload.getMarkdown());
 
         boolean mismatch = !equalStrings(
                 stringOrNull(olderSnapshot, PROP_GENERATOR_VERSION),
                 stringOrNull(newerSnapshot, PROP_GENERATOR_VERSION));
 
         return new RevisionDiffView(null, newerLabel, olderLabel,
-                dateOrNull(newer), dateOrNull(older), diff, mismatch);
+                dateOrNull(newer), dateOrNull(older), diff, mismatch, sourceTruncated);
     }
 
     /**

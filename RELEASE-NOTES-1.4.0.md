@@ -218,6 +218,33 @@ If a page really is that large, raise `MarkdownNormalizer.MAX_INPUT_CHARS` and
 `RevisionHistoryConstants.MAX_MARKDOWN_BYTES` together — raising only one moves the refusal rather
 than lifting it.
 
+### A truncated snapshot now says so, on screen
+
+The read path applies the same 1 MB cap as the write path, as defence in depth against a payload
+something else wrote. It used to apply it by returning the start of the snapshot and logging a
+WARN — so the comparison panel and the jContent preview received a shortened document with no way
+to know it was shortened, and rendered it as the complete record.
+
+The consequence was not cosmetic. A diff computed from a payload missing its tail reports **every
+line past the cut as removed**, and presents that as the record of what changed on that date. A
+WARN reaches an operator reading logs at the time; it never reached the visitor being shown the
+result, who is who the record is for.
+
+`SnapshotPayload.read` now returns the payload together with whether all of it was read, and both
+surfaces show a notice when it was not:
+
+- **The comparison popup** shows a warning saying the comparison was made from only the beginning
+  of a snapshot and should be treated as incomplete rather than as the record of what changed. It
+  is deliberately separate from the existing "too long to compare in full" notice: that one means
+  the comparison was clipped for display and the rest exists, this one means the comparison itself
+  is unreliable.
+- **The jContent snapshot preview** shows a notice saying what follows is missing rather than
+  absent from the page.
+
+Nothing changes for snapshots within the cap, which is every snapshot this module has ever written
+— capture refuses anything larger as `OVERSIZE`. This closes the case where a payload arrived by
+some other route: a migration, a system-view import, or a future code path.
+
 ### Backward Compatibility
 
 - Sites with no per-site configuration keep the module-wide behaviour, with the one exception above:

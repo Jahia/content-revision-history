@@ -44,15 +44,20 @@ public final class RevisionHistoryFunctions {
      * allowed to see it. Escalating to a system session here would hand the snapshot tree to
      * anyone who could reach the preview.
      *
-     * @return the Markdown, or an empty string if it cannot be read; never null, because a view
-     *         has no sensible way to handle an exception thrown mid-render
+     * @return the payload and whether all of it was read; never null, because a view has no
+     *         sensible way to handle an exception thrown mid-render
+     *
+     * <p>Returns the whole {@link SnapshotContent} rather than the Markdown alone so the
+     * preview can say when it is showing only the start of a snapshot. Returning the string forced
+     * a second read to answer that, and two reads of the same binary can disagree.
      */
-    public static String snapshotMarkdown(org.jahia.services.content.JCRNodeWrapper snapshot) {
+    public static SnapshotContent snapshotContent(
+            org.jahia.services.content.JCRNodeWrapper snapshot) {
         try {
             return SnapshotPayload.read(snapshot);
         } catch (RepositoryException e) {
             LOGGER.error("Could not read the snapshot payload for preview", e);
-            return "";
+            return SnapshotContent.EMPTY;
         }
     }
 

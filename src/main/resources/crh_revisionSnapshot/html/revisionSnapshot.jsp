@@ -33,7 +33,9 @@
 --%>
 <template:addResources type="css" resources="revision-history.css"/>
 
-<c:set var="markdown" value="${crh:snapshotMarkdown(currentNode)}"/>
+<%-- One call, so the payload and "was all of it read" cannot disagree. --%>
+<c:set var="snapshot" value="${crh:snapshotContent(currentNode)}"/>
+<c:set var="markdown" value="${snapshot.markdown}"/>
 
 <section class="crh-snapshot-preview" aria-labelledby="crh-snapshot-heading-${currentNode.identifier}">
     <h2 id="crh-snapshot-heading-${currentNode.identifier}">
@@ -83,6 +85,11 @@
             <p class="crh-diff-notice"><fmt:message key="crh_snapshotPreview.empty"/></p>
         </c:when>
         <c:otherwise>
+            <c:if test="${snapshot.truncated}">
+                <p class="crh-diff-notice crh-diff-notice--warning" role="alert">
+                    <fmt:message key="crh_snapshotPreview.truncated"/>
+                </p>
+            </c:if>
             <pre class="crh-snapshot-markdown"><c:out value="${markdown}"/></pre>
         </c:otherwise>
     </c:choose>

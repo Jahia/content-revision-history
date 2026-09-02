@@ -23,10 +23,12 @@ public final class RevisionDiffView {
     private final Calendar previousDate;
     private final MarkdownDiff.Result diff;
     private final boolean generatorMismatch;
+    private final boolean sourceTruncated;
 
     RevisionDiffView(String reason, String currentLabel, String previousLabel,
                      Calendar currentDate, Calendar previousDate,
-                     MarkdownDiff.Result diff, boolean generatorMismatch) {
+                     MarkdownDiff.Result diff, boolean generatorMismatch,
+                     boolean sourceTruncated) {
         this.reason = reason;
         this.currentLabel = currentLabel;
         this.previousLabel = previousLabel;
@@ -34,10 +36,24 @@ public final class RevisionDiffView {
         this.previousDate = previousDate;
         this.diff = diff;
         this.generatorMismatch = generatorMismatch;
+        this.sourceTruncated = sourceTruncated;
+    }
+
+    /**
+     * True when a snapshot being compared was larger than the module reads, so the comparison was
+     * computed from only its start.
+     *
+     * <p>Distinct from {@code getDiff().isTruncated()}, and the panel shows both separately. That
+     * one means the comparison was clipped for DISPLAY and the rest exists; this one means the
+     * comparison itself was computed from incomplete text, so it can report lines as removed that
+     * were never removed. A reader told only the first would trust a result that is wrong.
+     */
+    public boolean isSourceTruncated() {
+        return sourceTruncated;
     }
 
     static RevisionDiffView unavailable(String reason, String currentLabel) {
-        return new RevisionDiffView(reason, currentLabel, null, null, null, null, false);
+        return new RevisionDiffView(reason, currentLabel, null, null, null, null, false, false);
     }
 
     /** True when {@link #getDiff()} holds a comparison; false when {@link #getReason()} does. */

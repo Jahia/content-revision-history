@@ -245,6 +245,18 @@
                     <c:if test="${view.diff.truncated}">
                         <p class="crh-diff-notice"><fmt:message key="crh_diff.truncated"/></p>
                     </c:if>
+                    <%-- A DIFFERENT fact from the one above, and the more serious of the two.
+                         crh_diff.truncated means the comparison was clipped for display and the
+                         rest of it exists. This means a stored snapshot was larger than the module
+                         reads, so the comparison was computed from only its start, and every line
+                         past the cut is reported as removed when nothing was removed. Shown at
+                         role=alert rather than as a quiet caption because it says the result on
+                         screen is wrong, not merely partial. --%>
+                    <c:if test="${view.sourceTruncated}">
+                        <p class="crh-diff-notice crh-diff-notice--warning" role="alert">
+                            <fmt:message key="crh_diff.sourceTruncated"/>
+                        </p>
+                    </c:if>
 
                     <c:choose>
                         <c:when test="${view.diff.identical}">

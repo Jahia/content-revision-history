@@ -27,10 +27,10 @@
             A captured snapshot's Markdown payload, for the jContent preview. Read through the
             caller's own session, so the preview shows only what the viewer may already see.
         </description>
-        <name>snapshotMarkdown</name>
+        <name>snapshotContent</name>
         <function-class>org.jahia.modules.revisionhistory.RevisionHistoryFunctions</function-class>
-        <function-signature>java.lang.String snapshotMarkdown(org.jahia.services.content.JCRNodeWrapper)</function-signature>
-        <example>${crh:snapshotMarkdown(currentNode)}</example>
+        <function-signature>org.jahia.modules.revisionhistory.SnapshotContent snapshotContent(org.jahia.services.content.JCRNodeWrapper)</function-signature>
+        <example>${crh:snapshotContent(currentNode).markdown}</example>
     </function>
 
     <function>
