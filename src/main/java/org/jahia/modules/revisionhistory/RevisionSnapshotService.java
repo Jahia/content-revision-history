@@ -65,6 +65,9 @@ import static org.jahia.modules.revisionhistory.RevisionHistoryConstants.*;
  */
 public class RevisionSnapshotService {
 
+    /** Where a published revision entry still lives after being deleted from the editorial tree. */
+    private static final String LIVE_WORKSPACE = "live";
+
     private static final Logger logger = LoggerFactory.getLogger(RevisionSnapshotService.class);
 
     /**
@@ -442,15 +445,50 @@ public class RevisionSnapshotService {
         // unrelated read failure must not be read as permission to delete the evidence behind a
         // published revision.
         for (javax.jcr.Value reference : snapshot.getProperty(PROP_ENTRY_REFS).getValues()) {
+            String entryId = reference.getString();
             try {
-                snapshot.getSession().getNodeByIdentifier(reference.getString());
+                snapshot.getSession().getNodeByIdentifier(entryId);
                 return true;
-            } catch (javax.jcr.ItemNotFoundException entryDeleted) {
-                logger.debug("Snapshot {} references entry {}, which no longer exists",
-                        snapshot.getName(), reference.getString());
+            } catch (javax.jcr.ItemNotFoundException notInDefault) {
+                // Absent from `default` is not the same as gone. Capture always runs against
+                // `default`, so an entry an editor deleted in jContent and has NOT published
+                // disappears here while the PUBLISHED revision is still on the live page citing
+                // this snapshot. Pruning it then destroys the evidence behind a claim the public
+                // can still read, and because crh:entryRefs lives on the snapshot, it also
+                // destroys the record that the entry ever described it -- so the binder later
+                // rebinds that revision to the CURRENT text. Check `live` before believing it.
+                if (existsInLive(entryId)) {
+                    logger.debug("Snapshot {} is referenced by entry {}, which is deleted in"
+                            + " default but still published", snapshot.getName(), entryId);
+                    return true;
+                }
+                logger.debug("Snapshot {} references entry {}, which exists in neither workspace",
+                        snapshot.getName(), entryId);
             }
         }
         return false;
+    }
+
+    /**
+     * @return whether this identifier still resolves in {@code live}
+     *
+     * <p>Only reached for a reference that has already vanished from {@code default}, so the extra
+     * session is paid on the dangling case rather than on every reference of every capture.
+     *
+     * <p>Package-private so the pruning tests can answer it without a repository. The alternative
+     * -- letting the missing JCRTemplate decide -- would make "is this evidence still cited" depend
+     * on whether a session could be opened, and the safe answer to that question is not a default.
+     */
+    boolean existsInLive(String identifier) throws RepositoryException {
+        return Boolean.TRUE.equals(JCRTemplate.getInstance().doExecuteWithSystemSessionAsUser(
+                null, LIVE_WORKSPACE, null, (JCRCallback<Boolean>) live -> {
+                    try {
+                        live.getNodeByIdentifier(identifier);
+                        return Boolean.TRUE;
+                    } catch (javax.jcr.ItemNotFoundException goneThereToo) {
+                        return Boolean.FALSE;
+                    }
+                }));
     }
 
     private long pruneIfNeeded(JCRNodeWrapper folder, String siteKey) throws RepositoryException {

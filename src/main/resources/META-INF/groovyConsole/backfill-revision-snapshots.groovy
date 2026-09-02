@@ -61,8 +61,19 @@ def moduleBundle = {
 }()
 
 def normalizerClass = moduleBundle.loadClass('org.jahia.modules.revisionhistory.MarkdownNormalizer')
-def normalizeMethod = normalizerClass.getMethod('normalize', String)
-def normalize = { String raw -> normalizeMethod.invoke(null, raw) as String }
+// The LOCALE-AWARE overload, which is the one the live capture path calls. Using the
+// locale-less one here reproduced, in the migration script, the exact defect
+// SnapshotCaptureJob records as having been fixed: sentence boundaries were found with English
+// rules, so a reconstructed zh or ja page never matched the captured one. The byte-for-byte gate
+// then reported an unexplained MISMATCH and aborted the run -- or, forced through with
+// ALLOW_UNEXPLAINED, stored snapshots that diff spuriously against every future live capture.
+def localeForMethod = normalizerClass.getMethod('localeFor', String)
+def normalizeMethod = normalizerClass.getMethod('normalize', String, java.util.Locale)
+// The language is a parameter rather than a captured constant: LANGUAGE is a typed local declared
+// further down, and a closure defined up here cannot see it.
+def normalize = { String raw, String lang ->
+    normalizeMethod.invoke(null, raw, localeForMethod.invoke(null, lang)) as String
+}
 
 def serviceClass = moduleBundle.loadClass('org.jahia.modules.revisionhistory.RevisionSnapshotService')
 def captureMethod = serviceClass.getMethod('captureIfChanged',
@@ -327,7 +338,7 @@ def reconstruct = { long millis ->
         raw = sb.toString()
         return null
     } as JCRCallback)
-    return normalize(raw)
+    return normalize(raw, language)
 }
 
 /** The one translation subnode that the render of this language will actually dereference. */

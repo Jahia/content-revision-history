@@ -364,8 +364,9 @@
          collapsedByDefault (nodes created before the property existed) is read as collapsed,
          matching the CND default rather than inventing a second one. --%>
     <c:set var="startClosed"
-           value="${empty currentNode.properties['collapsedByDefault']
-                    or currentNode.properties['collapsedByDefault'].boolean}"/>
+           value="${not comparisonRequested
+                    and (empty currentNode.properties['collapsedByDefault']
+                         or currentNode.properties['collapsedByDefault'].boolean)}"/>
 
     <details class="crh-revision-disclosure"<c:if test="${not startClosed}"> open</c:if>>
         <summary class="crh-revision-toggle">

@@ -37,7 +37,19 @@ import static org.mockito.Mockito.*;
  */
 class RevisionSnapshotServicePruneTest {
 
-    private final RevisionSnapshotService service = new RevisionSnapshotService();
+    /**
+     * Whether the entries these tests dangle are still published. Pruning has to ask, because an
+     * entry deleted from the editorial tree may still be cited by a revision the public can read,
+     * and there is no repository here to ask.
+     */
+    private boolean publishedEntryExists;
+
+    private final RevisionSnapshotService service = new RevisionSnapshotService() {
+        @Override
+        boolean existsInLive(String identifier) {
+            return publishedEntryExists;
+        }
+    };
 
     /** Snapshot names are timestamp-prefixed, so lexicographic order is chronological. */
     private static String name(int index) {
@@ -184,9 +196,30 @@ class RevisionSnapshotServicePruneTest {
         Map<String, JCRNodeWrapper> snapshots =
                 folderOf(folder, 4, Arrays.asList(0), Arrays.asList(0));
 
+        publishedEntryExists = false;
+
         service.prune(folder, 2);
 
         verify(snapshots.get(name(0))).remove();
+    }
+
+    @Test
+    @DisplayName("an entry deleted in default but still PUBLISHED protects its snapshot")
+    void anEntryStillLiveProtectsItsSnapshot() throws Exception {
+        // Capture runs against `default`, so an entry an editor deleted in jContent and has not
+        // published vanishes from the workspace pruning looks in -- while the published revision is
+        // still on the live page, citing this snapshot as the text it describes. Deleting it
+        // destroys the evidence behind a claim the public can still read, and takes crh:entryRefs
+        // with it, so the binder later rebinds that revision to the CURRENT text: a years-old
+        // revision silently begins claiming today's page.
+        JCRNodeWrapper folder = mock(JCRNodeWrapper.class);
+        Map<String, JCRNodeWrapper> snapshots =
+                folderOf(folder, 4, Arrays.asList(0), Arrays.asList(0));
+        publishedEntryExists = true;
+
+        service.prune(folder, 2);
+
+        verify(snapshots.get(name(0)), never()).remove();
     }
 
     @Test
