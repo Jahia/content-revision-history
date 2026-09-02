@@ -85,6 +85,15 @@ public final class RevisionHistoryConstants {
     public static final String PROP_SNAPSHOT_REF = "crh:snapshotRef";
 
     /**
+     * The per-language pin, superseding {@link #PROP_SNAPSHOT_REF}.
+     *
+     * <p>A second property rather than an i18n flag on the first: Jahia refuses a module whose CND
+     * changes that flag on an existing property, cancelling the deployment outright. See the note
+     * in the CND.
+     */
+    public static final String PROP_PINNED_SNAPSHOT = "crh:pinnedSnapshot";
+
+    /**
      * Upper bound on nodes walked when looking for revision entries under a page. Pages hold
      * editorial content, not bulk data, so anything approaching this is a malformed tree
      * rather than a page -- and an unbounded walk on a capture path is how a background job

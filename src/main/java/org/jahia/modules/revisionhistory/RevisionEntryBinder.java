@@ -79,7 +79,11 @@ public class RevisionEntryBinder {
     public int bindNewEntries(String siteKey, String pageUuid, String language) {
         try {
             RevisionSnapshotService.validate(siteKey, pageUuid, language);
-            return JCRTemplate.getInstance().doExecuteWithSystemSessionAsUser(null, WORKSPACE, null,
+            // The locale is what makes an i18n crh:snapshotRef readable at all: without it the
+            // session has no translation subnode to resolve the property against, and every pinned
+            // entry would read as unpinned.
+            return JCRTemplate.getInstance().doExecuteWithSystemSessionAsUser(null, WORKSPACE,
+                    MarkdownNormalizer.localeFor(language),
                     (JCRCallback<Integer>) session -> bind(session, siteKey, pageUuid, language));
         } catch (RepositoryException | RuntimeException e) {
             logger.error("Could not bind revision entries for page {} [{}]", pageUuid, language, e);
@@ -215,11 +219,39 @@ public class RevisionEntryBinder {
     }
 
     private static String pinnedName(JCRNodeWrapper entry) throws RepositoryException {
-        if (!entry.hasProperty(PROP_SNAPSHOT_REF)) {
-            return null;
-        }
-        String name = entry.getProperty(PROP_SNAPSHOT_REF).getString();
-        return name == null || name.trim().isEmpty() ? null : name.trim();
+        return pinnedSnapshotName(entry);
+    }
+
+    /**
+     * The snapshot an entry explicitly names, or null.
+     *
+     * <p>Package-private and shared with {@code RevisionDiffService} on purpose: the binder and the
+     * comparison have to agree about which snapshot an entry is pinned to, and two readings of the
+     * same rule are two chances to disagree about a record that is public and permanent.
+     *
+     * <p><b>Two properties, newest first.</b> {@code crh:pinnedSnapshot} is the per-language pin and
+     * is what the edit form writes now. {@code crh:snapshotRef} is its non-i18n predecessor, still
+     * read because entries pinned before the change carry their value there and nothing migrates
+     * them. An entry that silently lost its pin would not fail loudly: it would fall back to
+     * automatic binding and quietly re-attach a published revision to whatever snapshot is current,
+     * which is the outcome this module exists to prevent.
+     *
+     * <p>Reading the old property is deliberately not paired with a write of the new one. A capture
+     * job is the wrong place for a migration, and a rule that only reads cannot lose an editor's
+     * value if this reasoning turns out to be wrong.
+     */
+    static String pinnedSnapshotName(JCRNodeWrapper entry) throws RepositoryException {
+        String pinned = trimmedOrNull(valueOf(entry, PROP_PINNED_SNAPSHOT));
+        return pinned != null ? pinned : trimmedOrNull(valueOf(entry, PROP_SNAPSHOT_REF));
+    }
+
+    /** @return the property's value for this session's locale, or null when it has none */
+    private static String valueOf(JCRNodeWrapper entry, String property) throws RepositoryException {
+        return entry.hasProperty(property) ? entry.getProperty(property).getString() : null;
+    }
+
+    private static String trimmedOrNull(String value) {
+        return value == null || value.trim().isEmpty() ? null : value.trim();
     }
 
     /**

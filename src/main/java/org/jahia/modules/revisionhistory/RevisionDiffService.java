@@ -112,8 +112,11 @@ public class RevisionDiffService {
             // they can only come from `default`. Reading both from `default` meant the control
             // and its result could describe different revisions.
             final String entryWorkspace = renderingWorkspace();
+            // Locale, not null: crh:snapshotRef is i18n, so without one the session cannot resolve
+            // the pin and every pinned revision would compare as though it had never been pinned.
             return JCRTemplate.getInstance().doExecuteWithSystemSessionAsUser(null, entryWorkspace,
-                    null, (JCRCallback<RevisionDiffView>) entrySession ->
+                    MarkdownNormalizer.localeFor(language),
+                    (JCRCallback<RevisionDiffView>) entrySession ->
                             JCRTemplate.getInstance().doExecuteWithSystemSessionAsUser(
                                     null, WORKSPACE, null,
                                     (JCRCallback<RevisionDiffView>) snapshotSession ->
@@ -348,14 +351,17 @@ public class RevisionDiffService {
         // a default. Resolution is by name within THIS page-and-language folder only, exactly as the
         // binder does it, so an editor-supplied value cannot reach anything else in the repository.
         for (JCRNodeWrapper entry : history.getNodes()) {
-            if (!entry.isNodeType(ENTRY_TYPE) || !entry.hasProperty(PROP_SNAPSHOT_REF)) {
+            if (!entry.isNodeType(ENTRY_TYPE)) {
                 continue;
             }
-            String name = entry.getProperty(PROP_SNAPSHOT_REF).getString();
-            if (name == null || name.trim().isEmpty()) {
+            // RevisionEntryBinder owns this reading, including the fallback to a value written
+            // before crh:snapshotRef became i18n. Reading the property directly here would have
+            // meant the comparison and the binder disagreeing about what an entry is pinned to.
+            String name = RevisionEntryBinder.pinnedSnapshotName(entry);
+            if (name == null) {
                 continue;
             }
-            JCRNodeWrapper pinned = snapshotNamed(folder, name.trim());
+            JCRNodeWrapper pinned = snapshotNamed(folder, name);
             if (pinned != null) {
                 byEntry.put(entry.getIdentifier(), pinned);
             } else {
