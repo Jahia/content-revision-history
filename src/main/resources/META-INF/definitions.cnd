@@ -32,7 +32,19 @@
  //
  // Single and named, not `+ * (crh:revisionHistory)`: one node has one public revision history,
  // and a wildcard would let an editor create several with nothing to say which is authoritative.
- + revisionHistory (crh:revisionHistory)
+ // (jmix:droppableContent), not (crh:revisionHistory), and this mirrors the `relatedlinks`
+ // definition on jacademy:kbEntry deliberately -- that is a pattern known to work in production
+ // rather than one reasoned out from the taglib.
+ //
+ // Typed as the component itself, a host view could not create it. template:area creates the area
+ // node as a jnt:contentList, which a crh:revisionHistory-typed slot rejects, so the area could
+ // never come into existence and edit mode offered no button at all. Reported from a kbEntry, and
+ // it is the same reason `relatedlinks` is declared as (jmix:droppableContent): the area node is a
+ // list, and the constrained component goes INSIDE it via the view's own nodeTypes.
+ //
+ // The cost is that the list can hold more than one history. The view's nodeTypes is what keeps it
+ // to revision histories; nothing at the definition level now says "exactly one".
+ + revisionHistory (jmix:droppableContent)
 
 // Public, editorial container rendered on the page. Holds only revision entries.
 [crh:revisionHistory] > jnt:content, jmix:droppableContent, jmix:editorialContent, jmix:list
