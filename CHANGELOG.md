@@ -1,6 +1,19 @@
 Changelog
 =========
 
+## [Unreleased]
+
+### Other changes
+
+* **model**: Both component types carry `jmix:structuredContent`, so the editor's "Add content"
+  list files them under *Content:Structured* -- beside `jnt:banner`, `jnt:event` and
+  `jnt:introduction`, which is what they are -- instead of in the default `nt:base` branch labelled
+  "base". Not `jmix:listContent` ("Jahia - Lists"), which holds generic containers like
+  `jnt:contentList`: a revision history is a list in its mechanics and a component in its purpose,
+  and the picker groups by purpose. The `base` branch disappears from the picker entirely as a
+  result. Measured on 8.2.4.0: adding a supertype is not a MAJOR definition change, and both types
+  move to the intended branch.
+
 ## [1.4.5](https://github.com/Jahia/content-revision-history/compare/1_4_4...1_4_5) (2026-09-02)
 
 Fixes the slot 1.4.4 added: it was typed so tightly that no host view could create it, so edit mode
@@ -25,12 +38,13 @@ content type. No migration is needed and pages are unaffected.
 
 ### Known limitations
 
-* `crh:revisionHistory` carries no category mixin (`jmix:basicContent` and the like), so it does not
-  appear in a GENERIC add-content list: `contentTypesAsTree` groups types by category and one with
-  none has no branch to sit under. It is offerable only where a view names it explicitly through
-  `nodeTypes`, which every intended placement does. Worth knowing before looking for it in the
-  components tree, and worth closing separately -- every end-to-end test creates it over GraphQL,
-  which bypasses the picker, so nothing here exercises the path an editor uses.
+* **Corrected after release.** This entry originally said that `crh:revisionHistory`, carrying no
+  category mixin, "does not appear in a GENERIC add-content list". That is wrong. A type with no
+  category is not absent from the list: `contentTypesAsTree` puts it in the default `nt:base`
+  branch, labelled simply "base". It is findable there, merely filed badly. Both component types
+  are grouped properly in the next release. The rest of the note stands: every end-to-end test
+  creates content over GraphQL, which bypasses the picker, so nothing here exercises the path an
+  editor uses.
 
 ## [1.4.4](https://github.com/Jahia/content-revision-history/compare/1_4_3...1_4_4) (2026-09-02)
 

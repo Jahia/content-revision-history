@@ -47,7 +47,18 @@
  + revisionHistory (jmix:droppableContent)
 
 // Public, editorial container rendered on the page. Holds only revision entries.
-[crh:revisionHistory] > jnt:content, jmix:droppableContent, jmix:editorialContent, jmix:list
+// jmix:structuredContent is the CATEGORY, and it is what groups a type in the editor's
+// "Add content" list. contentTypesAsTree -- the API Content Editor builds that list from -- is a
+// tree whose branches are these category mixins, and a type carrying none is not missing from the
+// list: it lands in the default `nt:base` branch, labelled simply "base". Measured, because an
+// earlier note in this repository claimed such a type is absent from the list altogether, which
+// was wrong and shipped in the 1.4.5 release notes.
+//
+// "Content:Structured" is where jnt:banner, jnt:event and jnt:introduction live -- purpose-built
+// editorial components, which is what this is. Not jmix:listContent ("Jahia - Lists"), which holds
+// generic containers like jnt:contentList: a revision history is a list in its mechanics and a
+// component in its purpose, and the picker groups by purpose.
+[crh:revisionHistory] > jnt:content, jmix:droppableContent, jmix:editorialContent, jmix:list, jmix:structuredContent
  // `orderable` is REQUIRED and is not implied by jmix:list -- jnt:contentList declares it
  // separately for exactly this reason. Without it Jackrabbit refuses reordering
  // ("child node ordering not supported on node ..."), so editors cannot drag entries into
@@ -67,7 +78,11 @@
  + * (crh:revisionEntry)
 
 // One public revision. Authored by an editor; publishing it is what makes it public.
-[crh:revisionEntry] > jnt:content, jmix:droppableContent, jmix:editorialContent
+// Categorised too, so the default "base" branch disappears from the picker entirely rather than
+// lingering with one entry in it. Functionally this changes nothing: an entry is only ever legal
+// inside a crh:revisionHistory, whose child definition names the type explicitly, and the picker
+// filters by allowed child types before it ever consults the category.
+[crh:revisionEntry] > jnt:content, jmix:droppableContent, jmix:editorialContent, jmix:structuredContent
  itemtype = content
  - revisionLabel (string) mandatory
  - revisionDate (date) mandatory
