@@ -12,6 +12,7 @@
         "captureUserPlaceholder": "Laisser vide pour capturer anonymement",
         "credentialResolved": "Un identifiant a été résolu pour ce compte : les pages restreintes peuvent être capturées.",
         "credentialMissing": "Aucun identifiant résolu. La capture reste anonyme et les pages non publiques rapporteront NOT_PUBLIC. Le secret se règle dans un fichier sur le serveur, jamais ici.",
+        "credentialInherited": "Ce site n'a pas de compte propre : la capture utilise le compte global « {{account}} ». Les instantanés peuvent contenir tout ce qu'il peut lire.",
         "save": "Enregistrer",
         "reset": "Valeurs par défaut",
         "baseUrl": "Adresse depuis laquelle le serveur récupère ses propres pages",

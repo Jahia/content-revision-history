@@ -240,9 +240,21 @@ export const SiteSettings = () => {
                         onChange={e => update({captureUser: e.target.value})}
                     />
                     <Typography id="crh-capture-user-help" variant="caption">
-                        {current.credentialResolved
-                            ? t('settings.credentialResolved')
-                            : t('settings.credentialMissing')}
+                        {/*
+                            The field above holds this site's OWN account and stays empty when it
+                            has none; what capture actually renders as is a different question, and
+                            the panel used to answer only the first. A site inheriting the
+                            module-wide account was described as anonymous, which invites putting a
+                            public revision history on a page whose snapshots hold restricted text.
+                            Naming the inherited account here says so without putting it in the
+                            input, where saving would silently adopt it as this site's own.
+                        */}
+                        {!current.captureUser && current.effectiveCaptureUser
+                            ? t('settings.credentialInherited',
+                                {account: current.effectiveCaptureUser})
+                            : (current.credentialResolved
+                                ? t('settings.credentialResolved')
+                                : t('settings.credentialMissing'))}
                     </Typography>
                 </Field>
 

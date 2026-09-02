@@ -12,6 +12,7 @@
         "captureUserPlaceholder": "Leave empty to capture anonymously",
         "credentialResolved": "A credential resolved for this account, so restricted pages can be captured.",
         "credentialMissing": "No credential resolved. Capture stays anonymous, and pages the public cannot read will report NOT_PUBLIC. The secret is set in a file on the server, never here.",
+        "credentialInherited": "This site has no account of its own, so capture uses the module-wide account \"{{account}}\". Snapshots may contain whatever it can read.",
         "save": "Save",
         "reset": "Use defaults",
         "baseUrl": "Address the server fetches its own pages from",
