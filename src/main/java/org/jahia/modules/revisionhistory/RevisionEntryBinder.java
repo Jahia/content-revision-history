@@ -392,9 +392,12 @@ public class RevisionEntryBinder {
             if (child.getName().startsWith("j:")) {
                 continue;
             }
-            // Nested pages own their own history and their own snapshots; descending into them
-            // would bind a child page's entries to the parent page's content.
-            if (child.isNodeType(PAGE_TYPE)) {
+            // A node that owns its own history owns its own snapshots; descending into it would
+            // bind its entries to the text of whatever encloses it. A nested page is skipped even
+            // when it is NOT revisioned, which is the behaviour that already shipped: an entry
+            // sitting on a page with no snapshots of its own must stay unbound rather than attach
+            // to the parent's text.
+            if (child.isNodeType(PAGE_TYPE) || RevisionedAncestor.ownsItsOwnHistory(child)) {
                 continue;
             }
             if (child.isNodeType(ENTRY_TYPE)) {

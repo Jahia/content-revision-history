@@ -262,20 +262,15 @@ public class PublicationSnapshotListener implements PublicationEventListener {
             return remembered.isEmpty() ? null : remembered;
         }
         try {
-            JCRNodeWrapper current = session.getNodeByIdentifier(info.getNodeIdentifier());
+            JCRNodeWrapper start = session.getNodeByIdentifier(info.getNodeIdentifier());
             List<String> visitedContentPaths = new ArrayList<>();
-            while (current != null && current.getPath().startsWith("/sites/")) {
-                if (current.isNodeType(PAGE_TYPE)) {
-                    String result = current.isNodeType(REVISIONED_PAGE_MIXIN)
-                            ? current.getIdentifier() : "";
-                    memoise(memo, visitedContentPaths, result);
-                    return result.isEmpty() ? null : result;
-                }
-                visitedContentPaths.add(current.getPath());
-                current = current.getParent();
-            }
-            memoise(memo, visitedContentPaths, "");
-            return null;
+            // One walk, shared with the comparison service and the snapshot picker. It used to
+            // live here and ask "am I a page?" before "is this revisioned?", which walked straight
+            // past a revisioned content node.
+            JCRNodeWrapper owner = RevisionedAncestor.of(start, visitedContentPaths);
+            String result = owner == null ? "" : owner.getIdentifier();
+            memoise(memo, visitedContentPaths, result);
+            return result.isEmpty() ? null : result;
         } catch (ItemNotFoundException | javax.jcr.PathNotFoundException gone) {
             return null;
         } catch (RepositoryException e) {

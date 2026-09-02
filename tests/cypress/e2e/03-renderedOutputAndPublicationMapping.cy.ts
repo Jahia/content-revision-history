@@ -525,6 +525,81 @@ describe('Publication mapping correctness', () => {
         }
     });
 
+    it('captures a revisioned CONTENT node that has no page of its own', () => {
+        // Jmix:publiclyRevisioned extends jnt:content as well as jnt:page, so content that is
+        // published and visible without a page of its own can carry a revision history.
+        //
+        // The mixin alone was not enough, and the way it failed is why this test exists. The walk
+        // that answers "which node owns this history" asked "am I a page?" BEFORE "am I
+        // revisioned?", so a revisioned content node was walked straight past. Content outside any
+        // page then resolved to no owner and was never captured -- and resolving to no owner is
+        // also the right answer for content nobody asked to revision, so there was nothing to see:
+        // no error, no status, no folder.
+        const blockName = `crh-standalone-block-${Date.now()}`;
+        const blockPath = `/sites/${siteKey}/contents/${blockName}`;
+        let blockUuid = '';
+
+        addNode({
+            parentPathOrId: `/sites/${siteKey}/contents`,
+            name: blockName,
+            primaryNodeType: 'jnt:bigText',
+            mixins: ['jmix:publiclyRevisioned'],
+            properties: [{name: 'text', value: '<p>A reusable policy block.</p>', language}]
+        })
+            .then((created: ApolloResult<AddNodeQueryData>) => {
+                expect(
+                    created.errors,
+                    'jmix:publiclyRevisioned must be applicable to a jnt:content node'
+                ).to.be.undefined;
+                blockUuid = created.data?.jcr.addNode.uuid as string;
+                expect(blockUuid, 'the block must yield a uuid: its history is keyed on it').to.be.a(
+                    'string'
+                ).and.not.be.empty;
+
+                publishAndWaitJobEnding(blockPath, [language]);
+
+                // Keyed on the CONTENT node, not on anything page-shaped. The storage always was
+                // -- it is the lookups that assumed a page.
+                return cy.waitUntil<boolean>(
+                    () =>
+                        cy
+                            .apollo({
+                                fetchPolicy: 'no-cache',
+                                errorPolicy: 'all',
+                                query: gql`
+                                    query captured($path: String!) {
+                                        jcr {
+                                            nodeByPath(path: $path) {
+                                                children { nodes { name } }
+                                            }
+                                        }
+                                    }
+                                `,
+                                variables: {path: `${historyRoot}/${blockUuid}/${language}`}
+                            })
+                            .then(result => {
+                                const nodes = (
+                                    result as {
+                                        data?: {jcr?: {nodeByPath?: {children?: {nodes?: unknown[]}}}}
+                                    }
+                                )?.data?.jcr?.nodeByPath?.children?.nodes;
+                                return Boolean(nodes && nodes.length > 0);
+                            }),
+                    {
+                        timeout: 60000,
+                        interval: 2000,
+                        errorMsg:
+                            'no snapshot was stored for the revisioned content node: the owner walk ' +
+                            'has stopped resolving it, which fails silently in production',
+                        verbose: true
+                    }
+                );
+            })
+            .then(() => {
+                deleteNode(blockPath).then(null, () => undefined);
+            });
+    });
+
     it('attributes a deeply-nested non-page node\'s publication to the owning page\'s uuid', () => {
         const nestedContainerName = 'crh-mapping-nested-container';
         const nestedContainerPath = `${areaPath}/${nestedContainerName}`;

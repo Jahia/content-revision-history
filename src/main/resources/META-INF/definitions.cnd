@@ -2,9 +2,15 @@
 <jnt = 'http://www.jahia.org/jahia/nt/1.0'>
 <crh = 'http://www.jahia.org/crh/1.0'>
 
-// Opt-in marker. Only pages carrying this mixin are snapshotted on publication.
+// Opt-in marker. Only nodes carrying this mixin are snapshotted on publication.
+//
+// A PAGE or a CONTENT node. Content that is published and visible without a page of its own -- a
+// policy block reused across pages, a component with its own lifecycle -- needs a revision history
+// just as much, and nothing in the storage was ever page-shaped: the folder is keyed on the marked
+// node's UUID. What had to change alongside this was the three separate walks that answered "which
+// node owns this history", two of which walked to the nearest jnt:page. See RevisionedAncestor.
 [jmix:publiclyRevisioned] mixin
- extends = jnt:page
+ extends = jnt:page, jnt:content
 
 // Public, editorial container rendered on the page. Holds only revision entries.
 [crh:revisionHistory] > jnt:content, jmix:droppableContent, jmix:editorialContent, jmix:list

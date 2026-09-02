@@ -380,15 +380,16 @@ public class RevisionDiffService {
     }
 
     /** Nearest ancestor page. The history component may sit several containers deep in a page. */
+    /**
+     * @return the node whose history this component belongs to, or null when it belongs to none
+     *
+     * <p>This walked to the nearest {@code jnt:page}, which was the same answer only while pages
+     * were the only thing that could be revisioned. A revisioned CONTENT node's snapshots are
+     * keyed on that node, so looking under the enclosing page would find nothing and report "no
+     * snapshot recorded" for a history whose snapshots exist and are correct.
+     */
     private JCRNodeWrapper enclosingPage(JCRNodeWrapper node) throws RepositoryException {
-        JCRNodeWrapper current = node;
-        while (current != null && !"/".equals(current.getPath())) {
-            if (current.isNodeType(PAGE_TYPE)) {
-                return current;
-            }
-            current = current.getParent();
-        }
-        return null;
+        return RevisionedAncestor.of(node);
     }
 
     private static boolean equalStrings(String a, String b) {

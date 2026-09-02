@@ -242,7 +242,7 @@ public class SnapshotCaptureJob extends BackgroundJob {
         return JCRTemplate.getInstance().doExecuteWithSystemSessionAsUser(null, WORKSPACE, null, (JCRCallback<PageRef>) session -> {
                     try {
                         JCRNodeWrapper node = session.getNodeByIdentifier(pageUuid);
-                        if (!node.isNodeType(REVISIONED_PAGE_MIXIN)) {
+                        if (!node.isNodeType(REVISIONED_MIXIN)) {
                             return null;
                         }
                         return new PageRef(pageUuid, node.getPath(),
