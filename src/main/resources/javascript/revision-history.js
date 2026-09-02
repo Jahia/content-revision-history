@@ -159,6 +159,13 @@
     }
 
     function enhance(form) {
+        // Which comparison this form is currently waiting for. Every submission takes the next
+        // number and a response is applied only while it is still the newest: two comparisons
+        // started in quick succession complete in whatever order the network decides, and the
+        // handler previously applied both, so the slower FIRST request could land last and leave
+        // the panel showing a comparison that did not match the selected revisions.
+        var latestRequest = 0;
+
         form.addEventListener('submit', function (event) {
             // Anything missing, and the form submits normally: the server renders the comparison
             // inline exactly as it does with no script at all. Checked BEFORE the panel exists,
@@ -181,6 +188,9 @@
             // the fallback path removes both attributes again.
             panel.setAttribute('role', 'dialog');
 
+            latestRequest += 1;
+            var thisRequest = latestRequest;
+
             announce(form, form.getAttribute('data-crh-loading') || '');
             fetch(comparisonUrl(form), {credentials: 'same-origin'})
                 .then(function (response) {
@@ -190,6 +200,9 @@
                     return response.text();
                 })
                 .then(function (html) {
+                    if (thisRequest !== latestRequest) {
+                        return;
+                    }
                     // DOMParser does not execute scripts and does not load subresources, so this
                     // is an inert parse of our own page.
                     var fresh = new DOMParser()
@@ -212,10 +225,19 @@
                         panel.setAttribute('aria-labelledby', label);
                     }
                     panel.replaceChildren.apply(panel, Array.prototype.slice.call(imported.childNodes));
+                    // The replacement controls are server-rendered, so the full-screen toggle comes
+                    // back reporting aria-pressed="false". Leaving the modifier class on the panel
+                    // meant that resubmitting while maximised kept the panel full-screen with a
+                    // button announcing the opposite -- a control whose state is wrong to anyone
+                    // who cannot see it. Reset the class so markup and appearance agree.
+                    panel.classList.remove('crh-diff-panel--full');
                     announce(form, '');
                     present(panel);
                 })
                 .catch(function () {
+                    if (thisRequest !== latestRequest) {
+                        return;
+                    }
                     announce(form, '');
                     // Give the visitor the comparison the slow way rather than nothing at all.
                     // The attributes are dropped first: a panel marked [popover] that was never

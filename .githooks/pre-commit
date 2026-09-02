@@ -1,0 +1,77 @@
+#!/usr/bin/env bash
+#
+# Refuses a commit that would carry a credential into the repository.
+#
+# This exists because it already happened. An operator has to edit
+# META-INF/groovyConsole/backfill-revision-snapshots.groovy to run the backfill, filling in a real
+# account and password; a later `git add` of that same file for an unrelated change then swept the
+# edit into a commit, and a working root password reached a public repository. The file's own
+# comment said "There is deliberately NO default" three lines above the value that got committed,
+# so a comment is demonstrably not enough.
+#
+# Enable it once per clone:   git config core.hooksPath .githooks
+#
+# It inspects STAGED content only, so it cannot be satisfied by fixing the working tree afterwards.
+set -u
+
+fail=0
+say() { printf '%s\n' "$*" >&2; }
+
+# 1. The known footgun: the backfill script's credential fields must be committed empty.
+script='src/main/resources/META-INF/groovyConsole/backfill-revision-snapshots.groovy'
+if git diff --cached --name-only | grep -qx "$script"; then
+    staged=$(git show ":$script" 2>/dev/null || true)
+    while IFS= read -r field; do
+        # Both quote styles, and any declaration form. Anchoring on a literal `String` prefix let
+        # Groovy's other idiomatic declarations (`def X = ...`, a bare `X = ...`) through
+        # untouched, verified by running the previous pattern against them. The value is now taken
+        # as whatever sits between the first pair of quotes, so the check no longer has to predict
+        # how the operator wrote the line.
+        value=$(printf '%s\n' "$staged" \
+                | grep -E "^[[:space:]]*(final[[:space:]]+)?(String|def|var|Object)?[[:space:]]*${field}[[:space:]]*=[[:space:]]*['\"]" \
+                | head -1 \
+                | sed -E "s/^[^'\"]*['\"]([^'\"]*)['\"].*/\\1/")
+        if [ -n "${value:-}" ]; then
+            say "BLOCKED: ${script}"
+            say "  ${field} is committed with a value. It must be empty in the repository."
+            say "  Your local edit is fine; it just must not be staged."
+            say "  Unstage it with:  git restore --staged --worktree -- '${script}'"
+            say "  or keep your edit and stage only the rest:  git add -p '${script}'"
+            fail=1
+        fi
+    done <<'FIELDS'
+RENDER_USER
+RENDER_SECRET
+FIELDS
+    # PAGE_PATH is not a credential, but it is the same class of leak: it committed a real
+    # customer content path once, in the same sweep.
+    page=$(printf '%s\n' "$staged" \
+           | grep -E "^[[:space:]]*(final[[:space:]]+)?(String|def|var|Object)?[[:space:]]*PAGE_PATH[[:space:]]*=[[:space:]]*['\"]" \
+           | head -1 \
+           | sed -E "s/^[^'\"]*['\"]([^'\"]*)['\"].*/\\1/")
+    if [ -n "${page:-}" ]; then
+        say "BLOCKED: ${script} commits a real PAGE_PATH ('${page}'). Ship it empty."
+        fail=1
+    fi
+fi
+
+# 2. A general net, so the next leak in a different file is caught too. Deliberately narrow:
+#    it looks for an assignment of a non-placeholder-looking literal to a secret-ish name.
+#    The length floor is 8, not 12: this repository's own documented test default is 8 characters,
+#    so a 12-character floor excluded exactly the value most likely to be pasted in by hand.
+if git diff --cached -U0 -- . ':(exclude)*.env.example' ':(exclude)tests/**' ':(exclude)src/test/**' \
+   | grep -nEi '^\+.*(password|passwd|secret|api[_-]?key|token)[[:space:]]*[:=][[:space:]]*.?[A-Za-z0-9/+_-]{8,}' \
+   | grep -viE 'changeme|placeholder|example|xxxx|<[a-z]|\$\{|getenv|System\.getProperty|process\.env' >/dev/null
+then
+    say "BLOCKED: a staged line assigns what looks like a real secret."
+    say "  Review it:  git diff --cached | grep -iE 'password|secret|token|api[_-]?key'"
+    say "  If it is a test fixture, name it so (changeme/example) or move it under tests/."
+    fail=1
+fi
+
+if [ "$fail" -ne 0 ]; then
+    say ""
+    say "Nothing was committed. Override only if you are certain:  git commit --no-verify"
+    exit 1
+fi
+exit 0

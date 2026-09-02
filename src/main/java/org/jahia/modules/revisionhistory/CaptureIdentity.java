@@ -14,6 +14,7 @@ import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.util.Base64;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Who capture renders as.
@@ -61,9 +62,23 @@ public class CaptureIdentity {
      */
     private static volatile String authorization;
 
+    /**
+     * Which component instance owns the static state above.
+     *
+     * <p>The same guard {@code PublicationSnapshotListener} and {@code SiteSettingsRegistry} use,
+     * and for the same reason: if a replacement instance configures itself before the outgoing one
+     * is deactivated, an unconditional clear in {@code @Deactivate} wipes live configuration. Those
+     * two classes hold a comment asserting that ordering is possible and guard against it; these
+     * two held equivalent state and did not, so either the guard was needed in all four or the
+     * comment was wrong in two. Made consistent, because the failure it prevents is silent:
+     * restricted pages quietly start reporting NOT_PUBLIC with nothing logged.
+     */
+    private static final AtomicReference<CaptureIdentity> OWNER = new AtomicReference<>();
+
     @Activate
     @Modified
     public void configure(Map<String, Object> properties) {
+        OWNER.set(this);
         String user = trimmed(properties, PROP_USER);
         String header = resolve(properties);
         authorization = header;
@@ -74,6 +89,10 @@ public class CaptureIdentity {
 
     @Deactivate
     public void clear() {
+        // Only if this instance is still the one whose configuration is live; see OWNER.
+        if (!OWNER.compareAndSet(this, null)) {
+            return;
+        }
         principal = null;
         // Leaving a credential resolved after the component goes away would let a capture that
         // is still in flight authenticate with configuration the platform considers withdrawn.
@@ -97,6 +116,19 @@ public class CaptureIdentity {
     /** @return the configured capture user, or {@code null} when capture is anonymous */
     static String principal() {
         return principal;
+    }
+
+    /**
+     * @return whether a module-wide credential resolved, without exposing it
+     *
+     * <p>Public because the settings panel has to be able to say so. A site with no configuration
+     * of its own still captures with this credential, and a panel that reported "anonymous" for
+     * such a site told a site administrator that snapshots hold only public text when they may
+     * hold whatever the module-wide account can read -- on the strength of which they might put a
+     * public revision history on a page carrying restricted content.
+     */
+    public static boolean hasResolvedCredential() {
+        return authorization != null;
     }
 
     private static String resolve(Map<String, Object> properties) {

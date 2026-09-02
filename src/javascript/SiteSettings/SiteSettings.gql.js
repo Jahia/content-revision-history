@@ -13,6 +13,7 @@ export const GET_SITE_SETTINGS = gql`
                 captureEnabled
                 maxSnapshots
                 captureUser
+                effectiveCaptureUser
                 credentialResolved
                 baseUrl
             }
@@ -41,6 +42,7 @@ export const SAVE_SITE_SETTINGS = gql`
                 captureEnabled
                 maxSnapshots
                 captureUser
+                effectiveCaptureUser
                 credentialResolved
                 baseUrl
             }

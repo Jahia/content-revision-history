@@ -44,10 +44,28 @@ public class GqlSiteSettings {
         return settings.getMaxSnapshots();
     }
 
+    /**
+     * This site's OWN value, deliberately, because the panel binds it to an editable field.
+     *
+     * <p>Returning the effective account here would have been a silent downgrade: a site inheriting
+     * the module-wide account would display that name, and saving anything at all in the panel
+     * would write it as this site's own {@code capture.user}. Since a site that names an account
+     * uses that account's credential and no other, and no per-site secret exists for it, capture
+     * for that site would then fall to anonymous -- with the panel showing the same name
+     * throughout. {@link #getEffectiveCaptureUser} is what to display; this is what to edit.
+     */
     @GraphQLField
-    @GraphQLDescription("The account capture renders as, or null when capture is anonymous")
+    @GraphQLDescription("The account configured for THIS site, or null when it has none of its own."
+            + " This is the editable value; see effectiveCaptureUser for what capture actually uses.")
     public String getCaptureUser() {
         return settings.getCaptureUser();
+    }
+
+    @GraphQLField
+    @GraphQLDescription("The account capture actually renders as for this site: this site's own if"
+            + " it has one, otherwise the module-wide account. Read-only.")
+    public String getEffectiveCaptureUser() {
+        return settings.getEffectiveCaptureUser();
     }
 
     /**
@@ -58,7 +76,7 @@ public class GqlSiteSettings {
     @GraphQLDescription("True when a usable secret resolved, so capture can authenticate."
             + " The secret itself is never returned.")
     public boolean isCredentialResolved() {
-        return settings.hasResolvedCredential();
+        return settings.hasEffectiveCredential();
     }
 
     @GraphQLField

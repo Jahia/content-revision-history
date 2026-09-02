@@ -94,8 +94,10 @@ describe('Site administration panel for revision history', () => {
         cy.visit(panelUrl);
         cy.get(PANEL, {timeout: shellTimeoutMs}).should('exist');
 
-        cy.get(MAX_SNAPSHOTS).clear().type('7');
-        cy.get(BASE_URL).clear().type('http://127.0.0.1:8080');
+        cy.get(MAX_SNAPSHOTS).clear();
+        cy.get(MAX_SNAPSHOTS).type('7');
+        cy.get(BASE_URL).clear();
+        cy.get(BASE_URL).type('http://127.0.0.1:8080');
         cy.get(SAVE).click();
 
         // Asserted through the API rather than the DOM: the point of the panel is that it WRITES
@@ -135,7 +137,8 @@ describe('Site administration panel for revision history', () => {
         cy.get(PANEL, {timeout: shellTimeoutMs}).should('exist');
 
         // Typed and committed without the pointer ever moving, which is the point of the shortcut.
-        cy.get(MAX_SNAPSHOTS).clear().type('13{ctrl}{enter}');
+        cy.get(MAX_SNAPSHOTS).clear();
+        cy.get(MAX_SNAPSHOTS).type('13{ctrl}{enter}');
 
         cy.waitUntil(
             () => cy.apollo({query: settingsQuery, variables: {siteKey}})
@@ -164,8 +167,20 @@ describe('Site administration panel for revision history', () => {
 
         // No edit has been made, so the shortcut must not write. Otherwise it would create a
         // per-site configuration for a site that had deliberately been left on the defaults.
+        // Watching the network proves the absence; a fixed wait only proves that nothing had
+        // happened YET, and would pass under CI load even if the shortcut did write a moment later.
+        cy.intercept('POST', '**/modules/graphql', req => {
+            const ops = Array.isArray(req.body) ? req.body : [req.body];
+            if (ops.some(o => typeof o?.query === 'string' && o.query.includes('saveSiteSettings'))) {
+                throw new Error('Ctrl+Enter wrote settings when nothing had been edited');
+            }
+
+            req.continue();
+        });
+
         cy.get('body').type('{ctrl}{enter}');
-        cy.wait(3000);
+        // Round-trip a real query so any save the shortcut fired would already have been sent.
+        cy.apollo({query: settingsQuery, variables: {siteKey}});
         cy.apollo({query: settingsQuery, variables: {siteKey}}).then(({data}) => {
             expect(data.contentRevisionHistory.siteSettings.configured,
                 'an unchanged form must not write a configuration').to.be.false;
@@ -203,7 +218,8 @@ describe('Site administration panel for revision history', () => {
 
         cy.visit(panelUrl);
         cy.get(PANEL, {timeout: shellTimeoutMs}).should('exist');
-        cy.get(MAX_SNAPSHOTS).clear().type('42');
+        cy.get(MAX_SNAPSHOTS).clear();
+        cy.get(MAX_SNAPSHOTS).type('42');
         cy.get(SAVE).click();
 
         cy.get('[data-sel-role="crh-write-error"]', {timeout: 20000})
@@ -248,6 +264,88 @@ describe('Site administration panel for revision history', () => {
         });
     });
 
+    /** Posts one GraphQL operation as whoever is currently logged in, errors included. */
+    const asCurrentUser = (query: string) => cy.request({
+        method: 'POST',
+        url: '/modules/graphql',
+        headers: {'Content-Type': 'application/json', Origin: Cypress.config('baseUrl')},
+        body: {query},
+        failOnStatusCode: false
+    });
+
+    // Only the QUERY side was ever proven to refuse a non-admin. The guard is duplicated across
+    // three resolvers by design, so dropping it from one mutation is an easy mistake that would let
+    // any editor disable capture, redirect capture.baseUrl, or reset another site's configuration,
+    // with every existing test still green.
+    it('refuses saveSiteSettings to an editor, not just the query', () => {
+        cy.login('mathias', 'password');
+        asCurrentUser(`mutation { contentRevisionHistory { saveSiteSettings(siteKey: "${siteKey}", captureEnabled: false) { siteKey } } }`)
+            .then(res => {
+                const errors = res.body.errors || [];
+                expect(errors.length, 'an editor must not be able to write settings').to.be.greaterThan(0);
+                expect(errors[0].message).to.contain('siteAdminContentRevisionHistory');
+            });
+    });
+
+    it('refuses deleteSiteSettings to an editor', () => {
+        cy.login('mathias', 'password');
+        asCurrentUser(`mutation { contentRevisionHistory { deleteSiteSettings(siteKey: "${siteKey}") } }`)
+            .then(res => {
+                const errors = res.body.errors || [];
+                expect(errors.length, 'an editor must not be able to reset settings').to.be.greaterThan(0);
+                expect(errors[0].message).to.contain('siteAdminContentRevisionHistory');
+            });
+    });
+
+    // A value the running system will not use must be refused, not stored and echoed back. It was
+    // written verbatim to the .cfg and returned as the applied setting; only when FileInstall
+    // re-parsed the file did it get silently replaced by the module default.
+    //
+    // The floor is 2, and 1 is refused with it. This assertion used to require the message to say
+    // "at least 1", which was an observation of the wording rather than the property, and the
+    // wording was advertising a retention level the mechanism cannot deliver: prune never removes
+    // a page's newest snapshot, and it runs before the incoming one is written, so a cap of 1
+    // leaves the existing snapshot in place and the folder settles at 2 forever. What is asserted
+    // now is the contract -- every value the module will not honour is refused before it can reach
+    // the file -- rather than the sentence the server happened to produce.
+    it('refuses a retention value the mechanism cannot honour', () => {
+        cy.login();
+        [0, 1].forEach(refused => {
+            asCurrentUser(`mutation { contentRevisionHistory { saveSiteSettings(siteKey: "${siteKey}", maxSnapshots: ${refused}) { maxSnapshots } } }`)
+                .then(res => {
+                    const errors = res.body.errors || [];
+                    expect(errors.length, `${refused} must be refused`).to.be.greaterThan(0);
+                    expect(errors[0].message, 'the refusal names the floor it enforces')
+                        .to.contain('at least 2');
+                });
+        });
+
+        cy.apollo({query: settingsQuery, variables: {siteKey}}).then(({data}) => {
+            expect(data.contentRevisionHistory.siteSettings.maxSnapshots,
+                'a refused value must not reach the file').to.be.greaterThan(1);
+        });
+    });
+
+    // The endpoint decides which host this node issues its capture GET to, and whatever answers is
+    // stored as this site's public revision snapshot. saveSiteSettings is reachable by a SITE
+    // administrator, so accepting an arbitrary host handed a site-scoped role an outbound GET from
+    // inside the network plus a forged record of what the page said.
+    it('refuses a capture endpoint that does not address this node', () => {
+        cy.login();
+        asCurrentUser(`mutation { contentRevisionHistory { saveSiteSettings(siteKey: "${siteKey}", baseUrl: "http://169.254.169.254") { baseUrl } } }`)
+            .then(res => {
+                const errors = res.body.errors || [];
+                expect(errors.length, 'an outward-facing endpoint must be refused')
+                    .to.be.greaterThan(0);
+                expect(errors[0].message, 'the refusal names the field').to.contain('baseUrl');
+            });
+
+        cy.apollo({query: settingsQuery, variables: {siteKey}}).then(({data}) => {
+            expect(data.contentRevisionHistory.siteSettings.baseUrl,
+                'a refused endpoint must not reach the file').to.not.equal('http://169.254.169.254');
+        });
+    });
+
     // Every assertion above runs as root, which is exactly how the jContent visibility bug survived
     // two releases. An editor holds jcr:write on the site and still must not administer capture:
     // the account the module authenticates with is configured here.
@@ -256,15 +354,27 @@ describe('Site administration panel for revision history', () => {
         cy.visit(adminRoot, {failOnStatusCode: false});
         // Waits for the shell to finish loading its remotes before asserting an absence, or this
         // passes simply because nothing has rendered yet.
-        cy.get('body', {timeout: shellTimeoutMs}).should('be.visible');
-        cy.wait(5000);
+        // Wait for a signal that does NOT depend on privilege: window.jahia exists only once the
+        // app shell has booted and loaded its remotes, for any user. An earlier version waited for
+        // the 'Administration' nav entry, which a mere editor never sees at all -- so it timed out
+        // on exactly the user this test is about. A fixed wait would have been worse still: it
+        // would pass simply because nothing had rendered yet.
+        cy.window({timeout: shellTimeoutMs}).should(win => {
+            expect((win as unknown as {jahia?: unknown}).jahia, 'the app shell must have booted')
+                .to.not.be.undefined;
+        });
         cy.contains('Revision history').should('not.exist');
+        // And the absence must be a permission decision, not a crash that stopped the render.
+        cy.then(() => {
+            expect(Cypress.env('uncaughtErrors') || [],
+                'the panel must be hidden by permission, not by a page error').to.be.empty;
+        });
     });
 
     it('refuses the settings API to an editor even when the URL is typed by hand', () => {
         // The hidden menu entry is not the security boundary; this is.
         cy.login('mathias', 'password');
-        // cy.request rather than cy.apollo: the refusal arrives as HTTP 200 carrying an errors
+        // Cy.request rather than cy.apollo: the refusal arrives as HTTP 200 carrying an errors
         // array, and the apollo helper does not hand that array back to the caller.
         cy.request({
             method: 'POST',

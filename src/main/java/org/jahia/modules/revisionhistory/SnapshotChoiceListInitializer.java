@@ -60,10 +60,15 @@ import static org.jahia.modules.revisionhistory.RevisionHistoryConstants.WORKSPA
  * same key is never clobbered by an older bundle shutting down.
  *
  * <h2>Which session reads the snapshots</h2>
- * The snapshot tree has its ACL inheritance broken and grants nothing, so an editor's own session
- * cannot read it and a system session has to. That makes this a read path into content the viewer
- * may not be entitled to, exactly like a comparison, so it is gated the same way: the current user
- * must be able to read the PAGE before any snapshot of it is described to them.
+ * A system session reads them, and the reason is no longer the one this gave. The tree's ACL
+ * inheritance is not broken any more: {@code RevisionSnapshotService.restoreInheritance} repairs
+ * the pre-1.4 lockdown on every capture, so snapshots follow the permissions of the site's content
+ * folder and an editor with read there CAN read them. Two reasons remain. An instance upgraded but
+ * not yet republished still carries the old lockdown until its next capture, and reading through
+ * the viewer's session would silently return an empty option list there. And the gate below is
+ * needed regardless of either: a snapshot captured by a configured principal can hold text the
+ * viewer may not see on the live page, so the current user must be able to read the PAGE before
+ * any snapshot of it is described to them.
  */
 @Component(service = SnapshotChoiceListInitializer.class, immediate = true)
 public class SnapshotChoiceListInitializer implements ChoiceListInitializer {
@@ -74,9 +79,14 @@ public class SnapshotChoiceListInitializer implements ChoiceListInitializer {
     static final String KEY = "crhSnapshots";
 
     /**
-     * Newest snapshots offered. MAX_SNAPSHOTS_PER_PAGE_LANGUAGE is 500, and a 500-option dropdown
-     * is unusable long before it is slow. Each option also costs one binary read, so this is the
-     * bound on that too.
+     * Newest snapshots offered. The module default for snapshots per page and language is 500, and
+     * a 500-option dropdown is unusable long before it is slow. Each option also costs one binary
+     * read, so this is the bound on that too.
+     *
+     * <p>500 is a DEFAULT, not a ceiling: a site may configure more, and nothing caps it from
+     * above. This constant is therefore the only thing actually bounding this dropdown -- which
+     * also means a site configured above 100 has older snapshots that cannot be pinned from the
+     * picker at all.
      */
     static final int MAX_CHOICES = 100;
 

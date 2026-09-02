@@ -61,8 +61,26 @@ def moduleBundle = {
 }()
 
 def normalizerClass = moduleBundle.loadClass('org.jahia.modules.revisionhistory.MarkdownNormalizer')
-def normalizeMethod = normalizerClass.getMethod('normalize', String)
-def normalize = { String raw -> normalizeMethod.invoke(null, raw) as String }
+// The LOCALE-AWARE overload, which is the one the live capture path calls. Using the
+// locale-less one here reproduced, in the migration script, the exact defect
+// SnapshotCaptureJob records as having been fixed: sentence boundaries were found with English
+// rules, so a reconstructed zh or ja page never matched the captured one. The byte-for-byte gate
+// then reported an unexplained MISMATCH and aborted the run -- or, forced through with
+// ALLOW_UNEXPLAINED, stored snapshots that diff spuriously against every future live capture.
+// The SAME function jnt_content/markdown/content.jsp calls. Reimplementing "which properties hold
+// text" in Groovy is how the script and the view drift apart, and a drift here does not show up as
+// a bug -- it shows up as a snapshot missing text, stored as an authoritative record.
+def functionsClass = moduleBundle.loadClass('org.jahia.modules.revisionhistory.RevisionHistoryFunctions')
+def textPropertiesMethod = functionsClass.getMethod('textProperties', JCRNodeWrapper)
+def textProperties = { JCRNodeWrapper n -> textPropertiesMethod.invoke(null, n) as List }
+
+def localeForMethod = normalizerClass.getMethod('localeFor', String)
+def normalizeMethod = normalizerClass.getMethod('normalize', String, java.util.Locale)
+// The language is a parameter rather than a captured constant: LANGUAGE is a typed local declared
+// further down, and a closure defined up here cannot see it.
+def normalize = { String raw, String lang ->
+    normalizeMethod.invoke(null, raw, localeForMethod.invoke(null, lang)) as String
+}
 
 def serviceClass = moduleBundle.loadClass('org.jahia.modules.revisionhistory.RevisionSnapshotService')
 def captureMethod = serviceClass.getMethod('captureIfChanged',
@@ -133,11 +151,30 @@ if (!(RENDER_USER ?: '').trim() || !(RENDER_SECRET ?: '')) {
 
 /**
  * Types whose markdown view renders WITHOUT recursing into children. They must be fetched, never
- * walked, or the reconstruction would include content the real snapshot deliberately omits --
- * crh:revisionHistory renders empty on purpose, so that a page's own changelog never lands inside
- * the record it describes.
+ * walked, or the reconstruction would include content the real snapshot deliberately omits.
  */
-def SELF_RENDERING = ['jnt:bigText', 'crh:revisionHistory'] as Set
+def SELF_RENDERING = ['jnt:bigText'] as Set
+
+/**
+ * Types whose markdown view deliberately renders NOTHING. Neither fetched nor walked.
+ *
+ * crh:revisionHistory used to sit in SELF_RENDERING, which put two correct intentions in direct
+ * collision: its view renders empty on purpose, and fetchMarkdown refuses an empty 200 body
+ * because splicing '' into a record is how a page that changed gets stored as one that did not.
+ * So every page carrying a Revision history component aborted the run -- and that is EVERY page
+ * with captured history, which is precisely the page the README tells you to backfill first to
+ * prove the composition is faithful.
+ *
+ * Walking it instead would be worse than the abort: the entries would be rendered by the generic
+ * fallback, so each revision's own summary would land inside the snapshot it describes, and every
+ * later diff would show the changelog rather than the change.
+ *
+ * The live views emit one line separator per child regardless of what the child rendered, so an
+ * empty child still contributes that separator. Emitting it here and skipping the fetch is
+ * byte-identical to what the old code would have produced had fetchMarkdown returned '' instead
+ * of refusing.
+ */
+def RENDERS_NOTHING = ['crh:revisionHistory'] as Set
 
 /**
  * Is this node something the markdown template type can actually render?
@@ -168,18 +205,34 @@ def encodePath = { String path ->
 
 // A public-looking BASE_URL is the single most common way this script fails, and it fails late and
 // misleadingly. Say so before any work is done rather than after the first render.
-if (!(baseUrl ==~ /(?i)https?:\/\/(127\.0\.0\.1|localhost|\[::1\])(:\d+)?/)) {
+//
+// It also decides whether the credential is sent at all. The module's Java capture path withholds
+// the Authorization header from any endpoint that is not this node's own loopback connector, and
+// the README states as a critical security note that a capture credential goes only to loopback
+// addresses -- while this script, shipped in the same module, used to send it wherever BASE_URL
+// pointed. An operator following the natural instinct and setting BASE_URL to the address they know
+// ('https://www.example.com') base64-encoded a real Jahia account's password to a public host and
+// whatever reverse proxy, CDN or WAF logs sit in front of it. Warning about the value while still
+// sending the password to it made the warning worse than useless.
+def reachesJahiaDirectly = (baseUrl ==~ /(?i)https?:\/\/(127\.0\.0\.1|localhost|\[::1\])(:\d+)?/)
+if (!reachesJahiaDirectly) {
     report << "WARNING: BASE_URL is ${baseUrl}, which is not this node's loopback connector.\n"
     report << "  It must reach Jahia directly. A public host rewrites or refuses /cms/render/...\n"
     report << "  paths (SEO rewriting, a reverse proxy), which produces a flat 404 on every node in\n"
     report << "  both workspaces, whatever its type, version count, or the rights of the account.\n"
-    report << "  If renders below fail with 404, set BASE_URL to http://127.0.0.1:8080 and re-run.\n\n"
+    report << "  The credential will NOT be sent to it: renders below are anonymous, so any page the\n"
+    report << "  public cannot read will fail with 401/403/404 even though RENDER_USER is set.\n"
+    report << "  Set BASE_URL to http://127.0.0.1:8080 and re-run.\n\n"
 }
 
 def fetchMarkdown = { String path, long millis ->
     def url = new URL("${baseUrl}/cms/render/default/${language}${encodePath(path)}.markdown?v=${millis}")
     def conn = url.openConnection()
-    conn.setRequestProperty('Authorization', 'Basic ' + credentials.bytes.encodeBase64().toString())
+    // Only to this node itself. See the BASE_URL check above for why this is a refusal and not
+    // another warning.
+    if (reachesJahiaDirectly) {
+        conn.setRequestProperty('Authorization', 'Basic ' + credentials.bytes.encodeBase64().toString())
+    }
     conn.connectTimeout = 10000
     conn.readTimeout = 30000
     int code = conn.responseCode
@@ -277,6 +330,12 @@ compose = { JCRNodeWrapper node, long millis, StringBuilder sb ->
         // empty history -- measured on a real page, both jnt:contentList areas and the page itself
         // had zero checkpoints while their children had two each -- so gating the walk on it
         // skipped every container and reconstructed pages as nothing but their title.
+        if (RENDERS_NOTHING.contains(child.primaryNodeTypeName)) {
+            if (existedAt(child.path, millis)) {
+                sb << '\n'
+            }
+            return
+        }
         if (SELF_RENDERING.contains(child.primaryNodeTypeName)) {
             if (existedAt(child.path, millis)) {
                 sb << fetchMarkdown(child.path, millis) << '\n'
@@ -294,7 +353,25 @@ compose = { JCRNodeWrapper node, long millis, StringBuilder sb ->
         } else {
             def title = child.getPropertyAsString('jcr:title')
             if (title) sb << '## ' << title << '\n\n'
+            // content.jsp emits the container's OWN text properties between its title and its
+            // children. Omitting them here was a mirror drift introduced when the fallback view
+            // stopped emitting jcr:title alone (generator 5): a container carrying, say, a
+            // subtitle rendered that text live and lost it in reconstruction, so the
+            // byte-for-byte gate reported an unexplained MISMATCH and aborted -- or, forced past
+            // with ALLOW_UNEXPLAINED, stored snapshots permanently missing text live capture records.
+            textProperties(child).each { sb << it << '\n\n' }
             compose(child, millis, sb)
+            // NOTE, deliberately not acted on. Reading the views, the parent emits one line
+            // separator after EVERY child module including a container, while this branch emits
+            // none after recursing -- which would put a container and the sibling after it on
+            // adjacent lines where live capture leaves a blank one, and BLANK_RUN only collapses
+            // runs of three or more newlines, so it would survive normalisation. But content.jsp
+            // also emits literal template newlines between its own top-level lines, which this
+            // mirror does not reproduce anywhere, so the true delta is not derivable by reading:
+            // it needs a real run. The byte-for-byte gate is exactly that measurement, and it
+            // aborts rather than storing a mismatch, so if this is wrong it announces itself
+            // safely on the first validated page. Changing it on an incomplete trace could
+            // instead break a composition that currently agrees.
         }
     }
 }
@@ -311,7 +388,7 @@ def reconstruct = { long millis ->
         raw = sb.toString()
         return null
     } as JCRCallback)
-    return normalize(raw)
+    return normalize(raw, language)
 }
 
 /** The one translation subnode that the render of this language will actually dereference. */

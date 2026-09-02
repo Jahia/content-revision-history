@@ -38,9 +38,29 @@
  // Backfill breaks that pairing -- many snapshots already exist and the entries describing them
  // are written afterwards -- so an editor can pin the one an entry actually describes. The
  // choicelist is served by SnapshotChoiceListInitializer, which registers itself under this key.
+ // SUPERSEDED by crh:pinnedSnapshot below, and deliberately left exactly as it is.
+ //
+ // The pin has to be per language: it names a snapshot inside the PER-LANGUAGE folder
+ // revision-history/<pageUuid>/<lang>/, and those names embed a per-language content hash, so a
+ // name valid in /en never resolves in /fr. One shared value could not express that -- pinning an
+ // entry while editing in English left the French comparison reporting "no snapshot recorded"
+ // permanently, a state the model could not represent rather than a bug in the resolver.
+ //
+ // Adding `i18n` here is NOT the fix, and it is not a matter of taste: Jahia's
+ // DefinitionsBundleChecker classes a change of this flag on an existing property as a MAJOR
+ // definition change and CANCELS THE WHOLE MODULE DEPLOYMENT. Measured on 8.2.4.0, not assumed:
+ //   ERROR [DefinitionsBundleChecker] - Major changes detected:
+ //   [nodeTypeName=crh:revisionEntry,type=MAJOR,
+ //    propDefDiffs={[itemName=crh:snapshotRef,type=MAJOR,operation=MODIFIED]}]
+ // So an existing property cannot be converted in place; a new one has to be added beside it and
+ // the old one kept readable. Anything already pinned through this property keeps working --
+ // RevisionEntryBinder reads it as a fallback -- so nothing an editor set is lost.
  - crh:snapshotRef (string, choicelist[crhSnapshots])
- // NOTE: there is deliberately NO snapshotRef property here any more. The link between a
- // revision entry and the snapshot it describes is stored on the SNAPSHOT
+ // The per-language pin. Same choicelist, because the picker already offers only the snapshots of
+ // the page and language being edited; it is the STORAGE that had to become per language.
+ - crh:pinnedSnapshot (string, choicelist[crhSnapshots]) i18n
+ // NOTE: the property above is the EXPLICIT PIN, and it is not how an entry is normally bound.
+ // Automatic binding stores the link on the SNAPSHOT
  // (crh:revisionSnapshot / crh:entryRefs), pointing back at the entry, for one decisive
  // reason: a crh:revisionEntry is editorial content, so any programmatic write to it bumps
  // jcr:lastModified and the page reads as "modified" in jContent the instant capture binds
@@ -58,11 +78,17 @@
 // `+ * (jmix:droppableContent)` and `+ * (jnt:contentFolder)`, so without it the root folder
 // cannot be created at all (verified: ConstraintViolationException "No child node definition
 // for revision-history").
-// crh:revisionSnapshot carries it too, and for a different reason: jContent's browse filter is
-// includeTypes [jmix:droppableContent, jnt:page, jnt:file], so a snapshot without it is invisible
-// in the content browser even though its folders are visible. 1.3.0 dropped jmix:hiddenType from
-// both types and verified only the FOLDER against that filter, which left 28 snapshots present
-// and 0 shown -- folders you can open onto an empty list. Neither type appears as a component an
+// crh:revisionSnapshot does NOT carry it, and the filter named above is not the one that decides
+// whether a snapshot is visible. That belief shipped here for two releases and this comment was
+// the last place still holding it: includeTypes [jmix:droppableContent, jnt:page, jnt:file] is the
+// content PICKER's filter. The content BROWSER filters flat views on
+// [jmix:editorialContent, jmix:queryContent] and recurses the tree only into
+// [jnt:page, jnt:contentFolder, jnt:folder, ...]. That is why crh:revisionSnapshot carries
+// jmix:editorialContent (so the flat view lists it) and the folder is a contentFolder type (so the
+// tree can recurse into it). 1.3.0 verified only the FOLDER, against the wrong filter, which left
+// 28 snapshots present and 0 shown -- folders you can open onto an empty list.
+// Pinned by tests/cypress/e2e/07-jcontentUi.cy.ts, which drives jContent in a browser precisely
+// because a GraphQL assertion proves only what the author believed the filter was. Neither type appears as a component an
 // editor can add: this module generates no components node at all (verified across every
 // deployed version), and the child definitions below are explicit, so nothing may be created
 // inside a snapshot folder except what capture puts there.

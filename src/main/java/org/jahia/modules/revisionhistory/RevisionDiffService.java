@@ -112,8 +112,11 @@ public class RevisionDiffService {
             // they can only come from `default`. Reading both from `default` meant the control
             // and its result could describe different revisions.
             final String entryWorkspace = renderingWorkspace();
+            // Locale, not null: crh:snapshotRef is i18n, so without one the session cannot resolve
+            // the pin and every pinned revision would compare as though it had never been pinned.
             return JCRTemplate.getInstance().doExecuteWithSystemSessionAsUser(null, entryWorkspace,
-                    null, (JCRCallback<RevisionDiffView>) entrySession ->
+                    MarkdownNormalizer.localeFor(language),
+                    (JCRCallback<RevisionDiffView>) entrySession ->
                             JCRTemplate.getInstance().doExecuteWithSystemSessionAsUser(
                                     null, WORKSPACE, null,
                                     (JCRCallback<RevisionDiffView>) snapshotSession ->
@@ -174,34 +177,49 @@ public class RevisionDiffService {
             return RevisionDiffView.unavailable(REASON_NO_PREVIOUS_SNAPSHOT, olderLabel);
         }
 
-        MarkdownDiff.Result diff = MarkdownDiff.compare(
-                SnapshotPayload.read(olderSnapshot), SnapshotPayload.read(newerSnapshot));
+        SnapshotContent olderPayload = SnapshotPayload.read(olderSnapshot);
+        SnapshotContent newerPayload = SnapshotPayload.read(newerSnapshot);
+        // Either side being incomplete invalidates the whole comparison, not half of it: a diff
+        // against a payload missing its tail reports every missing line as removed. One flag,
+        // because there is one thing the reader needs to be told.
+        boolean sourceTruncated = olderPayload.isTruncated() || newerPayload.isTruncated();
+
+        MarkdownDiff.Result diff = MarkdownDiff.compare(olderPayload.getMarkdown(), newerPayload.getMarkdown());
 
         boolean mismatch = !equalStrings(
                 stringOrNull(olderSnapshot, PROP_GENERATOR_VERSION),
                 stringOrNull(newerSnapshot, PROP_GENERATOR_VERSION));
 
         return new RevisionDiffView(null, newerLabel, olderLabel,
-                dateOrNull(newer), dateOrNull(older), diff, mismatch);
+                dateOrNull(newer), dateOrNull(older), diff, mismatch, sourceTruncated);
     }
 
     /**
      * Does the <em>current</em> user have read access to this revision history?
      *
-     * <p>Everything below this point runs with a system session that bypasses ACLs, and the
-     * snapshots it reads are locked down so that no ordinary user can read them directly. That
-     * was self-evidently safe while captures rendered as {@code guest}: a snapshot could not
-     * contain anything the anonymous public was not already entitled to see, so who was asking
-     * did not matter.
+     * <p>Everything below this point runs with a system session that bypasses ACLs. This used to
+     * add "and the snapshots it reads are locked down so that no ordinary user can read them
+     * directly", which is no longer true and was dangerous left standing: a reviewer weighing
+     * whether a configured capture principal is safe for a site would read it as a guarantee that
+     * snapshots are unreadable to contributors, and enable privileged capture on that basis.
+     * {@code RevisionSnapshotService.restoreInheritance} repairs the pre-1.4 lockdown on every
+     * capture, so any contributor with read on {@code /sites/<site>/contents} can open a snapshot
+     * in jContent and read it.
+     *
+     * <p>The gate was self-evidently safe while captures rendered as {@code guest}: a snapshot
+     * could not contain anything the anonymous public was not already entitled to see, so who was
+     * asking did not matter.
      *
      * <p>It stops being self-evident the moment a capture runs as anything else. A snapshot is a
      * single artifact flattened to text by a single principal, so it cannot answer "what may
      * <em>this</em> viewer see" the way a live render can. The check therefore has to happen
      * before any of it is read, and it is the viewer's own session that has to answer.
      *
-     * <p>Reading the history node in the current user's session is the right question because a
-     * history always describes the page it sits on: being able to read the component means being
-     * able to read the page whose revisions it lists.
+     * <p>Reading the history node is necessary but NOT sufficient, which is what this used to
+     * assume. "Being able to read the component means being able to read the page" holds only
+     * while the component inherits the page's ACLs; an editor who breaks inheritance to make a
+     * changelog public on a restricted page falsifies it. {@code snapshotsFor} therefore checks the
+     * enclosing page as well, against the same viewer session.
      *
      * <p><b>Fails closed.</b> No request context, an unreadable node, a repository error -- all
      * of them deny. A permission check that cannot reach a verdict has not granted anything.
@@ -211,12 +229,23 @@ public class RevisionDiffService {
      * reasons at once, so the assertion passes just as well with this gate deleted.
      */
     boolean viewerMayReadHistory(String historyIdentifier) {
+        return viewerMayRead(historyIdentifier);
+    }
+
+    /**
+     * Can the current user read this node in their own session?
+     *
+     * <p>One implementation for both questions the gate asks -- the history component, and the page
+     * the snapshots actually belong to. Two copies of a fail-closed permission check are two
+     * chances for one of them to stop failing closed.
+     */
+    private boolean viewerMayRead(String identifier) {
         try {
             JCRSessionWrapper viewer = JCRSessionFactory.getInstance().getCurrentUserSession();
-            return viewer != null && viewer.getNodeByIdentifier(historyIdentifier) != null;
+            return viewer != null && viewer.getNodeByIdentifier(identifier) != null;
         } catch (RepositoryException | RuntimeException denied) {
-            logger.debug("Refusing a comparison of history {}: the current user cannot read it",
-                    historyIdentifier, denied);
+            logger.debug("Refusing access to {}: the current user cannot read it",
+                    identifier, denied);
             return false;
         }
     }
@@ -276,6 +305,18 @@ public class RevisionDiffService {
         if (page == null) {
             return Collections.emptyMap();
         }
+        // The PAGE, not only the history component. Reading the component was taken to imply
+        // reading the page, and for a history inheriting its page's ACLs it does -- but an editor
+        // can break inheritance on the component to publish a changelog on an otherwise restricted
+        // page, which is a reasonable thing to want. The check then passed on a node deliberately
+        // made public while everything served underneath it -- snapshots of the page, flattened by
+        // a capture principal and read here with a system session -- came from the page that is
+        // not. Authorise the object whose content is actually returned.
+        if (!viewerMayRead(page.getIdentifier())) {
+            logger.debug("Refusing snapshots of {}: the current user cannot read the page itself",
+                    page.getPath());
+            return Collections.emptyMap();
+        }
         String siteKey = page.getResolveSite().getSiteKey();
         try {
             RevisionSnapshotService.validate(siteKey, page.getIdentifier(), language);
@@ -316,14 +357,17 @@ public class RevisionDiffService {
         // a default. Resolution is by name within THIS page-and-language folder only, exactly as the
         // binder does it, so an editor-supplied value cannot reach anything else in the repository.
         for (JCRNodeWrapper entry : history.getNodes()) {
-            if (!entry.isNodeType(ENTRY_TYPE) || !entry.hasProperty(PROP_SNAPSHOT_REF)) {
+            if (!entry.isNodeType(ENTRY_TYPE)) {
                 continue;
             }
-            String name = entry.getProperty(PROP_SNAPSHOT_REF).getString();
-            if (name == null || name.trim().isEmpty()) {
+            // RevisionEntryBinder owns this reading, including the fallback to a value written
+            // before crh:snapshotRef became i18n. Reading the property directly here would have
+            // meant the comparison and the binder disagreeing about what an entry is pinned to.
+            String name = RevisionEntryBinder.pinnedSnapshotName(entry);
+            if (name == null) {
                 continue;
             }
-            JCRNodeWrapper pinned = snapshotNamed(folder, name.trim());
+            JCRNodeWrapper pinned = snapshotNamed(folder, name);
             if (pinned != null) {
                 byEntry.put(entry.getIdentifier(), pinned);
             } else {

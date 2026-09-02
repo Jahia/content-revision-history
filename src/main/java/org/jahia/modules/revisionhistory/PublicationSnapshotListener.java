@@ -30,6 +30,7 @@ import java.util.List;
 import java.util.AbstractMap;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.Set;
 
 import static org.jahia.modules.revisionhistory.RevisionHistoryConstants.*;
@@ -79,11 +80,15 @@ public class PublicationSnapshotListener implements PublicationEventListener {
      */
     private final Map<Map.Entry<String, String>, Boolean> scheduledJobs = new ConcurrentHashMap<>();
 
-    private static volatile PublicationSnapshotListener INSTANCE;
+    // AtomicReference rather than a volatile field: see java:S3077. volatile publishes the
+    // reference but not the object behind it, so the old form obliged a reader to verify that this
+    // component's own state is thread-safe (it is -- scheduledJobs is a ConcurrentHashMap) before
+    // trusting it. A thread-safe holder removes that step.
+    private static final AtomicReference<PublicationSnapshotListener> INSTANCE = new AtomicReference<>();
 
     @Activate
     public void start() {
-        INSTANCE = this;
+        INSTANCE.set(this);
         JCRPublicationService.getInstance().registerListener(this);
         logger.info("Content revision history: listening for publication events");
     }
@@ -96,7 +101,10 @@ public class PublicationSnapshotListener implements PublicationEventListener {
         // contradicting the guarantee that a running job is left alone.
         JCRPublicationService.getInstance().unregisterListener(this);
         cancelOutstandingJobs();
-        INSTANCE = null;
+        // compareAndSet keeps the ordering guarantee above AND survives a bundle refresh in which
+        // the replacement instance activates before this one stops: an unconditional null would
+        // clear the live instance, and jobStarted would then silently stop deregistering.
+        INSTANCE.compareAndSet(this, null);
         logger.info("Content revision history: stopped listening for publication events");
     }
 
@@ -133,7 +141,7 @@ public class PublicationSnapshotListener implements PublicationEventListener {
 
     /** Called by the job when it starts, so a completed job is not cancelled later. */
     static void jobStarted(String name, String group) {
-        PublicationSnapshotListener active = INSTANCE;
+        PublicationSnapshotListener active = INSTANCE.get();
         if (active != null) {
             active.scheduledJobs.remove(new AbstractMap.SimpleEntry<>(name, group));
         }

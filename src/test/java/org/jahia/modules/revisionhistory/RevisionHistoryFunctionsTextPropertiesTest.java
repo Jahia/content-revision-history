@@ -1,6 +1,7 @@
 package org.jahia.modules.revisionhistory;
 
 import org.jahia.services.content.JCRNodeIteratorWrapper;
+import org.jahia.services.content.JCRPropertyWrapper;
 import org.jahia.services.content.JCRNodeWrapper;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -8,6 +9,7 @@ import org.junit.jupiter.api.Test;
 import javax.jcr.Property;
 import javax.jcr.PropertyIterator;
 import javax.jcr.PropertyType;
+import javax.jcr.Value;
 import javax.jcr.RepositoryException;
 import java.util.Arrays;
 import java.util.Collections;
@@ -35,6 +37,22 @@ class RevisionHistoryFunctionsTextPropertiesTest {
         when(p.getType()).thenReturn(type);
         when(p.isMultiple()).thenReturn(multiple);
         when(p.getString()).thenReturn(value);
+        return p;
+    }
+
+    /** A multi-valued string property, which is now read rather than skipped. */
+    private static Property multi(String name, String... values) throws RepositoryException {
+        Property p = mock(Property.class);
+        when(p.getName()).thenReturn(name);
+        when(p.getType()).thenReturn(PropertyType.STRING);
+        when(p.isMultiple()).thenReturn(true);
+        Value[] wrapped = new Value[values.length];
+        for (int i = 0; i < values.length; i++) {
+            Value v = mock(Value.class);
+            when(v.getString()).thenReturn(values[i]);
+            wrapped[i] = v;
+        }
+        when(p.getValues()).thenReturn(wrapped);
         return p;
     }
 
@@ -95,15 +113,83 @@ class RevisionHistoryFunctionsTextPropertiesTest {
     }
 
     @Test
-    @DisplayName("only single-valued strings, so references and dates never reach a snapshot")
-    void skipsNonStringAndMultiValued() throws Exception {
+    @DisplayName("non-string properties are skipped, so dates and references never reach a snapshot")
+    void skipsNonString() throws Exception {
         JCRNodeWrapper node = nodeWith(Arrays.asList(
                 prop("when", PropertyType.DATE, "2026-08-11", false),
-                prop("tags", PropertyType.STRING, "one", true),
                 prop("body", PropertyType.STRING, "Kept.", false)), false);
 
         assertEquals(Collections.singletonList("Kept."),
                 RevisionHistoryFunctions.textProperties(node));
+    }
+
+    @Test
+    @DisplayName("a multi-valued string IS content, and keeps its stored order")
+    void includesMultiValued() throws Exception {
+        // This test replaces one that asserted multi-valued properties were skipped. That was the
+        // behaviour, and it was silent content loss: a type storing its bullet points in a
+        // multi-valued string beside a single-valued heading would, when an editor rewrote every
+        // bullet, still hash identically -- so capture recorded UNCHANGED and the record stated
+        // that nothing in the page text had changed. Order within the property is preserved
+        // because it is editorial; only the ordering BETWEEN properties is normalised by name.
+        JCRNodeWrapper node = nodeWith(Arrays.asList(
+                multi("bullets", "First point.", "Second point."),
+                prop("heading", PropertyType.STRING, "Findings", false)), false);
+
+        assertEquals(Arrays.asList("First point.", "Second point.", "Findings"),
+                RevisionHistoryFunctions.textProperties(node));
+    }
+
+    @Test
+    @DisplayName("blank values inside a multi-valued property are dropped, not emitted")
+    void dropsBlankMultiValues() throws Exception {
+        JCRNodeWrapper node = nodeWith(Collections.singletonList(
+                multi("bullets", "Kept.", "   ", "")), false);
+
+        assertEquals(Collections.singletonList("Kept."),
+                RevisionHistoryFunctions.textProperties(node));
+    }
+
+    @Test
+    @DisplayName("a node whose only text is its title is not reported as losing content")
+    void titleOnlyNodeIsNotAFallThrough() throws Exception {
+        // The fallback view emits '## <title>', so this node DOES reach the snapshot. Warning about
+        // it trained an operator to filter the message, which then hid the genuine case.
+        JCRNodeWrapper node = nodeWith(Collections.emptyList(), false);
+        when(node.hasProperty("jcr:title")).thenReturn(true);
+        JCRPropertyWrapper title = mock(JCRPropertyWrapper.class);
+        when(title.getString()).thenReturn("A heading");
+        when(node.getProperty("jcr:title")).thenReturn(title);
+
+        // Asserting the DECISION, not the returned list. hasTitle only gates the warning, so an
+        // assertion on textProperties(...) could not observe it at all: the previous version of
+        // this test was byte-identical in effect to the no-title test below, and would have passed
+        // with hasTitle deleted or always false.
+        assertTrue(RevisionHistoryFunctions.textProperties(node).isEmpty(),
+                "it contributes no property text, which is correct");
+        assertFalse(
+                RevisionHistoryFunctions.nothingReachesTheSnapshot(node, Collections.emptyList()),
+                "a title IS emitted by the view, so this must not be reported as content lost");
+    }
+
+    @Test
+    @DisplayName("a node with neither text, children nor title IS reported as losing content")
+    void nothingAtAllIsReported() throws Exception {
+        JCRNodeWrapper node = nodeWith(Collections.emptyList(), false);
+
+        assertTrue(
+                RevisionHistoryFunctions.nothingReachesTheSnapshot(node, Collections.emptyList()),
+                "nothing of this node reaches the snapshot, which must be reported");
+    }
+
+    @Test
+    @DisplayName("a container with children is not reported, even with no text of its own")
+    void containerIsNotReported() throws Exception {
+        JCRNodeWrapper node = nodeWith(Collections.emptyList(), true);
+
+        assertFalse(
+                RevisionHistoryFunctions.nothingReachesTheSnapshot(node, Collections.emptyList()),
+                "its children carry the content; warning here would be noise on every page");
     }
 
     @Test

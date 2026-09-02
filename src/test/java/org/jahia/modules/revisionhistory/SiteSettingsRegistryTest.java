@@ -5,6 +5,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.osgi.service.cm.ConfigurationException;
 
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Hashtable;
@@ -348,6 +349,233 @@ class SiteSettingsRegistryTest {
                 System.setProperty("karaf.etc", previousEtc);
             }
         }
+    }
+
+    // ------------------------------------------------------------------ component lifecycle
+
+    @Test
+    @DisplayName("a stopping instance does not clear a newer one that already activated")
+    void deactivateDoesNotClearALiveReplacement() {
+        // During a bundle refresh the replacement activates before the old instance stops. An
+        // unconditional null would then clear the LIVE instance, and settingsFor would fall back to
+        // the module defaults for every site until the next activation -- silently.
+        SiteSettingsRegistry old = new SiteSettingsRegistry();
+        SiteSettingsRegistry replacement = new SiteSettingsRegistry();
+        old.activate();
+        replacement.activate();
+
+        old.deactivate();
+
+        assertSame(replacement, SiteSettingsRegistry.active(),
+                "the instance that is actually running must survive the other one stopping");
+        replacement.deactivate();
+        assertNull(SiteSettingsRegistry.active(), "and the last one out does clear it");
+    }
+
+    @Test
+    @DisplayName("the capture principal of record names the per-site account when one authenticated")
+    void principalOfRecordNamesThePerSiteAccount() throws Exception {
+        SiteSettingsRegistry running = new SiteSettingsRegistry();
+        running.activate();
+        try {
+            running.updated("pid-1", props(
+                    SiteSettingsRegistry.PROP_SITE_KEY, "academy",
+                    SiteSettingsRegistry.PROP_USER, "crh-academy",
+                    SiteSettingsRegistry.PROP_SECRET, "s3cret"));
+
+            SiteCaptureSettings site = SiteSettingsRegistry.settingsFor("academy");
+            assertNotNull(site.getAuthorization(), "the fixture must actually resolve a credential");
+            assertEquals("crh-academy",
+                    GuestMarkdownFetcher.principalFor(site, site.getAuthorization()),
+                    "the render authenticated as this account, so the snapshot must say so");
+        } finally {
+            running.deactivate();
+        }
+    }
+
+    @Test
+    @DisplayName("and records guest when the configured account had no credential to send")
+    void principalOfRecordSaysGuestWhenNothingResolved() throws Exception {
+        // The regression this guards: a configured capture.user whose secret does not resolve makes
+        // the fetch ANONYMOUS, because authorizationFor returns null and no header is sent. Recording
+        // the account name then told an editor a plain guest render had privileged provenance --
+        // and the inverse case told them restricted content was safe to publish.
+        SiteSettingsRegistry running = new SiteSettingsRegistry();
+        running.activate();
+        try {
+            running.updated("pid-1", props(
+                    SiteSettingsRegistry.PROP_SITE_KEY, "academy",
+                    SiteSettingsRegistry.PROP_USER, "crh-academy"));
+
+            SiteCaptureSettings site = SiteSettingsRegistry.settingsFor("academy");
+            assertNull(site.getAuthorization(),
+                    "a user without a secret must resolve no credential at all");
+            // No header goes out, so the render is anonymous whatever the configuration says.
+            assertEquals(RevisionHistoryConstants.CAPTURE_PRINCIPAL,
+                    GuestMarkdownFetcher.principalFor(site, null),
+                    "no credential resolved, so the render really was anonymous");
+        } finally {
+            running.deactivate();
+        }
+    }
+
+    // ------------------------------------------------------------------ writing safely
+
+    /** Runs a body with karaf.etc pointed at a temp directory, restoring it afterwards. */
+    private void withEtc(Path etc, ThrowingRunnable body) throws Exception {
+        String previous = System.getProperty("karaf.etc");
+        System.setProperty("karaf.etc", etc.toString());
+        try {
+            body.run();
+        } finally {
+            if (previous == null) {
+                System.clearProperty("karaf.etc");
+            } else {
+                System.setProperty("karaf.etc", previous);
+            }
+        }
+    }
+
+    private interface ThrowingRunnable {
+        void run() throws Exception;
+    }
+
+    @Test
+    @DisplayName("a newline in a written value is refused, because it would forge further settings")
+    void newlineInAValueIsRefused(@TempDir Path etc) throws Exception {
+        // The file is a properties file, so a value carrying a newline stops being a value: the
+        // rest is parsed as more keys. These values come from GraphQL, from a site administrator,
+        // so without this one could inject capture.secretFile and have the module read a server
+        // file and send its first line to a host they also control, or re-key the file onto a site
+        // they administer nothing on.
+        withEtc(etc, () -> {
+            SiteCaptureSettings injected = SiteCaptureSettings.DEFAULTS.withChanges(
+                    "academy", true, 10, "x\ncapture.secretFile = /etc/shadow", null);
+
+            IllegalArgumentException refused = assertThrows(IllegalArgumentException.class,
+                    () -> registry.save(injected));
+            assertTrue(refused.getMessage().contains("line break"), refused.getMessage());
+            assertFalse(Files.exists(registry.configFile("academy")),
+                    "nothing may be written when a value is refused");
+        });
+    }
+
+    @Test
+    @DisplayName("a carriage return is refused too, not just a newline")
+    void carriageReturnIsRefused(@TempDir Path etc) throws Exception {
+        withEtc(etc, () -> assertThrows(IllegalArgumentException.class,
+                () -> registry.save(SiteCaptureSettings.DEFAULTS
+                        .withChanges("academy", true, 10, null, "http://h\rsiteKey = other"))));
+    }
+
+    @Test
+    @DisplayName("An operator's comment on a preserved key is preserved with it")
+    void saveKeepsCommentsOnUnmanagedKeys(@TempDir Path etc) throws Exception {
+        // The secret survived a save; the note explaining it did not. What that costs is the
+        // provenance of a live credential -- who owns it, when it was rotated -- silently, with
+        // nothing recording that anything was dropped. A comment run travels with the key it sits
+        // above, and a run above a key this module rewrites is discarded rather than left pointing
+        // at a value it no longer describes.
+        withEtc(etc, () -> {
+            Path file = registry.configFile("academy");
+            Files.write(file, ("siteKey = academy\n"
+                    + "# owner: SecOps, rotate quarterly\n"
+                    + "# last rotated 2026-01-05\n"
+                    + "capture.secretFile = /opt/jahia/etc/crh.secret\n"
+                    + "# this one describes a key the module rewrites\n"
+                    + "capture.enabled = true\n").getBytes(StandardCharsets.UTF_8));
+
+            registry.save(SiteCaptureSettings.DEFAULTS
+                    .withChanges("academy", false, 25, null, null));
+
+            String rewritten = new String(Files.readAllBytes(file), StandardCharsets.UTF_8);
+            assertTrue(rewritten.contains("# owner: SecOps, rotate quarterly"),
+                    "the note explaining a hand-added credential must survive: " + rewritten);
+            assertTrue(rewritten.contains("# last rotated 2026-01-05"),
+                    "a whole comment run travels with its key: " + rewritten);
+            assertTrue(rewritten.contains("capture.secretFile = /opt/jahia/etc/crh.secret"),
+                    "and the key itself, obviously: " + rewritten);
+            assertFalse(rewritten.contains("# this one describes a key the module rewrites"),
+                    "a comment above a managed key would end up above a rewritten value it no"
+                    + " longer matches: " + rewritten);
+        });
+    }
+
+    @Test
+    @DisplayName("saving keeps the credential an administrator added by hand")
+    void saveKeepsUnmanagedKeys(@TempDir Path etc) throws Exception {
+        // The bug this replaces: SiteCaptureSettings carries only the RESOLVED authorization
+        // header, never the secret or its path, so a save rebuilt from it dropped both. An
+        // administrator who hand-added a credential so a restricted site could be captured, then
+        // toggled anything at all in the panel, lost it -- and capture fell back to anonymous with
+        // no error, so restricted pages simply stopped being recorded.
+        withEtc(etc, () -> {
+            Path file = registry.configFile("academy");
+            Files.write(file, ("siteKey = academy\n"
+                    + "capture.enabled = true\n"
+                    + "capture.user = crh-academy\n"
+                    + "capture.secretFile = /opt/jahia/etc/crh.secret\n"
+                    + "some.future.key = keep me\n").getBytes(StandardCharsets.UTF_8));
+
+            registry.save(SiteCaptureSettings.DEFAULTS
+                    .withChanges("academy", false, 25, "crh-academy", null));
+
+            String rewritten = new String(Files.readAllBytes(file), StandardCharsets.UTF_8);
+            assertTrue(rewritten.contains("capture.secretFile = /opt/jahia/etc/crh.secret"),
+                    "the hand-added secret path must survive a save: " + rewritten);
+            assertTrue(rewritten.contains("some.future.key = keep me"),
+                    "any key this module does not manage must survive too");
+            // And the managed keys are the NEW values, not the old ones.
+            assertTrue(rewritten.contains("capture.enabled = false"), rewritten);
+            assertTrue(rewritten.contains("retention.maxSnapshots = 25"), rewritten);
+            assertEquals(1, rewritten.split("capture.user", -1).length - 1,
+                    "a managed key must appear once, not duplicated by preservation");
+        });
+    }
+
+    @Test
+    @DisplayName("re-pointing a file at another site releases the site it used to name")
+    void changingTheSiteKeyReleasesThePreviousSite() throws Exception {
+        registry.updated("pid-1", props(
+                SiteSettingsRegistry.PROP_SITE_KEY, "siteA",
+                SiteSettingsRegistry.PROP_ENABLED, "false"));
+        assertTrue(registry.isConfigured("siteA"));
+
+        // The same file, edited to name a different site. It keeps its pid.
+        registry.updated("pid-1", props(
+                SiteSettingsRegistry.PROP_SITE_KEY, "siteB",
+                SiteSettingsRegistry.PROP_ENABLED, "false"));
+
+        // deleted() is never called here, so without an explicit release siteA kept the old
+        // settings for the life of the process, from a file that no longer named it at all.
+        assertFalse(registry.isConfigured("siteA"),
+                "the site the file used to name must fall back to the module defaults");
+        assertTrue(registry.isConfigured("siteB"));
+        assertTrue(registry.forSite("siteA").isCaptureEnabled(),
+                "and it must get the DEFAULTS, not the settings it used to have");
+    }
+
+    @Test
+    @DisplayName("another file naming the same site keeps it configured")
+    void aSecondFileKeepsTheSiteConfigured() throws Exception {
+        registry.updated("pid-1", props(SiteSettingsRegistry.PROP_SITE_KEY, "shared"));
+        registry.updated("pid-2", props(SiteSettingsRegistry.PROP_SITE_KEY, "shared"));
+
+        registry.updated("pid-1", props(SiteSettingsRegistry.PROP_SITE_KEY, "moved"));
+
+        // Releasing on any re-point would have dropped a site another file still names.
+        assertTrue(registry.isConfigured("shared"),
+                "pid-2 still names it, so it stays configured");
+    }
+
+    @Test
+    @DisplayName("a site key the capture path would refuse is refused here too")
+    void siteKeyRulesAgree() {
+        // These two halves used to disagree: this class accepted a dot, the capture path rejected
+        // it, so settings could be saved for a site whose every capture then failed validation.
+        assertThrows(ConfigurationException.class, () -> registry.updated("pid-1",
+                props(SiteSettingsRegistry.PROP_SITE_KEY, "example.com")));
+        assertFalse(RevisionSnapshotService.isValidSiteKey("example.com"));
     }
 
     @Test

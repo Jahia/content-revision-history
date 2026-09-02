@@ -14,11 +14,13 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 import java.net.URLEncoder;
 import java.util.Locale;
+import java.util.Objects;
 import java.util.regex.Pattern;
 import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashSet;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Renders a page's Markdown view <em>as the public sees it</em>, by fetching the live page
@@ -54,26 +56,52 @@ final class GuestMarkdownFetcher {
     /** Guards the misconfiguration ERROR so it is emitted once per JVM, not once per capture. */
     private static final AtomicBoolean FALLBACK_REPORTED = new AtomicBoolean(false);
 
+    /**
+     * The endpoint the credential-withheld WARN last named, so it is emitted once per distinct
+     * endpoint rather than once per page per capture.
+     *
+     * <p>The unthrottled form fired for every restricted page on every publication, which is the
+     * pattern that teaches an operator to filter the message out -- and it was the only place the
+     * cause was stated. Holding the endpoint rather than a flag means correcting the setting and
+     * getting it wrong again still reports the second mistake.
+     */
+    private static final AtomicReference<String> WITHHELD_ENDPOINT_REPORTED = new AtomicReference<>();
+
     /** Result of one fetch: either a body, or a reason there is none. */
     static final class Fetched {
         final String body;
         final CaptureStatus status;
         final String message;
         final String sourceUrl;
+        /**
+         * The account this render authenticated as, decided at the moment the header was set.
+         *
+         * <p>It travels with the result rather than being re-derived afterwards. The caller used to
+         * ask the configuration again once the body was back, so a configuration change in between
+         * -- an administrator deleting the site's settings, or FileInstall applying an edit -- made
+         * the recorded principal disagree with the one that actually fetched. Recording "guest" for
+         * a render that authenticated as a privileged account tells every contributor who reads the
+         * snapshot that restricted content is safe to show anybody.
+         */
+        final String principal;
 
-        private Fetched(String body, CaptureStatus status, String message, String sourceUrl) {
+        private Fetched(String body, CaptureStatus status, String message, String sourceUrl,
+                        String principal) {
             this.body = body;
             this.status = status;
             this.message = message;
             this.sourceUrl = sourceUrl;
+            this.principal = principal;
         }
 
-        static Fetched ok(String body, String sourceUrl) {
-            return new Fetched(body, CaptureStatus.STORED, null, sourceUrl);
+        static Fetched ok(String body, String sourceUrl, String principal) {
+            return new Fetched(body, CaptureStatus.STORED, null, sourceUrl, principal);
         }
 
         static Fetched problem(CaptureStatus status, String message, String sourceUrl) {
-            return new Fetched(null, status, message, sourceUrl);
+            // No snapshot is stored for a problem, so there is no principal to record.
+            return new Fetched(null, status, message, sourceUrl,
+                    RevisionHistoryConstants.CAPTURE_PRINCIPAL);
         }
 
         boolean isOk() {
@@ -148,7 +176,25 @@ final class GuestMarkdownFetcher {
             connection.setReadTimeout(READ_TIMEOUT_MILLIS);
             // No cookie, ever: a session would make the render resolve to whoever last used
             // it. The identity comes from configuration and nowhere else.
-            String authorization = authorizationFor(siteKeyForFetch.get());
+            // One read of the settings, used for both the header and the record of who sent it.
+            // Two reads could disagree, which is the whole point of carrying the principal along.
+            SiteCaptureSettings site = SiteSettingsRegistry.settingsFor(siteKeyForFetch.get());
+            String configured = authorizationFor(site);
+            String authorization = configured;
+            boolean credentialWithheld = false;
+            // The credential goes ONLY to this node's own connector. capture.baseUrl is settable by
+            // a site administrator through the settings panel, and a non-loopback value was merely
+            // warned about, so a site admin could point it at a host they control and receive
+            // Authorization: Basic with the operator's capture password on the next publication.
+            // Withholding the header here closes that whichever way baseUrl was set, and because
+            // the principal is derived below from what is actually sent, the record stays truthful:
+            // the snapshot is marked guest, which is what the render will really have been.
+            if (authorization != null && !reachesJahiaDirectly(getBaseUrl())) {
+                warnCredentialWithheld(getBaseUrl());
+                authorization = null;
+                credentialWithheld = true;
+            }
+            String principal = principalFor(site, authorization);
             if (authorization != null) {
                 connection.setRequestProperty("Authorization", authorization);
             }
@@ -157,15 +203,25 @@ final class GuestMarkdownFetcher {
 
             int code = connection.getResponseCode();
             if (code != HttpURLConnection.HTTP_OK) {
-                return Fetched.problem(statusForHttp(code, authorization != null),
-                        renderFailureMessage(code, authorization != null), url);
+                // Two different questions, and collapsing them made the durable record lie.
+                // Whether a credential was CONFIGURED decides the status and the message: an
+                // operator who named a capture account and got a refusal has a misconfiguration,
+                // not a page the public may not read. Whether one was actually SENT decides the
+                // principal, because that is what the render really ran as. Keying both off
+                // "sent" filed a withheld credential as NOT_PUBLIC / "Guest render returned HTTP
+                // 403" -- indistinguishable from a genuinely restricted page, and silent about
+                // the one thing the operator could have fixed.
+                return Fetched.problem(statusForHttp(code, configured != null),
+                        renderFailureMessage(code, configured != null)
+                                + (credentialWithheld ? credentialWithheldSuffix(getBaseUrl()) : ""),
+                        url);
             }
             String body = readBounded(connection.getInputStream());
             if (body == null) {
                 return Fetched.problem(CaptureStatus.OVERSIZE,
                         "Guest render exceeded " + RevisionHistoryConstants.MAX_MARKDOWN_BYTES + " bytes", url);
             }
-            return Fetched.ok(body, url);
+            return Fetched.ok(body, url, principal);
         } catch (IOException e) {
             // Was DEBUG, which is off in production, while the durable record carries only the
             // exception class and message. A systemic failure -- the connector throttling, TLS
@@ -232,6 +288,32 @@ final class GuestMarkdownFetcher {
                     + " read this page";
         }
         return who + " returned HTTP " + code;
+    }
+
+    /**
+     * What the durable record has to add when a configured credential was not sent.
+     *
+     * <p>Without it the folder's {@code crh:lastCaptureMessage} -- the record this module keeps
+     * precisely because logs roll -- says only that a guest render was refused, which is exactly
+     * what a page the public genuinely cannot read would say. The operator is then looking at an
+     * ACL that was never the problem.
+     */
+    static String credentialWithheldSuffix(String baseUrl) {
+        return ". The configured capture credential was NOT sent, because "
+                + CaptureEndpoint.PROP_BASE_URL + " (" + baseUrl + ") is not this node's own"
+                + " loopback connector, so the render was anonymous. Point it at the loopback"
+                + " connector, e.g. http://127.0.0.1:8080, or remove the setting.";
+    }
+
+    /** Emitted once per distinct endpoint; see {@link #WITHHELD_ENDPOINT_REPORTED}. */
+    private static void warnCredentialWithheld(String baseUrl) {
+        if (Objects.equals(WITHHELD_ENDPOINT_REPORTED.getAndSet(baseUrl), baseUrl)) {
+            return;
+        }
+        logger.warn("Not sending the capture credential to {}: it is not this node's own loopback"
+                + " connector. Renders will be anonymous, so restricted pages will report"
+                + " NOT_PUBLIC until {} points at the loopback connector.",
+                baseUrl, CaptureEndpoint.PROP_BASE_URL);
     }
 
     // Package-private (was private) so RevisionSnapshotServiceTest-sibling tests in this package
@@ -344,7 +426,21 @@ final class GuestMarkdownFetcher {
     }
 
     private static int detectHttpPort() {
-        ConnectorProbe probe = probeConnectors(ManagementFactory.getPlatformMBeanServer());
+        ConnectorProbe probe;
+        try {
+            probe = probeConnectors(ManagementFactory.getPlatformMBeanServer());
+        } catch (RuntimeException | LinkageError mbeanServerUnavailable) {
+            // getPlatformMBeanServer() is evaluated before probeConnectors' own try can shield it,
+            // and this runs inside DetectedEndpoint's static initialiser. Anything escaping here
+            // makes the JVM raise ExceptionInInitializerError once and NoClassDefFoundError on
+            // every capture after that -- both Errors, so they pass straight through the
+            // IOException/RuntimeException catches on the whole capture path. Capture would be
+            // dead for the life of the JVM with no CaptureStatus written for any page: precisely
+            // the undiagnosable silence the report below exists to break. Hence LinkageError too.
+            probe = new ConnectorProbe(null, new LinkedHashSet<>(),
+                    new IllegalStateException("the platform MBean server was unavailable",
+                            mbeanServerUnavailable));
+        }
         if (probe.httpPort != null) {
             return probe.httpPort;
         }
@@ -462,15 +558,37 @@ final class GuestMarkdownFetcher {
         return "CONTENT REVISION HISTORY IS MISCONFIGURED: no plain-HTTP connector was found, "
                 + cause + ". Guest capture renders will be attempted against " + DEFAULT_BASE_URL
                 + ", which almost certainly listens to nothing, so EVERY snapshot capture for "
-                + "EVERY page will be recorded FAILED until this is corrected. Set -D"
+                + "EVERY page will be recorded FAILED until this is corrected. Set "
                 + CaptureEndpoint.PROP_BASE_URL
-                + "=<base URL of this node, reachable from this node itself> (for example -D"
+                + " = <base URL of this node, reachable from this node itself> (for example "
                 + CaptureEndpoint.PROP_BASE_URL
-                + " = https://127.0.0.1:8443) in the module configuration; it applies without a restart.";
+                + " = https://127.0.0.1:8443) in the module's OSGi configuration, "
+                + CaptureIdentity.PID
+                + ".cfg; it applies without a restart. This is NOT a JVM system property: the -D"
+                + " form was removed, so adding it to the command line changes nothing.";
     }
 
     /**
-     * Which principal captures this site.
+     * Whose credential the given authorization header belongs to.
+     *
+     * <p>A name is returned only when a credential actually went out. A configured account whose
+     * secret did not resolve produces no header, so the render was anonymous however it was
+     * configured, and the record must say guest.
+     */
+    static String principalFor(SiteCaptureSettings site, String authorizationSent) {
+        if (authorizationSent == null) {
+            return RevisionHistoryConstants.CAPTURE_PRINCIPAL;
+        }
+        if (authorizationSent.equals(site.getAuthorization())) {
+            String perSite = site.getCaptureUser();
+            return perSite == null ? RevisionHistoryConstants.CAPTURE_PRINCIPAL : perSite;
+        }
+        String configured = CaptureIdentity.principal();
+        return configured == null ? RevisionHistoryConstants.CAPTURE_PRINCIPAL : configured;
+    }
+
+    /**
+     * Which credential captures this site.
      *
      * <p>A site's own capture user wins; otherwise the module-wide one applies. Falling back rather
      * than refusing matters for an upgrade: every site that had no per-site configuration keeps
@@ -480,8 +598,37 @@ final class GuestMarkdownFetcher {
      * sites.
      */
     static String authorizationFor(String siteKey) {
-        String perSite = SiteSettingsRegistry.settingsFor(siteKey).getAuthorization();
-        return perSite != null ? perSite : CaptureIdentity.authorization();
+        return authorizationFor(SiteSettingsRegistry.settingsFor(siteKey));
+    }
+
+    /**
+     * The rule, in one place, for the fetch path and for what the settings panel reports.
+     *
+     * <p>A site that names its own {@code capture.user} gets THAT account's credential and no
+     * other. The previous form fell back to the module-wide credential whenever the site's own did
+     * not resolve, which inverted the module's own stated rule that a user configured without a
+     * usable secret leaves capture anonymous. The consequence was not cosmetic: an operator who
+     * scoped a site to a narrow account, and whose secret file then became unreadable, silently got
+     * captures authenticated as the broad module-wide account instead -- so snapshots permanently
+     * held content that account was deliberately kept away from, and the panel said "no credential
+     * resolved" about a render that carried one.
+     *
+     * <p>A site that names no account inherits the module-wide one, which is what keeps every
+     * installation that predates per-site settings capturing exactly as it did.
+     */
+    static String authorizationFor(SiteCaptureSettings site) {
+        if (site.getCaptureUser() != null) {
+            return site.getAuthorization();
+        }
+        return CaptureIdentity.authorization();
+    }
+
+    /** @return the account the given site actually captures as, or null when it captures anonymously */
+    static String effectiveCaptureUser(SiteCaptureSettings site) {
+        if (site.getCaptureUser() != null) {
+            return site.getAuthorization() == null ? null : site.getCaptureUser();
+        }
+        return CaptureIdentity.principal();
     }
 
     private static String stripTrailingSlash(String url) {

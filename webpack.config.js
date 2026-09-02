@@ -74,7 +74,10 @@ module.exports = (env, argv) => {
             // so the manifest has to sit next to remoteEntry.js, not just at the module root.
             new CopyWebpackPlugin({patterns: [{from: './package.json', to: ''}]})
         ],
-        mode: 'development'
+        // argv.mode, not a constant: package.json's build:production passes --mode=production,
+        // and a hardcoded value here overrode it, so the "production" build shipped an unminified
+        // bundle carrying React's development build and its warnings.
+        mode: argv.mode || 'development'
     };
 
     config.devtool = (argv.mode === 'production') ? 'source-map' : 'eval-source-map';

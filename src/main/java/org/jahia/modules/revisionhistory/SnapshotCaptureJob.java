@@ -27,8 +27,18 @@ import static org.jahia.modules.revisionhistory.RevisionHistoryConstants.*;
  * {@code SchedulerService.scheduleJobNow(detail, true)} -- RAM scheduler, because this work is
  * transient: if the node dies mid-capture the right answer is not to replay it later against
  * content that has since moved on, it is to let the next publication capture the current
- * state. What must not be lost is the <em>knowledge</em> that a capture was owed, and that is
- * durable: a missing snapshot always leaves a status on the per-language folder.
+ * state. What must not be lost is the <em>knowledge</em> that a capture was owed, and every
+ * capture that RUNS records its outcome durably on the per-language folder.
+ *
+ * <p>Stated as "a missing snapshot always leaves a status", that was too strong, and the gap it
+ * papers over is worth knowing about: a job that never executes at all writes nothing anywhere. A
+ * module stop deletes still-pending jobs, and a RAM job dies with its JVM if the node is fenced --
+ * in both cases the folder still shows the PREVIOUS publication's status, so the gap is
+ * indistinguishable from "the content did not change", which is the one distinction this feature
+ * exists to make. Closing it needs a reconciliation pass on activate (compare each revisioned
+ * page's last publication against its last capture), not a status write on the way down: the only
+ * moment to make one is during deactivation, where a JCR write can block, and a module stop that
+ * hangs is worse than the gap.
  *
  * <p>Publication latency is untouched: the listener only enqueues.
  *
@@ -87,21 +97,44 @@ public class SnapshotCaptureJob extends BackgroundJob {
         }
         String pageUuid = entry.substring(0, separator);
         String[] languages = entry.substring(separator + 1).split(",");
+
+        PageRef page;
         try {
-            PageRef page = resolvePage(pageUuid);
-            if (page == null) {
-                logger.info("Page {} is gone or no longer publicly revisioned; nothing to capture",
-                        pageUuid);
-                return;
-            }
-            for (String language : languages) {
-                capture(page, language.trim(), captureInstant, cacheBuster);
-            }
+            page = resolvePage(pageUuid);
         } catch (RepositoryException | RuntimeException e) {
+            // Resolution failed before any language was attempted, so no language of this page
+            // has a capture and recording FAILED for all of them states only what is true.
             logger.error("Revision snapshot capture failed for page {}", pageUuid, e);
             for (String language : languages) {
                 snapshotService.recordStatus(siteKeyOrUnknown(pageUuid), pageUuid, language.trim(),
                         CaptureStatus.FAILED, e.getClass().getSimpleName() + ": " + e.getMessage());
+            }
+            return;
+        }
+        if (page == null) {
+            logger.info("Page {} is gone or no longer publicly revisioned; nothing to capture",
+                    pageUuid);
+            return;
+        }
+
+        for (String language : languages) {
+            String code = language.trim();
+            try {
+                capture(page, code, captureInstant, cacheBuster);
+            } catch (RuntimeException e) {
+                // RuntimeException only: capture() handles RepositoryException itself, so nothing
+                // checked escapes it. Scoped to the language that actually threw, deliberately. capture()
+                // leaves settingsFor(), the rate limiter, the cache flush and fetch() outside
+                // its own try, so any of them can throw; when this catch sat around the whole
+                // loop it then wrote FAILED for EVERY language of the page, including ones that
+                // had already finished and durably recorded STORED. A page published in two
+                // languages could therefore end up with a stored snapshot whose folder says the
+                // capture failed -- the record asserting something untrue, which is the single
+                // outcome this module exists to prevent, and one no later capture corrects.
+                logger.error("Revision snapshot capture failed for page {} [{}]",
+                        page.uuid, code, e);
+                snapshotService.recordStatus(page.siteKey, page.uuid, code, CaptureStatus.FAILED,
+                        e.getClass().getSimpleName() + ": " + e.getMessage());
             }
         }
     }
@@ -146,15 +179,19 @@ public class SnapshotCaptureJob extends BackgroundJob {
         }
 
         try {
+            // Hoisted out of the call below so the refusal has somewhere to be caught, and so it is
+            // visible that this is where an oversized render stops.
+            //
+            // The locale-aware overload exists precisely so that languages which do not start a
+            // sentence with a Latin capital still get one-sentence-per-line output. Calling the
+            // locale-less one here left it inert on the only production path, so a one-word edit
+            // to a CJK page produced a whole-paragraph diff -- the exact thing semanticLineBreaks
+            // prevents.
+            String markdown = MarkdownNormalizer.normalize(fetched.body,
+                    MarkdownNormalizer.localeFor(language));
             CaptureStatus status = snapshotService.captureIfChanged(page.siteKey, page.uuid,
-                    // The locale-aware overload exists precisely so that languages which do
-                    // not start a sentence with a Latin capital still get one-sentence-per-line
-                    // output. Calling the locale-less one here left it inert on the only
-                    // production path, so a one-word edit to a CJK page produced a
-                    // whole-paragraph diff -- the exact thing semanticLineBreaks prevents.
-                    language, MarkdownNormalizer.normalize(fetched.body,
-                            MarkdownNormalizer.localeFor(language)), captureInstant,
-                    principalOfRecord(), fetched.sourceUrl);
+                    language, markdown, captureInstant,
+                    fetched.principal, fetched.sourceUrl);
             logger.info("Revision snapshot for {} [{}]: {}", page.path, language, status);
             // Only these two statuses mean the newest snapshot matches the live page, which is
             // the precondition for attaching an editor's revision entry to it. See
@@ -162,6 +199,14 @@ public class SnapshotCaptureJob extends BackgroundJob {
             if (status == CaptureStatus.STORED || status == CaptureStatus.UNCHANGED) {
                 entryBinder.bindNewEntries(page.siteKey, page.uuid, language);
             }
+        } catch (MarkdownTooLargeException tooLarge) {
+            // OVERSIZE, not FAILED: this is the same outcome as a render over MAX_MARKDOWN_BYTES --
+            // the page is too big for the record, nothing is stored, and nothing is broken. Filing
+            // it under FAILED would send an operator looking for a fault.
+            logger.warn("No snapshot for page {} [{}]: {}", page.path, language,
+                    tooLarge.getMessage());
+            snapshotService.recordStatus(page.siteKey, page.uuid, language, CaptureStatus.OVERSIZE,
+                    tooLarge.getMessage());
         } catch (RepositoryException | RuntimeException e) {
             logger.error("Storing the revision snapshot for {} [{}] failed", page.path, language, e);
             snapshotService.recordStatus(page.siteKey, page.uuid, language, CaptureStatus.FAILED,
@@ -180,19 +225,6 @@ public class SnapshotCaptureJob extends BackgroundJob {
      * change" for a change. Flushing here makes the ordering deterministic; it costs nothing
      * extra, since publication was about to flush exactly these entries anyway.
      */
-    /**
-     * The principal to stamp on the snapshot: the configured capture user, or {@code guest}.
-     *
-     * <p>This used to be the constant {@code guest} unconditionally, which was true while capture
-     * could only ever be anonymous. Once a deployment configures a capture user it stops being
-     * true, and a record that names the wrong principal is worse than one that names none:
-     * {@code crh:capturedBy} is what tells a later reader whose view of the page the text
-     * represents, and therefore who may safely be shown it.
-     */
-    private static String principalOfRecord() {
-        String configured = CaptureIdentity.principal();
-        return configured == null ? CAPTURE_PRINCIPAL : configured;
-    }
 
     /** @return false when the cache could not be flushed, in which case do NOT capture */
     private boolean flushFragmentCache(String pagePath) {

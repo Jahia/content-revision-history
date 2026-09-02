@@ -1030,7 +1030,7 @@ describe('Revision comparison (entry binding + diff viewer)', () => {
                         {name: 'revisionDate', value: new Date().toISOString(), type: 'DATE'},
                         {name: 'changeType', value: 'substantive'},
                         {name: 'summary', value: '<p>Pinned by hand.</p>', language},
-                        // crh:snapshotRef carries the prefix, unlike the four properties above.
+                        // Crh:snapshotRef carries the prefix, unlike the four properties above.
                         // The CND declares it that way, and using the bare name here created the
                         // entry with no pin at all, silently.
                         {name: 'crh:snapshotRef', value: names[0]}
@@ -1043,8 +1043,8 @@ describe('Revision comparison (entry binding + diff viewer)', () => {
                 expect(pinnedUuid, 'the pinned entry must have an identifier').to.not.be.undefined;
 
                 return cy.request<string>({
-                    url: `/cms/render/default/${language}${pagePath}.html`
-                        + comparisonUrl(pinnedUuid, firstEntryUuid),
+                    url: `/cms/render/default/${language}${pagePath}.html` +
+                        comparisonUrl(pinnedUuid, firstEntryUuid),
                     failOnStatusCode: false
                 });
             })

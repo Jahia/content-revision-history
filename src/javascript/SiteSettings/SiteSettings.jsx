@@ -82,8 +82,14 @@ export const SiteSettings = () => {
             siteKey,
             captureEnabled: current.captureEnabled,
             maxSnapshots: Number(current.maxSnapshots),
-            captureUser: current.captureUser || null,
-            baseUrl: current.baseUrl || null
+            // '' means "clear it", null means "leave it alone" -- see the note on the
+            // saveSiteSettings mutation. Sending `|| null` for an emptied field meant a field
+            // could never be cleared once set: the server read the null as an omission and wrote
+            // the old value straight back, so an administrator who mistyped the capture endpoint
+            // had no way to empty it. ?? '' keeps a deliberately emptied field distinguishable
+            // from one this panel never loaded.
+            captureUser: current.captureUser ?? '',
+            baseUrl: current.baseUrl ?? ''
         }
     }));
 
@@ -137,8 +143,17 @@ export const SiteSettings = () => {
             // The server refuses with a message naming the permission and the path, so showing it is
             // more useful than replacing it with a generic failure.
             return (
-                <Banner data-sel-role="crh-settings-error" variant="danger"
-                        title={t('settings.label')}>
+                <Banner
+                    data-sel-role="crh-settings-error"
+                    role="alert"
+                    // Banner sets aria-label from its title prop on the region's own root div. On a
+                    // live region that name can be announced in place of the changed children, and
+                    // the children are where the reason lives -- so the reason goes into the name
+                    // too. Without this the alert fires and says only the panel's name.
+                    aria-label={`${t('settings.label')}: ${error.message}`}
+                    variant="danger"
+                    title={t('settings.label')}
+                >
                     {error.message}
                 </Banner>
             );
@@ -156,15 +171,35 @@ export const SiteSettings = () => {
                 {writeError && (
                     <Banner
                         data-sel-role="crh-write-error"
+                        // moonstone's Banner renders a plain div: aria-label only, no role and no
+                        // aria-live. A failed save was therefore shown but never announced, so a
+                        // screen reader user had to re-explore the panel to discover whether their
+                        // change applied. role="alert" is assertive because this reports that the
+                        // write did NOT happen and the draft is still unsaved.
+                        role="alert"
+                        // And the reason is put into the accessible name as well as the children.
+                        // Banner derives aria-label from title, which on a live region can be
+                        // announced instead of the changed children, leaving the user told that
+                        // saving failed but never why.
+                        aria-label={`${t('settings.saveFailed')}: ${writeError}`}
                         variant="danger"
                         title={t('settings.saveFailed')}
                     >{writeError}</Banner>
                 )}
 
                 <Banner
+                    // Polite, not assertive: this reports which settings are in force and changes
+                    // as a side effect of saving, so it must not interrupt.
+                    role="status"
                     variant={current.configured ? 'info' : 'neutral'}
-                    title={current.configured ? t('settings.configured') : t('settings.usingDefaults')}
-                >{''}</Banner>
+                    // The message is the CHILDREN, and the title is a fixed heading. It used to be
+                    // the other way round, with `{''}` for children: Banner surfaces title as the
+                    // region's aria-label, so the only thing that changed when this flipped after a
+                    // Save was an attribute the region draws its own name from. A live region
+                    // announces changed CONTENT, so most screen readers said nothing at all -- the
+                    // same defect already fixed on the two Banners above this one.
+                    title={t('settings.settingsSource')}
+                >{current.configured ? t('settings.configured') : t('settings.usingDefaults')}</Banner>
 
                 <Separator spacing="medium" invisible="firstOrLastChild"/>
 
@@ -188,34 +223,55 @@ export const SiteSettings = () => {
                     />
                 </Field>
 
-                <Field
-                    id="crh-field-capture-user"
-                    label={t('settings.captureUser')}
-                    helper={current.credentialResolved
-                        ? t('settings.credentialResolved')
-                        : t('settings.credentialMissing')}
-                >
+                {/*
+                    The helper is rendered here rather than through Field's `helper` prop. Field
+                    renders that prop as a caption with no id and never wires aria-describedby, so
+                    whether a credential resolved -- which decides whether restricted pages can be
+                    captured at all -- reached sighted users only. aria-describedby needs an element
+                    with an id, so the element is ours.
+                */}
+                <Field id="crh-field-capture-user" label={t('settings.captureUser')}>
                     <Input
                         data-sel-role="crh-capture-user"
                         aria-label={t('settings.captureUser')}
+                        aria-describedby="crh-capture-user-help"
                         value={current.captureUser || ''}
                         placeholder={t('settings.captureUserPlaceholder')}
                         onChange={e => update({captureUser: e.target.value})}
                     />
+                    <Typography id="crh-capture-user-help" variant="caption">
+                        {/*
+                            The field above holds this site's OWN account and stays empty when it
+                            has none; what capture actually renders as is a different question, and
+                            the panel used to answer only the first. A site inheriting the
+                            module-wide account was described as anonymous, which invites putting a
+                            public revision history on a page whose snapshots hold restricted text.
+                            Naming the inherited account here says so without putting it in the
+                            input, where saving would silently adopt it as this site's own.
+                        */}
+                        {!current.captureUser && current.effectiveCaptureUser
+                            ? t('settings.credentialInherited',
+                                {account: current.effectiveCaptureUser})
+                            : (current.credentialResolved
+                                ? t('settings.credentialResolved')
+                                : t('settings.credentialMissing'))}
+                    </Typography>
                 </Field>
 
-                <Field
-                    id="crh-field-base-url"
-                    label={t('settings.baseUrl')}
-                    helper={t('settings.baseUrlHint')}
-                >
+                <Field id="crh-field-base-url" label={t('settings.baseUrl')}>
                     <Input
                         data-sel-role="crh-base-url"
                         aria-label={t('settings.baseUrl')}
+                        aria-describedby="crh-base-url-help"
                         value={current.baseUrl || ''}
                         placeholder={t('settings.baseUrlPlaceholder')}
                         onChange={e => update({baseUrl: e.target.value})}
                     />
+                    {/* The loopback-versus-public-host warning explains why capture silently 404s
+                        when this is set wrong; it must not be sighted-only. */}
+                    <Typography id="crh-base-url-help" variant="caption">
+                        {t('settings.baseUrlHint')}
+                    </Typography>
                 </Field>
 
                 <Typography variant="caption" data-sel-role="crh-shortcut-hint">

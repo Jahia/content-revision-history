@@ -92,6 +92,27 @@ public final class SiteCaptureSettings {
     }
 
     /**
+     * @return the account this site ACTUALLY captures as, or {@code null} when it captures
+     *         anonymously
+     *
+     * <p>Distinct from {@link #getCaptureUser()}, which is only what this site's own file says. A
+     * site with no account of its own captures with the module-wide one, and a panel that reported
+     * the literal value called such a site anonymous -- telling a site administrator that its
+     * snapshots hold only public text when they may hold whatever the module-wide account can read.
+     *
+     * <p>Delegates so the precedence has exactly one implementation; see
+     * {@code GuestMarkdownFetcher.authorizationFor}, which the fetch path uses.
+     */
+    public String getEffectiveCaptureUser() {
+        return GuestMarkdownFetcher.effectiveCaptureUser(this);
+    }
+
+    /** @return whether the credential this site actually captures with resolved */
+    public boolean hasEffectiveCredential() {
+        return GuestMarkdownFetcher.authorizationFor(this) != null;
+    }
+
+    /**
      * @return a copy with the editable fields replaced, carrying the resolved credential across
      *
      * <p>The credential is deliberately not a parameter. It is resolved from a secret file whose
@@ -105,8 +126,17 @@ public final class SiteCaptureSettings {
      */
     public SiteCaptureSettings withChanges(String siteKey, boolean captureEnabled, int maxSnapshots,
                                            String captureUser, String baseUrl) {
+        // The credential is carried across only while it still belongs to the same account. It is
+        // resolved from a secret file, and this method cannot resolve one, so keeping the old
+        // header after the account changed made the object -- and the mutation's own response --
+        // report a resolved credential for an account no secret was ever checked against. An
+        // administrator switching to an account whose secret is not provisioned yet was told the
+        // switch had taken effect. Dropping it means "unknown until the file is re-read", which is
+        // the truth; FileInstall delivers the real answer moments later.
+        String carried = java.util.Objects.equals(this.captureUser, captureUser)
+                ? authorization : null;
         return new SiteCaptureSettings(siteKey, captureEnabled, maxSnapshots, captureUser,
-                authorization, baseUrl);
+                carried, baseUrl);
     }
 
     @Override

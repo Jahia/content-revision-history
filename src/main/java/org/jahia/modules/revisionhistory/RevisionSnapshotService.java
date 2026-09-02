@@ -65,6 +65,9 @@ import static org.jahia.modules.revisionhistory.RevisionHistoryConstants.*;
  */
 public class RevisionSnapshotService {
 
+    /** Where a published revision entry still lives after being deleted from the editorial tree. */
+    private static final String LIVE_WORKSPACE = "live";
+
     private static final Logger logger = LoggerFactory.getLogger(RevisionSnapshotService.class);
 
     /**
@@ -339,6 +342,20 @@ public class RevisionSnapshotService {
      * second, subtly different copy of this check elsewhere is how a path-traversal hole gets
      * introduced later by someone who only reads one of them.
      */
+    /**
+     * The one rule for what a site key may look like, so callers cannot disagree with capture.
+     *
+     * <p>SiteSettingsRegistry had its own, subtly different pattern: it accepted a dot and required
+     * an alphanumeric first character, this one rejects a dot and allows a leading underscore. A key
+     * with a dot was therefore accepted and persisted by the settings panel and then rejected by
+     * every capture for that site, and a key starting with an underscore captured fine but could
+     * never be given settings. Whichever way it fell, the two halves of the module disagreed about
+     * a site that plainly exists.
+     */
+    static boolean isValidSiteKey(String siteKey) {
+        return siteKey != null && SITE_KEY.matcher(siteKey).matches();
+    }
+
     static void validate(String siteKey, String pageUuid, String language) {
         require(siteKey != null && SITE_KEY.matcher(siteKey).matches(), "siteKey", siteKey);
         require(pageUuid != null && UUID.matcher(pageUuid).matches(), "pageUuid", pageUuid);
@@ -367,8 +384,16 @@ public class RevisionSnapshotService {
         // Binary, not string: every metadata read of a snapshot node would otherwise drag the
         // whole page's Markdown into memory with it.
         Binary binary = session.getValueFactory().createBinary(new ByteArrayInputStream(payload));
-        Value value = session.getValueFactory().createValue(binary);
-        snapshot.setProperty(PROP_MARKDOWN, value);
+        try {
+            snapshot.setProperty(PROP_MARKDOWN, session.getValueFactory().createValue(binary));
+        } finally {
+            // Every read path in this module disposes: SnapshotPayload and
+            // SnapshotChoiceListInitializer both do.
+            // the write path, which creates one on every stored capture, did not. The property keeps
+            // its own copy once set, so releasing the handle here is safe and is what stops a busy
+            // publishing site accumulating them.
+            binary.dispose();
+        }
     }
 
     private void updateFolderState(JCRNodeWrapper folder, String name, String contentHash,
@@ -400,29 +425,143 @@ public class RevisionSnapshotService {
      *
      * @return the number of snapshots remaining in the folder
      */
+    /**
+     * Does any revision entry name this snapshot as the content it describes?
+     *
+     * <p>{@code crh:entryRefs} lives on the snapshot rather than on the entry, so it is both the
+     * binding and the only record of it. That makes this check the whole protection: once the node
+     * is gone there is nothing left to consult.
+     */
+    private boolean hasEntryReferences(JCRNodeWrapper snapshot) throws RepositoryException {
+        if (!snapshot.hasProperty(PROP_ENTRY_REFS)) {
+            return false;
+        }
+        // A reference whose entry has been deleted protects nothing, and treating it as protection
+        // made retention unenforceable: crh:entryRefs holds weak references and the binder
+        // deliberately leaves dangling ones, so repeatedly adding an entry, publishing and deleting
+        // the entry would pin every snapshot forever and the cap would never bite again.
+        //
+        // Only ItemNotFoundException counts as gone. Any other RepositoryException propagates: an
+        // unrelated read failure must not be read as permission to delete the evidence behind a
+        // published revision.
+        for (javax.jcr.Value reference : snapshot.getProperty(PROP_ENTRY_REFS).getValues()) {
+            String entryId = reference.getString();
+            try {
+                snapshot.getSession().getNodeByIdentifier(entryId);
+                return true;
+            } catch (javax.jcr.ItemNotFoundException notInDefault) {
+                // Absent from `default` is not the same as gone. Capture always runs against
+                // `default`, so an entry an editor deleted in jContent and has NOT published
+                // disappears here while the PUBLISHED revision is still on the live page citing
+                // this snapshot. Pruning it then destroys the evidence behind a claim the public
+                // can still read, and because crh:entryRefs lives on the snapshot, it also
+                // destroys the record that the entry ever described it -- so the binder later
+                // rebinds that revision to the CURRENT text. Check `live` before believing it.
+                if (existsInLive(entryId)) {
+                    logger.debug("Snapshot {} is referenced by entry {}, which is deleted in"
+                            + " default but still published", snapshot.getName(), entryId);
+                    return true;
+                }
+                logger.debug("Snapshot {} references entry {}, which exists in neither workspace",
+                        snapshot.getName(), entryId);
+            }
+        }
+        return false;
+    }
+
+    /**
+     * @return whether this identifier still resolves in {@code live}
+     *
+     * <p>Only reached for a reference that has already vanished from {@code default}, so the extra
+     * session is paid on the dangling case rather than on every reference of every capture.
+     *
+     * <p>Package-private so the pruning tests can answer it without a repository. The alternative
+     * -- letting the missing JCRTemplate decide -- would make "is this evidence still cited" depend
+     * on whether a session could be opened, and the safe answer to that question is not a default.
+     */
+    boolean existsInLive(String identifier) throws RepositoryException {
+        return Boolean.TRUE.equals(JCRTemplate.getInstance().doExecuteWithSystemSessionAsUser(
+                null, LIVE_WORKSPACE, null, (JCRCallback<Boolean>) live -> {
+                    try {
+                        live.getNodeByIdentifier(identifier);
+                        return Boolean.TRUE;
+                    } catch (javax.jcr.ItemNotFoundException goneThereToo) {
+                        return Boolean.FALSE;
+                    }
+                }));
+    }
+
     private long pruneIfNeeded(JCRNodeWrapper folder, String siteKey) throws RepositoryException {
         int maxSnapshots = SiteSettingsRegistry.settingsFor(siteKey).getMaxSnapshots();
         long count = longProperty(folder, PROP_SNAPSHOT_COUNT, -1);
         if (count >= 0 && count < maxSnapshots) {
             return count;
         }
+        return prune(folder, maxSnapshots);
+    }
+
+    /**
+     * The pruning mechanism, separated from the policy lookup so it can be tested against an
+     * explicit cap. Package-private for that reason, as {@link #validate} is.
+     */
+    long prune(JCRNodeWrapper folder, int maxSnapshots) throws RepositoryException {
         List<String> names = new ArrayList<>();
         for (JCRNodeWrapper child : folder.getNodes()) {
             if (child.isNodeType(SNAPSHOT_TYPE)) {
                 names.add(child.getName());
             }
         }
+        // Timestamp-prefixed names, so lexicographic order is chronological: oldest first.
         Collections.sort(names);
         int excess = names.size() - (maxSnapshots - 1);
         long pruned = 0;
-        for (int i = 0; i < excess; i++) {
-            folder.getNode(names.get(i)).remove();
-            pruned++;
+        long protectedByReference = 0;
+        // Oldest first, and NEVER the newest: it is the baseline the next capture's dedupe compares
+        // against. Walking the whole list rather than just the first `excess` entries is what lets a
+        // referenced snapshot be skipped and a younger unreferenced one taken in its place.
+        // A while loop with a single if/else, deliberately. Expressed as a for loop this needs
+        // either `pruned < excess` in the condition, which java:S1994 objects to because `pruned`
+        // is updated in the body, or a break, which then joins the continue below and java:S135
+        // objects to two jumps. Both objections are about readability and both are fair; this form
+        // has neither, and reads as what it is: walk the oldest first, skip what is referenced,
+        // stop once enough is freed.
+        int index = 0;
+        while (index < names.size() - 1 && pruned < excess) {
+            JCRNodeWrapper candidate = folder.getNode(names.get(index));
+            index++;
+            if (hasEntryReferences(candidate)) {
+                // A snapshot named by a revision entry is the EVIDENCE behind a published claim,
+                // and deleting it does not merely lose the evidence: crh:entryRefs lives on the
+                // snapshot, so removing the node destroys the only record that the entry described
+                // it. The binder then sees that entry as never bound and, on the next capture,
+                // binds it to the CURRENT snapshot -- so a years-old revision silently begins
+                // claiming today's text, and a comparison against a recent revision reports the
+                // page as unchanged. That is worse than exceeding the cap: it is the record
+                // asserting something false, with no error anywhere.
+                //
+                // RevisionEntryBinder states the invariant this protects ("append-only: an entry
+                // that already has a snapshot is never rebound"); it cannot enforce it alone,
+                // because the property it relies on is deleted from underneath it.
+                protectedByReference++;
+            } else {
+                candidate.remove();
+                pruned++;
+            }
         }
         if (pruned > 0) {
             folder.setProperty(PROP_PRUNED_COUNT, longProperty(folder, PROP_PRUNED_COUNT, 0) + pruned);
-            logger.warn("Pruned {} oldest snapshot(s) under {} to stay within the cap of {}",
-                    pruned, folder.getPath(), maxSnapshots);
+            logger.warn("Pruned {} oldest unreferenced snapshot(s) under {} to stay within the cap"
+                    + " of {}", pruned, folder.getPath(), maxSnapshots);
+        }
+        if (protectedByReference > 0) {
+            // Said once per capture and deliberately at WARN: retention is now advisory for this
+            // page, and an operator who set a cap expecting it to be honoured needs to know why it
+            // is not, rather than discovering the folder growing.
+            logger.warn("Kept {} snapshot(s) under {} that a revision entry references, so this"
+                    + " page holds {} snapshot(s) against a cap of {}. Retention will not delete"
+                    + " the evidence behind a published revision; remove the revision entry first"
+                    + " if a snapshot really must go.",
+                    protectedByReference, folder.getPath(), names.size() - pruned, maxSnapshots);
         }
         return names.size() - pruned;
     }

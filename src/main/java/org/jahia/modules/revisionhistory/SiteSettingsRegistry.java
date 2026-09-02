@@ -14,10 +14,16 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Dictionary;
 import java.util.Enumeration;
+import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.Set;
 import java.util.regex.Pattern;
 
 /**
@@ -53,6 +59,28 @@ public class SiteSettingsRegistry implements ManagedServiceFactory {
     static final String PROP_SITE_KEY = "siteKey";
     static final String PROP_ENABLED = "capture.enabled";
     static final String PROP_MAX_SNAPSHOTS = "retention.maxSnapshots";
+
+    /**
+     * The lowest cap retention can actually deliver.
+     *
+     * <p>Not 1, though the previous message promised it was. {@code prune} never deletes a page's
+     * newest snapshot, and it runs before the incoming one is written, so a cap of 1 leaves the
+     * existing snapshot in place and the folder settles at 2 forever. Accepting 1 advertised a
+     * retention level the mechanism cannot reach.
+     */
+    public static final int MIN_MAX_SNAPSHOTS = 2;
+
+    /**
+     * @return whether a capture endpoint addresses this node itself, which is the only thing
+     *         {@link #save} accepts
+     *
+     * <p>Exists so the GraphQL layer can refuse the value with a validation error naming the field,
+     * rather than letting {@code save} throw and surface as an opaque internal error. The rule
+     * itself stays in {@code GuestMarkdownFetcher}, which is the class that has to live by it.
+     */
+    public static boolean addressesThisNode(String baseUrl) {
+        return GuestMarkdownFetcher.reachesJahiaDirectly(baseUrl);
+    }
     static final String PROP_USER = "capture.user";
     static final String PROP_SECRET = "capture.secret";
     static final String PROP_SECRET_FILE = "capture.secretFile";
@@ -76,29 +104,38 @@ public class SiteSettingsRegistry implements ManagedServiceFactory {
      * backfill script, neither of which DS can inject into. {@link CaptureIdentity} solves the same
      * problem the same way, and doing it differently here would leave two patterns for one need.
      */
-    private static volatile SiteSettingsRegistry instance;
+    // AtomicReference rather than a volatile field. volatile publishes the REFERENCE safely but
+    // says nothing about the object behind it, which is why Sonar's java:S3077 flags the idiom; the
+    // instance here happens to keep only ConcurrentHashMaps, so the volatile version was in fact
+    // sound, but a reader has to verify that to know it. A thread-safe holder needs no such
+    // reasoning, and compareAndSet buys a real improvement below.
+    private static final AtomicReference<SiteSettingsRegistry> INSTANCE = new AtomicReference<>();
 
     @Activate
     void activate() {
-        instance = this;
+        INSTANCE.set(this);
     }
 
     @Deactivate
     void deactivate() {
-        instance = null;
+        // compareAndSet, not set(null): during a bundle refresh the new instance can activate
+        // before the old one deactivates, and an unconditional null would then wipe the LIVE
+        // instance and leave every caller falling back to the module defaults until the next
+        // activation. Only clear the holder if it still points at us.
+        INSTANCE.compareAndSet(this, null);
+    }
+
+    /** @return the running component, or null when the module is not active on this node */
+    public static SiteSettingsRegistry active() {
+        return INSTANCE.get();
     }
 
     /**
      * @return the settings for a site, or the module defaults when the component is not running.
      *         Never null: capture must keep working while configuration is being replaced.
      */
-    /** @return the running component, or null when the module is not active on this node */
-    public static SiteSettingsRegistry active() {
-        return instance;
-    }
-
     public static SiteCaptureSettings settingsFor(String siteKey) {
-        SiteSettingsRegistry current = instance;
+        SiteSettingsRegistry current = INSTANCE.get();
         return current == null ? SiteCaptureSettings.DEFAULTS : current.forSite(siteKey);
     }
 
@@ -114,7 +151,11 @@ public class SiteSettingsRegistry implements ManagedServiceFactory {
             throw new ConfigurationException(PROP_SITE_KEY,
                     "required: it is what says which site this file configures");
         }
-        if (!SAFE_SITE_KEY.matcher(siteKey).matches()) {
+        // SAFE_SITE_KEY guarantees the key is a safe single path segment for the .cfg file name.
+        // isValidSiteKey is the capture path's own rule, checked here too so this module cannot
+        // accept and persist settings for a site whose every capture would then be refused.
+        if (!SAFE_SITE_KEY.matcher(siteKey).matches()
+                || !RevisionSnapshotService.isValidSiteKey(siteKey)) {
             throw new ConfigurationException(PROP_SITE_KEY,
                     "'" + siteKey + "' is not a valid site key");
         }
@@ -129,8 +170,18 @@ public class SiteSettingsRegistry implements ManagedServiceFactory {
                         string(properties, PROP_SECRET_FILE),
                         string(properties, PROP_SECRET)),
                 endpoint(string(properties, PROP_BASE_URL), siteKey));
+        // A file keeps its pid when it is edited, so changing the siteKey INSIDE it re-points the
+        // same pid at another site. Without this, the site it used to name kept the old settings
+        // for the life of the process: deleted() only ever clears what siteByPid currently maps,
+        // so nothing would remove it, and forSite() went on reporting settings from a file that no
+        // longer named that site at all. Only drop it if no other file still names it.
+        String previous = siteByPid.put(pid, siteKey);
+        if (previous != null && !previous.equals(siteKey) && !siteByPid.containsValue(previous)) {
+            bySite.remove(previous);
+            logger.info("Configuration {} now names site {}; {} falls back to the module defaults.",
+                    pid, siteKey, previous);
+        }
         bySite.put(siteKey, settings);
-        siteByPid.put(pid, siteKey);
         logger.info("Applied per-site revision capture settings: {}", settings);
     }
 
@@ -195,25 +246,173 @@ public class SiteSettingsRegistry implements ManagedServiceFactory {
      * delivers a configuration missing half its properties. The move target is derived from the
      * validated site key, never from caller-supplied text.
      */
+    /**
+     * A value this module writes into a {@code .cfg} line, rejected if it could forge more lines.
+     *
+     * <p>The file is a Java properties file, so a value carrying a newline does not stay a value:
+     * everything after it is parsed as further keys. These values arrive from GraphQL, from a site
+     * administrator, so without this a site administrator of one site could write
+     * {@code capture.user = x\ncapture.secretFile = /some/server/path} and have the module read
+     * that file's first line and send it as an Authorization header to a host they also control, or
+     * {@code x\nsiteKey = otherSite} and re-key the whole file onto a site they administer nothing
+     * on. A carriage return alone does the same on the platforms that accept it.
+     */
+    private static String singleLine(String property, String value) {
+        if (value == null) {
+            return null;
+        }
+        if (value.indexOf('\n') >= 0 || value.indexOf('\r') >= 0) {
+            throw new IllegalArgumentException(property + " may not contain a line break: the file"
+                    + " is a properties file, so a line break in a value forges further settings");
+        }
+        // A backslash is the properties escape character, and a trailing one continues the value
+        // onto the next line -- so it swallows whatever setting follows rather than forging a new
+        // one. Neither a username nor a URL needs one, so all of them are refused.
+        if (value.indexOf('\\') >= 0) {
+            throw new IllegalArgumentException(property + " may not contain a backslash: it is the"
+                    + " properties escape character, and a trailing one continues onto the next"
+                    + " line, consuming the setting written after it");
+        }
+        return value;
+    }
+
+    /**
+     * The keys this module owns and rewrites. Everything else in the file is preserved verbatim.
+     *
+     * <p>{@code capture.secret} and {@code capture.secretFile} are the reason this exists.
+     * SiteCaptureSettings carries only the already-resolved Authorization header, never the secret
+     * or its path, so a save built purely from that object silently dropped them. An administrator
+     * who hand-added a credential so a restricted site could be captured, then toggled anything at
+     * all in the settings panel, lost it: FileInstall reloaded a file with a user and no secret,
+     * capture fell back to anonymous, and every restricted page quietly stopped being recorded.
+     */
+    private static final Set<String> MANAGED_KEYS = new HashSet<>(Arrays.asList(
+            PROP_SITE_KEY, PROP_ENABLED, PROP_MAX_SNAPSHOTS, PROP_USER, PROP_BASE_URL));
+
+    /** Lines of the existing file that this module does not own, so a rewrite keeps them. */
+    private List<String> preservedLines(Path target) {
+        List<String> kept = new ArrayList<>();
+        // exists(), NOT isReadable(). isReadable answers false for BOTH "no file yet" and "a file
+        // that exists but this process cannot read", and treating the second as the first is exactly
+        // the failure this method exists to prevent: the save would proceed and write a fresh file
+        // with no capture.secret in it. An existing file now falls through to readAllLines, whose
+        // IOException is turned into a refusal below.
+        if (!Files.exists(target)) {
+            return kept;
+        }
+        // A run of comment lines is held until the next real key decides its fate, and travels
+        // with that key when the key is kept. Dropping comments outright cost real information: an
+        // operator annotating a hand-added capture.secret ("rotated 2026-01-05, owner SecOps")
+        // found the secret preserved across a panel save and the note explaining it gone, so the
+        // provenance of a live credential was lost with nothing recording that it had been.
+        // A run with no key after it annotated nothing and is not carried.
+        List<String> pendingComments = new ArrayList<>();
+        try {
+            // An if/else chain rather than early continues: three of them tripped java:S135, and
+            // the nesting is shallow enough that the guard-clause form bought nothing here.
+            for (String line : Files.readAllLines(target, StandardCharsets.ISO_8859_1)) {
+                String trimmed = line.trim();
+                if (trimmed.startsWith("#") || trimmed.startsWith("!")) {
+                    pendingComments.add(line);
+                } else if (!trimmed.isEmpty()) {
+                    int separator = indexOfSeparator(trimmed);
+                    String key = separator < 0 ? trimmed : trimmed.substring(0, separator).trim();
+                    if (MANAGED_KEYS.contains(key)) {
+                        // These lines are rewritten from the settings, so a comment describing one
+                        // would end up above a value it no longer matches.
+                        pendingComments.clear();
+                    } else {
+                        kept.addAll(pendingComments);
+                        pendingComments.clear();
+                        kept.add(line);
+                    }
+                }
+            }
+        } catch (IOException unreadable) {
+            // Better to refuse than to rewrite a file whose other settings could not be read: a
+            // silent drop here is exactly the credential loss this method exists to prevent.
+            throw new IllegalStateException("Refusing to rewrite " + target
+                    + ": its current contents could not be read, and saving would discard any"
+                    + " settings this module does not manage, including a capture secret.",
+                    unreadable);
+        }
+        return kept;
+    }
+
+    private static int indexOfSeparator(String line) {
+        // '=', ':' AND whitespace are all legal key/value separators in a properties file. Reading
+        // only the first two classed `capture.enabled false` as an unmanaged key, so a rewrite
+        // re-appended it BELOW the module's own line -- and the last occurrence is the one that
+        // wins, so the file said the opposite of what the panel reported.
+        for (int i = 0; i < line.length(); i++) {
+            char c = line.charAt(i);
+            if (c == '=' || c == ':' || Character.isWhitespace(c)) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
     public void save(SiteCaptureSettings settings) throws IOException {
         String siteKey = settings.getSiteKey();
+        // Also checked here, not only in the GraphQL mutation. This method is reachable from the
+        // reflectively instantiated backfill service as well, and a value written below 1 would sit
+        // in the file as invalid until FileInstall next reloaded it and silently substituted the
+        // default. Refusing at every entry point is what makes the file trustworthy.
+        if (settings.getMaxSnapshots() < MIN_MAX_SNAPSHOTS) {
+            throw new IllegalArgumentException("maxSnapshots must be at least " + MIN_MAX_SNAPSHOTS
+                    + ", not " + settings.getMaxSnapshots() + ": retention never deletes a page's"
+                    + " newest snapshot, so a cap of 1 cannot be honoured and the effective floor"
+                    + " is " + MIN_MAX_SNAPSHOTS);
+        }
+        // Refused, not merely warned about. This is the path the settings panel and the GraphQL
+        // mutation write through, and it is reachable by a SITE administrator -- a role scoped to
+        // one site, not to the server. capture.baseUrl decides which host this node issues an HTTP
+        // GET to, and whatever answers is normalised and stored as that site's public revision
+        // snapshot: an arbitrary outbound GET from inside the network (a metadata endpoint, an
+        // internal service) plus a forged record of what the page said. GuestMarkdownFetcher's own
+        // Javadoc claimed "no SSRF surface: the caller cannot influence the host", and that claim
+        // was only true before this value became site-configurable.
+        //
+        // updated() deliberately still ACCEPTS a non-loopback value from the file itself and only
+        // warns: a server administrator who owns karaf/etc is the one the escape hatch exists for
+        // (a container whose connector is not reachable on loopback), and they already have every
+        // privilege this would grant.
+        if (settings.getBaseUrl() != null
+                && !GuestMarkdownFetcher.reachesJahiaDirectly(settings.getBaseUrl())) {
+            throw new IllegalArgumentException(PROP_BASE_URL + " must address this node's own"
+                    + " loopback connector, not " + settings.getBaseUrl() + ". Capture fetches"
+                    + " /cms/render/... from this node itself; a value pointing anywhere else would"
+                    + " store another host's response as this site's revision history. Use"
+                    + " http://127.0.0.1:<port>, or clear the field to let the port be detected.");
+        }
         Path target = configFile(siteKey);
+        String captureUser = singleLine(PROP_USER, settings.getCaptureUser());
+        String baseUrl = singleLine(PROP_BASE_URL, settings.getBaseUrl());
+        List<String> preserved = preservedLines(target);
         StringBuilder body = new StringBuilder()
                 .append("# Content Revision History -- settings for site ").append(siteKey)
                 .append("\n# Written by the module. Safe to edit by hand; changes apply without a restart.\n\n")
                 .append(PROP_SITE_KEY).append(" = ").append(siteKey).append('\n')
                 .append(PROP_ENABLED).append(" = ").append(settings.isCaptureEnabled()).append('\n')
                 .append(PROP_MAX_SNAPSHOTS).append(" = ").append(settings.getMaxSnapshots()).append('\n');
-        if (settings.getCaptureUser() != null) {
-            body.append(PROP_USER).append(" = ").append(settings.getCaptureUser()).append('\n');
+        if (captureUser != null) {
+            body.append(PROP_USER).append(" = ").append(captureUser).append('\n');
         }
         // Omitted rather than written empty when unset: an empty value would read back as an empty
         // string and override the node default, whereas an absent key means "use the default".
-        if (settings.getBaseUrl() != null) {
-            body.append(PROP_BASE_URL).append(" = ").append(settings.getBaseUrl()).append('\n');
+        if (baseUrl != null) {
+            body.append(PROP_BASE_URL).append(" = ").append(baseUrl).append('\n');
+        }
+        if (!preserved.isEmpty()) {
+            body.append("\n# Kept from the previous file: settings this module does not manage.\n");
+            for (String line : preserved) {
+                body.append(line).append('\n');
+            }
         }
         Path temp = Files.createTempFile(target.getParent(), target.getFileName().toString(), ".tmp");
-        Files.write(temp, body.toString().getBytes(StandardCharsets.UTF_8));
+        // ISO-8859-1 to match how a properties file is read, here and by FileInstall.
+        Files.write(temp, body.toString().getBytes(StandardCharsets.ISO_8859_1));
         try {
             Files.move(temp, target, StandardCopyOption.ATOMIC_MOVE,
                     StandardCopyOption.REPLACE_EXISTING);
@@ -223,6 +422,18 @@ public class SiteSettingsRegistry implements ManagedServiceFactory {
             Files.deleteIfExists(temp);
             throw atomicUnsupported;
         }
+        // Applied to the in-memory map now, rather than waiting for FileInstall to notice the
+        // file and call updated(). The write is already durable at this point, so the map would
+        // have converged on this value anyway; the only thing waiting achieved was a window in
+        // which the module still answered with the OLD settings. Two consequences, both reported:
+        // a panel that refetches immediately after Save snapped back to the previous values and
+        // flipped its banner to "this site has no settings of its own", so an administrator saved
+        // again believing the write had failed; and a publication landing inside that window was
+        // captured under settings the operator had just turned off.
+        //
+        // updated() remains the authority: when FileInstall does deliver the file it overwrites
+        // this with whatever was actually parsed, so a value this method got wrong cannot persist.
+        bySite.put(siteKey, settings);
         logger.info("Wrote per-site revision capture settings for {} to {}", siteKey, target);
     }
 

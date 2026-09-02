@@ -32,10 +32,25 @@ require('cypress-terminal-report/src/installLogsCollector')();
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 require('@jahia/cypress/dist/support/registerSupport').registerSupport();
 
-Cypress.on('uncaught:exception', () => {
-    // Returning false here prevents Cypress from
-    // failing the test
+Cypress.on('uncaught:exception', err => {
+    // Still returns false, so one stray error in Jahia's own shell does not fail an unrelated
+    // spec. But it no longer does so SILENTLY: an unhandled exception used to vanish completely,
+    // and a test asserting that something is ABSENT then passed because the page had crashed
+    // before it could render, which is indistinguishable from the feature being correctly hidden.
+    //
+    // The message is logged into the command log and the terminal report, and collected so a spec
+    // that asserts an absence can also assert that nothing blew up:
+    //     expect(Cypress.env('uncaughtErrors') || []).to.be.empty;
+    Cypress.log({name: 'uncaught', message: err.message, consoleProps: () => ({error: err})});
+    const seen = Cypress.env('uncaughtErrors') || [];
+    seen.push(err.message);
+    Cypress.env('uncaughtErrors', seen);
     return false;
+});
+
+// Each test starts from a clean slate, or the first stray error would taint every later test.
+beforeEach(() => {
+    Cypress.env('uncaughtErrors', []);
 });
 if (Cypress.browser.family === 'chromium') {
     Cypress.automation('remote:debugger:protocol', {

@@ -239,9 +239,13 @@ Three rules worth knowing:
   *capture* must never rewrite what an existing revision claims the page said. An editor
   re-pointing an entry is the opposite: a deliberate correction, and history assembled by hand
   after a backfill is exactly where a wrong choice is most likely.
-- **A choice that no longer resolves leaves the entry unbound**, and says so in the log. It does
-  not quietly fall back to the current snapshot, which would attach a revision to content it does
-  not describe.
+- **A choice that no longer resolves never attaches the entry to something else.** For an entry
+  being bound for the first time it stays unbound; for one already bound, re-pointing it at a
+  snapshot that cannot be resolved leaves it on the snapshot it already had. Either way the module
+  says so in the log and never falls back to the *current* snapshot, which would attach a revision
+  to content it does not describe. (This previously promised "leaves the entry unbound" for both
+  cases, which is not what re-pointing does — and re-pointing is the case the surrounding section
+  is about.)
 - **Only that page and language.** The value is a name resolved inside the page's own snapshot
   folder, never a path, so it cannot reach another page's history.
 
@@ -457,6 +461,12 @@ There is also no content-correctness reason to reach for the public host. Measur
 An absolute URL *does* appear in a snapshot when an editor authored one. That is the record being
 faithful, and the capture endpoint has no bearing on it.
 
+**Critical security note:** A capture credential (`capture.user`/`capture.secretFile`), if configured,
+is sent **only** to loopback addresses (127.0.0.1, localhost, [::1]). If `capture.baseUrl` points
+elsewhere, the credential is withheld and capture renders anonymously instead. This prevents a site
+administrator from receiving the operator's capture password. The rendered snapshot is recorded as
+guest, which is what the unauthenticated render will actually have been.
+
 A non-loopback value is accepted — an unusual deployment may genuinely need one — and logged as a
 warning naming the site.
 
@@ -516,9 +526,17 @@ silence. The folder's `crh:lastCaptureStatus` is what makes a gap in the record 
   invariant (`newestHash` relies on lexicographic order being chronological) across DST and
   across cluster nodes in different zones. The hash suffix also makes concurrent captures of
   the same publication compute the same node name, so a duplicate write is a harmless no-op.
-- **ACL locked down** at the root: snapshots are the evidentiary basis of a public claim, and
-  inheriting `/contents` ACLs would let any site contributor read every historical version of
-  every page — and silently rewrite them.
+- **ACL inheritance is deliberately NOT broken.** An earlier design broke it at the root, on the
+  reasoning that snapshots are the evidentiary basis of a public claim and contributors should not
+  read or rewrite them. That made the folder unreadable to the editors who must read a snapshot in
+  order to write the revision entry describing it, so
+  `RevisionSnapshotService.restoreInheritance` now restores inheritance on every capture, and
+  existing installations repair themselves the next time a page is published.
+
+  The consequence is worth stating plainly: **anyone with read on `/sites/<site>/contents` can read
+  every snapshot**, and a snapshot captured as a configured `capture.user` may contain content the
+  public cannot see. `crh:capturedBy` records which case a given snapshot is. If that is not
+  acceptable for a site, restrict `contents` itself rather than expecting this module to.
 
 ## Content types
 
@@ -535,9 +553,15 @@ silence. The folder's `crh:lastCaptureStatus` is what makes a gap in the record 
 reordering outright, so editors cannot drag entries into order and the newest-first convention
 both views depend on is unachievable.
 
-Snapshot types carry `jmix:hiddenType` so they never appear in the components tree.
-They keep `jmix:droppableContent` only because `jnt:contentFolder` accepts no other child
-type — it is a structural requirement, not an editorial affordance.
+Snapshot types do **not** carry `jmix:hiddenType`; it was dropped so the store can be browsed and
+previewed in jContent, which is what makes backfilled history describable — an editor has to be
+able to read a snapshot before writing the revision entry for it. (This paragraph said the
+opposite, contradicting the section above and the CND. Read as written, it told an operator the
+snapshot tree was hidden from contributors and therefore that `/sites/<site>/contents` needed no
+restricting — while a configured `capture.user` may have filled those snapshots with content those
+contributors cannot see on the live page.) The snapshot folder keeps `jmix:droppableContent` only
+because `jnt:contentFolder` accepts no other child type — a structural requirement, not an
+editorial affordance.
 
 Snapshot properties are `indexed=no` / `nofulltext` so historical copies never pollute site
 search, and `crh:markdown` is `binary` so metadata reads don't drag the payload.
@@ -628,13 +652,36 @@ Two constraints that cost real debugging time, recorded so they don't again:
   namespace and **uninstalls the bundle a few hundred milliseconds after the install reports
   success** — with the "Invalid license check" ERROR logged *after* the uninstall lines, so
   log order actively misleads.
-- **The pom must declare the blueprint extender capability**
+- **A module that uses Spring must declare the blueprint extender capability**
   (`osgi.extender=org.jahia.bundles.blueprint.extender.config`). Without it the module gets no
-  Spring context and every code extension point is silently inert, while CNDs and views keep
-  working perfectly. Nothing is logged.
+  Spring context and every Spring-based extension point is silently inert, while CNDs and views
+  keep working perfectly. Nothing is logged.
+
+  **This module does not declare it, deliberately.** It has no Spring context: its code extension
+  points are Declarative Services components, and `maven-bundle-plugin`'s `_dsannotations` adds
+  the `osgi.extender=osgi.component` requirement that DS needs. The note is kept because the
+  symptom is so hard to diagnose from the outside, and because a future Spring-based extension
+  point here would need the capability added.
 
 jsoup is **embedded** in the bundle (`Bundle-ClassPath`), not imported: the platform ships
 jsoup but does not export `org.jsoup` to modules.
+
+## Before you commit
+
+Enable the repository's hook once per clone:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+It refuses a commit that would carry a credential into the repository. The backfill script has to
+be edited with a real account and password to run, and a later `git add` of that same file for an
+unrelated change has already swept such an edit into a public commit once. The script's own comment
+saying "there is deliberately NO default" sat three lines above the value that got committed, so a
+comment is not enough. The hook inspects staged content, so fixing the working tree afterwards does
+not satisfy it.
+
+If you need to keep your local edit, stage the rest with `git add -p` rather than the whole file.
 
 ## Tests
 

@@ -9,6 +9,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -519,19 +520,48 @@ class MarkdownNormalizerTest {
     // --- Defensive input size cap ------------------------------------------------------------
 
     @Test
-    @DisplayName("oversized input is truncated instead of being processed in full")
-    void oversizedInputIsTruncated() {
+    @DisplayName("oversized input is refused, never silently shortened")
+    void oversizedInputIsRefused() {
+        // This test used to assert the opposite -- that the output came back SHORTER than the
+        // input, "proving the input was capped". What it was really pinning is a silent
+        // truncation, and for this module that is the worst available outcome rather than a
+        // safeguard: a snapshot missing its tail is indistinguishable from a page that was
+        // genuinely shorter, so nobody reading the record can tell. A later comparison then
+        // reports text as removed on a date when nothing was removed. Refusing stores nothing
+        // and says why, which is what MAX_MARKDOWN_BYTES already did on the byte cap.
+
         // Arrange -- comfortably larger than MAX_INPUT_CHARS
         String html = "<p>" + "a".repeat(MarkdownNormalizer.MAX_INPUT_CHARS + 500_000) + "</p>";
 
         // Act
         long start = System.nanoTime();
-        String md = MarkdownNormalizer.normalize(html);
+        MarkdownTooLargeException refused = assertThrows(MarkdownTooLargeException.class,
+                () -> MarkdownNormalizer.normalize(html));
         long elapsedMs = (System.nanoTime() - start) / 1_000_000;
 
-        // Assert -- output must be bounded, proving the input was capped, not processed whole
-        assertTrue(md.length() < html.length(), "expected truncation, got length " + md.length());
+        // Assert
+        assertEquals(html.length(), refused.getLength(),
+                "the refusal reports the real size, so an operator can judge whether to raise the cap");
+        assertEquals(MarkdownNormalizer.MAX_INPUT_CHARS, refused.getCap());
+        assertTrue(refused.getMessage().contains("Refused rather than truncated"),
+                "the message has to say what did NOT happen: " + refused.getMessage());
+        // Refused BEFORE parsing, which is the other half of the cap's purpose.
         assertTrue(elapsedMs < 5000, "took " + elapsedMs + " ms");
+    }
+
+    @Test
+    @DisplayName("input exactly at the cap is still normalised")
+    void inputAtTheCapIsAccepted() {
+        // The boundary matters in both directions: a refusal one character early would reject a
+        // page the module promises to handle, and this is the only test that pins which side of
+        // the comparison is strict.
+        String filler = "a".repeat(MarkdownNormalizer.MAX_INPUT_CHARS - "<p></p>".length());
+        String html = "<p>" + filler + "</p>";
+        assertEquals(MarkdownNormalizer.MAX_INPUT_CHARS, html.length(), "precondition");
+
+        String md = MarkdownNormalizer.normalize(html);
+
+        assertFalse(md.isEmpty(), "input at exactly the cap must be accepted, not refused");
     }
 
     // --- Defect 8: literal newlines from the views must survive -----------------------------
