@@ -15,8 +15,16 @@ public final class RevisionHistoryConstants {
 
     // ---------------------------------------------------------------- node types
 
-    /** Opt-in marker mixin. Only pages carrying it are snapshotted. */
-    public static final String REVISIONED_PAGE_MIXIN = "jmix:publiclyRevisioned";
+    /**
+     * Opt-in marker mixin. Only nodes carrying it are snapshotted.
+     *
+     * <p>A page OR a content node: content that is published and visible without a page of its own
+     * needs a revision history just as much, and the storage was always keyed on the marked node's
+     * UUID rather than on anything page-shaped. What had to change with it was the three separate
+     * walks that answered "which node owns this history" -- see {@link RevisionedAncestor}, which
+     * is now the only one.
+     */
+    public static final String REVISIONED_MIXIN = "jmix:publiclyRevisioned";
     public static final String PAGE_TYPE = "jnt:page";
     public static final String SNAPSHOT_TYPE = "crh:revisionSnapshot";
     public static final String FOLDER_TYPE = "crh:snapshotFolder";

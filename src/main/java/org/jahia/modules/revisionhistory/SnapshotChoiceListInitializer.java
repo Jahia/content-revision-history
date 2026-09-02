@@ -30,7 +30,6 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.TimeZone;
 
-import static org.jahia.modules.revisionhistory.RevisionHistoryConstants.PAGE_TYPE;
 import static org.jahia.modules.revisionhistory.RevisionHistoryConstants.PROP_MARKDOWN;
 import static org.jahia.modules.revisionhistory.RevisionHistoryConstants.PROP_SNAPSHOT_DATE;
 import static org.jahia.modules.revisionhistory.RevisionHistoryConstants.ROOT_FOLDER_NAME;
@@ -344,19 +343,15 @@ public class SnapshotChoiceListInitializer implements ChoiceListInitializer {
     }
 
     /** Walks up to the page the entry lives on. */
+    /**
+     * @return the node whose snapshots this edit form may offer, or null when there is none
+     *
+     * <p>Walked to the nearest {@code jnt:page} until a content node could be revisioned too, at
+     * which point the picker would have offered the enclosing page's snapshots for an entry that
+     * describes the content node's -- so an editor would pin a revision to the wrong text.
+     */
     private static JCRNodeWrapper pageOf(JCRNodeWrapper start) throws RepositoryException {
-        JCRNodeWrapper node = start;
-        while (node != null) {
-            if (node.isNodeType(PAGE_TYPE)) {
-                return node;
-            }
-            try {
-                node = node.getParent();
-            } catch (javax.jcr.ItemNotFoundException atTheRoot) {
-                return null;
-            }
-        }
-        return null;
+        return RevisionedAncestor.of(start);
     }
 
     /**

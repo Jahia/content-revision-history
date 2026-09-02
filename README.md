@@ -131,7 +131,7 @@ content* (curated, named, permanent, reviewed).
 ```
 publication ──▶ PublicationSnapshotListener ──▶ SnapshotCaptureJob (async, scheduler)
                 (maps published nodes up to                │
-                 the nearest jmix:publiclyRevisioned page) │
+                 the nearest jmix:publiclyRevisioned node) │
                                                            ▼
                                         GuestMarkdownFetcher (HTTP loopback, as guest)
                                                            │
@@ -556,7 +556,23 @@ silence. The folder's `crh:lastCaptureStatus` is what makes a gap in the record 
 
 | Type | Purpose |
 |---|---|
-| `jmix:publiclyRevisioned` | Opt-in marker on `jnt:page`. Only tagged pages are captured. |
+| `jmix:publiclyRevisioned` | Opt-in marker on `jnt:page` **or** `jnt:content`. Only tagged nodes are captured. |
+
+`jmix:publiclyRevisioned` applies to a **page or a content node**. Content that is published and
+visible without a page of its own — a policy block reused across pages, a component with its own
+editorial lifecycle — gets a revision history on the same terms. Nothing in the storage was ever
+page-shaped: the folder is keyed on the marked node's UUID.
+
+What matters if you extend this: **which node owns a history is answered in exactly one place**,
+`RevisionedAncestor`. It walks up to the nearest node carrying the mixin, checking the mixin
+*before* the page type — the reverse order walks straight past a revisioned content node, and the
+result is `null`, which is also the right answer for content nobody asked to revision. So the
+failure is silent: no error, no status, no folder. Two of the three walks that used to answer this
+question got it wrong, which is why there is now only one.
+
+A page that is **not** revisioned still ends the search: a page owns its own content, so its
+children do not belong to a history above it. And the nearest owner wins, so a revisioned block
+inside a revisioned page keeps its own history rather than being folded into the page's.
 | `crh:revisionHistory` | The editorial container dropped on a page; holds revision entries. `collapsedByDefault` controls whether the list starts closed. |
 | `crh:revisionEntry` | One public revision: label, date, summary, change type. |
 | `crh:snapshotFolder` | System container; carries dedupe state and last-capture status. |
