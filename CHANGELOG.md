@@ -1,6 +1,37 @@
 Changelog
 =========
 
+## [1.4.5](https://github.com/Jahia/content-revision-history/compare/1_4_4...1_4_5) (2026-09-02)
+
+Fixes the slot 1.4.4 added: it was typed so tightly that no host view could create it, so edit mode
+offered no add button at all. Recommended for anyone who took 1.4.4 to put a revision history on a
+content type. No migration is needed and pages are unaffected.
+
+### Bug fixes
+
+* **model**: The `revisionHistory` slot on `jmix:publiclyRevisioned` accepts
+  `jmix:droppableContent` rather than `crh:revisionHistory`. Typed as the component itself it could
+  not be created: `template:area` creates its area node as a `jnt:contentList`, which a
+  component-typed slot rejects, so the area never came into existence and edit mode showed nothing
+  to click. This mirrors the `relatedlinks` definition on `jacademy:kbEntry` -- a pattern working in
+  production rather than one reasoned out from the taglib documentation: the area node is the list,
+  and the component goes inside it constrained by the host view's own `nodeTypes`. Confirmed working
+  on a real KB entry. Measured rather than assumed: widening a child definition's required type is
+  not a MAJOR definition change, a `jnt:contentList` can be created in the widened slot, and
+  `contentTypesAsTree` -- the API Content Editor builds its add list from -- then offers
+  `crh:revisionHistory` inside it. The cost, since it is a real loss: the list can hold more than
+  one history, and nothing at the definition level now says "exactly one".
+  ([commit](https://github.com/Jahia/content-revision-history/commit/dc67332))
+
+### Known limitations
+
+* `crh:revisionHistory` carries no category mixin (`jmix:basicContent` and the like), so it does not
+  appear in a GENERIC add-content list: `contentTypesAsTree` groups types by category and one with
+  none has no branch to sit under. It is offerable only where a view names it explicitly through
+  `nodeTypes`, which every intended placement does. Worth knowing before looking for it in the
+  components tree, and worth closing separately -- every end-to-end test creates it over GraphQL,
+  which bypasses the picker, so nothing here exercises the path an editor uses.
+
 ## [1.4.4](https://github.com/Jahia/content-revision-history/compare/1_4_3...1_4_4) (2026-09-02)
 
 A revisioned node now has a legal place to put its revision history. Nothing changes for pages,
