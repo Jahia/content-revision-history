@@ -1,6 +1,38 @@
 Changelog
 =========
 
+## [1.4.2](https://github.com/Jahia/content-revision-history/compare/1_4_1...1_4_2) (2026-09-02)
+
+The comparison rows show the snapshot's Markdown rendered instead of as its own syntax. Display
+only: what is compared, and what is stored, are unchanged, so no migration is needed and existing
+snapshots read exactly as before.
+
+### Features
+
+* **diff**: The comparison rows render the Markdown rather than printing it. A `##` line reads as a
+  heading, `**bold**` as bold, a `- ` item as a bullet, and the normaliser's `\[`/`\]` escapes --
+  which are the module's own bookkeeping -- are unescaped. The diff itself is still computed on the
+  RAW Markdown and always will be: that is what makes one snapshot comparable to another regardless
+  of how either is displayed. Rendering is derived afterwards and carries the word-level changed
+  flags across, so it costs no highlighting. `InlineMarkdown` reads only the closed grammar
+  `MarkdownNormalizer` emits, so the module still has no Markdown parser and no HTML sink on a
+  public page built from captured content; anything unrecognised stays literal text. Links and
+  images deliberately keep their literal `[text](href)` form, because collapsing them to their text
+  would hide an href change -- same words, new destination, no visible difference -- in a record
+  whose purpose is showing what changed. Heading levels are styled with classes and never real
+  `<h1>`-`<h6>`, which would splice the snapshot's outline into the host page's and break heading
+  order for anyone navigating by headings. ([commit](https://github.com/Jahia/content-revision-history/commit/40c0765))
+
+### Other changes
+
+* **test**: 243 -> 257 unit tests and 93 -> 94 end-to-end. Most of the new unit tests cover one
+  thing: rendering deletes characters -- delimiters, escapes, the line prefix -- while the
+  word-level segments are positions in the RAW line, so every visible character has to be tracked
+  back to where it came from or the highlight lands on the wrong word. Mutation-verified; using the
+  visible index instead of the raw offset gives `expected: <policy> but was: <icy>`. The
+  pre-existing assertions on `<mark>twelve</mark>` and `<mark>eighteen</mark>` still pass, which is
+  what proves rendering did not cost the highlighting. ([commit](https://github.com/Jahia/content-revision-history/commit/40c0765))
+
 ## [1.4.1](https://github.com/Jahia/content-revision-history/compare/1_4_0...1_4_1) (2026-09-02)
 
 A host site's theme could decorate the module's own list items. Cosmetic on the revision list and
