@@ -1,6 +1,103 @@
 Changelog
 =========
 
+## [1.4.0](https://github.com/Jahia/content-revision-history/compare/1_3_1...1_4_0) (2026-09-02)
+
+Per-site configuration, a settings panel to drive it, and the security work that turned out to be
+required once capture became configurable at all. Two defects in this release were found
+independently by two reviewers each: a site administrator could point capture at any host and have
+its response stored as that site's public revision history, and a page published in two languages
+could end up with a stored snapshot whose folder said the capture had failed.
+
+`crh:generatorVersion` moves to `5`, so the first publication after upgrading stores one new
+snapshot per revisioned page, and a comparison spanning the upgrade will show content the previous
+generator dropped. Neither is a fault. Read *Upgrading from 1.3.1* in
+[RELEASE-NOTES-1.4.0.md](RELEASE-NOTES-1.4.0.md) before deploying: one setting is now refused
+rather than warned about, and `retention.maxSnapshots = 1` is refused with a floor of 2.
+
+### Features
+
+* **settings**: Per-site capture configuration, backed by a file-backed OSGi factory
+  configuration rather than a programmatic one, so it survives a bundle reinstall instead of being
+  orphaned under `bundleNN/data/config`. Each site is a `.cfg` in `karaf/etc` that Felix FileInstall
+  delivers, written temp-file-then-`ATOMIC_MOVE` so a reader never sees half a file. ([commit](https://github.com/Jahia/content-revision-history/commit/5742e8e))
+* **settings**: A site-administration panel to edit it, built from moonstone's own layout and field
+  components, with Ctrl+Enter to save. Requires `siteAdminContentRevisionHistory` on the site;
+  an editor with `jcr:write` on the same site does not have it. ([commit](https://github.com/Jahia/content-revision-history/commit/c02fc45))
+* **graphql**: A site-settings API under one namespaced field, never a flat root field: two bundles
+  registering the same global field make the provider refuse the duplicate and the whole schema
+  fails to build. ([commit](https://github.com/Jahia/content-revision-history/commit/fb3e4a2))
+* **entries**: The snapshot an entry names is now per language, as `crh:pinnedSnapshot`. The value
+  names a snapshot inside the per-language folder and those names embed a per-language content hash,
+  so one shared value could not express it: pinning while editing in English left the French
+  comparison reporting "no snapshot recorded" permanently. A new property rather than an `i18n` flag
+  on the old one, because Jahia classes that change as a MAJOR definition change and cancels the
+  deployment; `crh:snapshotRef` is still read, so nothing already pinned loses its pin. ([commit](https://github.com/Jahia/content-revision-history/commit/c1b3eb4))
+
+### Bug fixes
+
+* **security**: Refused a capture endpoint that does not address this node. `capture.baseUrl`
+  decides which host the server issues its capture GET to, and whatever answers is normalised and
+  stored as that site's public revision snapshot -- so a role scoped to one site could obtain an
+  arbitrary outbound GET from inside the network plus a forged record of what a page said. The
+  class Javadoc claimed "no SSRF surface: the caller cannot influence the host", which was true
+  only before the value became site-configurable. A `.cfg` edited by hand is still accepted with a
+  warning: that escape hatch is for a server administrator, who already holds every privilege it
+  would grant. ([commit](https://github.com/Jahia/content-revision-history/commit/3926e17))
+* **security**: Bound the capture credential to loopback. A site administrator could set a public
+  hostname and receive the operator's capture password on the next publication. ([commit](https://github.com/Jahia/content-revision-history/commit/cea3012))
+* **capture**: Stopped recording one language's failure against another. The per-page catch wrapped
+  the whole language loop and then wrote `FAILED` for every language, so a throw on the second
+  language of a bilingual page overwrote the first language's already-durable `STORED`: a stored
+  snapshot whose folder says the capture failed, which no later capture corrects. ([commit](https://github.com/Jahia/content-revision-history/commit/6286a1c))
+* **security**: A site naming its own `capture.user` no longer inherits the module-wide credential
+  when its own secret fails to resolve, which inverted the documented rule and captured a
+  deliberately narrow site with the broad account. The panel also now reports the account capture
+  ACTUALLY uses, so a site inheriting the module-wide one is no longer described as anonymous --
+  which invited putting a public revision history on a page holding restricted content. ([commit](https://github.com/Jahia/content-revision-history/commit/be97f7a))
+* **security**: A comparison now authorises the enclosing PAGE, not only the history component. The
+  component can have its ACL inheritance broken to publish a changelog on a restricted page, and
+  everything served underneath it came from the page that is not. ([commit](https://github.com/Jahia/content-revision-history/commit/6286a1c))
+* **retention**: Retention refuses to prune a snapshot a revision entry references, and consults
+  `live` before believing an entry is gone. An entry deleted in jContent and not published has
+  already vanished from `default` while the published revision still cites that snapshot; deleting
+  it also deletes `crh:entryRefs`, after which the binder re-attaches that revision to the current
+  text. ([commit](https://github.com/Jahia/content-revision-history/commit/ed39c84))
+* **markdown**: Refused oversized view output instead of silently truncating it, and a snapshot too
+  large to read in full now says so in the comparison popup and the jContent preview. A diff
+  computed from a payload missing its tail reports every line past the cut as removed and presents
+  that as the record of what changed; a WARN in the log never reached the visitor being shown the
+  result. ([commit](https://github.com/Jahia/content-revision-history/commit/843eee0))
+* **backfill**: The script no longer aborts on every page that has a revision history component --
+  which is every page with captured history, and therefore exactly the page the README says to
+  backfill first. It also emits a container's own text properties, matching the generic fallback
+  view, and normalises with the locale-aware overload the live path uses. ([commit](https://github.com/Jahia/content-revision-history/commit/8c06a7e))
+* **backfill**: The credential is withheld from a non-loopback `BASE_URL`, as the Java path already
+  did and as the README already promised. ([commit](https://github.com/Jahia/content-revision-history/commit/9ff55c8))
+* **settings**: A field can be cleared. `null` was the only way to say "no value" and was read as
+  "leave unchanged", so a mistyped capture endpoint could not be removed at all. ([commit](https://github.com/Jahia/content-revision-history/commit/3926e17))
+* **settings**: `save()` no longer drops an operator's comments when rewriting a `.cfg`, and applies
+  the write to the in-memory map so the API is read-after-write consistent -- the panel used to snap
+  back to the previous values and report the site as unconfigured. ([commit](https://github.com/Jahia/content-revision-history/commit/552e50c))
+* **a11y**: The comparison panel's focus ring, state and response ordering. The ring used the accent
+  at about 2.2:1 against the popover backdrop it actually sits on (SC 2.4.13); the full-screen
+  toggle came back reporting the opposite of the panel's state (SC 4.1.2); the settings panel's
+  status region changed only its accessible name, so the change was never announced (SC 4.1.3); and
+  overlapping comparisons applied whichever response arrived last. ([commit](https://github.com/Jahia/content-revision-history/commit/6053135))
+
+### Other changes
+
+* **test**: 224 -> 243 unit tests and 67 -> 92 end-to-end. The suite now executes the shipped
+  backfill script, which nothing had ever run, and proves the credential guard by observing the
+  request on the wire rather than by unit-testing the predicate beside it -- the predicate's own
+  test passes with the guard deleted. ([commit](https://github.com/Jahia/content-revision-history/commit/935c212))
+* **security**: A pre-commit hook refuses to commit a credential, rather than a comment asking
+  nobody to. Enable it once per clone with `git config core.hooksPath .githooks`. ([commit](https://github.com/Jahia/content-revision-history/commit/c0520c4))
+* **docs**: Corrected the comments and documentation that no longer described the code, including
+  three that could have caused a wrong call about safety -- two claiming the snapshot tree is
+  unreadable to contributors, which `restoreInheritance` undoes on every capture, and a README
+  paragraph contradicting its own section above it. ([commit](https://github.com/Jahia/content-revision-history/commit/eae7eec))
+
 ## [1.3.1](https://github.com/Jahia/content-revision-history/compare/1_3_0...1_3_1) (2026-08-30)
 
 1.3.0 shipped its own headline feature broken. The snapshot store was meant to become browsable in
