@@ -300,18 +300,49 @@ describe('Site administration panel for revision history', () => {
     // A value the running system will not use must be refused, not stored and echoed back. It was
     // written verbatim to the .cfg and returned as the applied setting; only when FileInstall
     // re-parsed the file did it get silently replaced by the module default.
-    it('refuses a retention value that would keep no history', () => {
+    //
+    // The floor is 2, and 1 is refused with it. This assertion used to require the message to say
+    // "at least 1", which was an observation of the wording rather than the property, and the
+    // wording was advertising a retention level the mechanism cannot deliver: prune never removes
+    // a page's newest snapshot, and it runs before the incoming one is written, so a cap of 1
+    // leaves the existing snapshot in place and the folder settles at 2 forever. What is asserted
+    // now is the contract -- every value the module will not honour is refused before it can reach
+    // the file -- rather than the sentence the server happened to produce.
+    it('refuses a retention value the mechanism cannot honour', () => {
         cy.login();
-        asCurrentUser(`mutation { contentRevisionHistory { saveSiteSettings(siteKey: "${siteKey}", maxSnapshots: 0) { maxSnapshots } } }`)
-            .then(res => {
-                const errors = res.body.errors || [];
-                expect(errors.length, '0 must be refused').to.be.greaterThan(0);
-                expect(errors[0].message).to.contain('at least 1');
-            });
+        [0, 1].forEach(refused => {
+            asCurrentUser(`mutation { contentRevisionHistory { saveSiteSettings(siteKey: "${siteKey}", maxSnapshots: ${refused}) { maxSnapshots } } }`)
+                .then(res => {
+                    const errors = res.body.errors || [];
+                    expect(errors.length, `${refused} must be refused`).to.be.greaterThan(0);
+                    expect(errors[0].message, 'the refusal names the floor it enforces')
+                        .to.contain('at least 2');
+                });
+        });
 
         cy.apollo({query: settingsQuery, variables: {siteKey}}).then(({data}) => {
             expect(data.contentRevisionHistory.siteSettings.maxSnapshots,
-                'a refused value must not reach the file').to.be.greaterThan(0);
+                'a refused value must not reach the file').to.be.greaterThan(1);
+        });
+    });
+
+    // The endpoint decides which host this node issues its capture GET to, and whatever answers is
+    // stored as this site's public revision snapshot. saveSiteSettings is reachable by a SITE
+    // administrator, so accepting an arbitrary host handed a site-scoped role an outbound GET from
+    // inside the network plus a forged record of what the page said.
+    it('refuses a capture endpoint that does not address this node', () => {
+        cy.login();
+        asCurrentUser(`mutation { contentRevisionHistory { saveSiteSettings(siteKey: "${siteKey}", baseUrl: "http://169.254.169.254") { baseUrl } } }`)
+            .then(res => {
+                const errors = res.body.errors || [];
+                expect(errors.length, 'an outward-facing endpoint must be refused')
+                    .to.be.greaterThan(0);
+                expect(errors[0].message, 'the refusal names the field').to.contain('baseUrl');
+            });
+
+        cy.apollo({query: settingsQuery, variables: {siteKey}}).then(({data}) => {
+            expect(data.contentRevisionHistory.siteSettings.baseUrl,
+                'a refused endpoint must not reach the file').to.not.equal('http://169.254.169.254');
         });
     });
 
