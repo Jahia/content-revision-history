@@ -11,6 +11,28 @@
 // node owns this history", two of which walked to the nearest jnt:page. See RevisionedAncestor.
 [jmix:publiclyRevisioned] mixin
  extends = jnt:page, jnt:content
+ // The mixin carries the SLOT as well as the marker, and the two belong together: ticking
+ // "Public revision history" is what should make it possible to put the list on the node.
+ //
+ // Without this, a structured type could be revisioned and still have nowhere to render its
+ // history. A page has wildcard areas, so the component can simply be dropped into one; a
+ // content type usually does not. jacademy:kbEntry, for instance, declares exactly one named
+ // child (`relatedlinks`) and no wildcard, so there was no legal place for the list inside it.
+ //
+ // It has to be INSIDE the revisioned node, which is why a slot is needed rather than advice to
+ // put the component next to it: RevisionedAncestor walks UP from the component to find its
+ // owner and stops at the first page, so a history sitting in a page area beside a revisioned
+ // content node resolves to no owner and reports "no snapshot recorded" forever.
+ //
+ // Declared here rather than in the consuming module on purpose. The alternative was for each
+ // module owning a revisionable type to add `+ revisionHistory (crh:revisionHistory)` itself,
+ // which makes that module fail to start unless this one is deployed -- a hard dependency for
+ // one optional feature on one content type. This way a consumer needs no change and no
+ // jahia-depends entry at all.
+ //
+ // Single and named, not `+ * (crh:revisionHistory)`: one node has one public revision history,
+ // and a wildcard would let an editor create several with nothing to say which is authoritative.
+ + revisionHistory (crh:revisionHistory)
 
 // Public, editorial container rendered on the page. Holds only revision entries.
 [crh:revisionHistory] > jnt:content, jmix:droppableContent, jmix:editorialContent, jmix:list
