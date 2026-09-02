@@ -525,6 +525,77 @@ describe('Publication mapping correctness', () => {
         }
     });
 
+    it('gives a revisioned node a legal place for its revision history', () => {
+        // Jmix:publiclyRevisioned carries the SLOT as well as the marker, because a structured
+        // content type usually has nowhere to put the list. A page has wildcard areas so the
+        // component can simply be dropped into one; jacademy:kbEntry, for instance, declares one
+        // named child and no wildcard, so there was no legal place for it inside.
+        //
+        // It has to be INSIDE the revisioned node: RevisionedAncestor walks UP from the component
+        // and stops at the first page, so a history placed in a page area beside a revisioned
+        // content node resolves to no owner and reports "no snapshot recorded" permanently.
+        //
+        // The negative case is the important half. Without it this test would pass just as well if
+        // the slot came from jnt:content, or from nowhere at all because the parent happened to
+        // allow any child.
+        const withMixin = `crh-slot-yes-${Date.now()}`;
+        const withoutMixin = `crh-slot-no-${Date.now()}`;
+        const contents = `/sites/${siteKey}/contents`;
+
+        addNode({
+            parentPathOrId: contents,
+            name: withMixin,
+            primaryNodeType: 'jnt:bigText',
+            mixins: ['jmix:publiclyRevisioned'],
+            properties: [{name: 'text', value: '<p>slot probe</p>', language}]
+        });
+        addNode({
+            parentPathOrId: contents,
+            name: withoutMixin,
+            primaryNodeType: 'jnt:bigText',
+            properties: [{name: 'text', value: '<p>no slot</p>', language}]
+        });
+
+        cy.apollo({
+            errorPolicy: 'all',
+            mutation: gql`
+                mutation addHistory($parent: String!) {
+                    jcr { addNode(parentPathOrId: $parent, name: "revisionHistory",
+                                  primaryNodeType: "crh:revisionHistory") { uuid } }
+                }
+            `,
+            variables: {parent: `${contents}/${withMixin}`}
+        }).then(accepted => {
+            expect(
+                (accepted as {errors?: unknown[]}).errors,
+                'the mixin must provide a legal place for the revision history'
+            ).to.be.undefined;
+
+            return cy.apollo({
+                errorPolicy: 'all',
+                mutation: gql`
+                    mutation addHistory($parent: String!) {
+                        jcr { addNode(parentPathOrId: $parent, name: "revisionHistory",
+                                      primaryNodeType: "crh:revisionHistory") { uuid } }
+                    }
+                `,
+                variables: {parent: `${contents}/${withoutMixin}`}
+            });
+        }).then(refused => {
+            const errors = (refused as {errors?: Array<{message?: string}>}).errors ?? [];
+
+            expect(errors.length, 'without the mixin there must be no such child definition').to.be
+                .greaterThan(0);
+            expect(
+                errors.map(e => e.message ?? '').join(' '),
+                'and the refusal must be the constraint, not some unrelated failure'
+            ).to.contain('No child node definition for revisionHistory');
+
+            deleteNode(`${contents}/${withMixin}`).then(null, () => undefined);
+            deleteNode(`${contents}/${withoutMixin}`).then(null, () => undefined);
+        });
+    });
+
     it('captures a revisioned CONTENT node that has no page of its own', () => {
         // Jmix:publiclyRevisioned extends jnt:content as well as jnt:page, so content that is
         // published and visible without a page of its own can carry a revision history.
