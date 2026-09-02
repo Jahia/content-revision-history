@@ -1,6 +1,37 @@
 Changelog
 =========
 
+## [1.4.1](https://github.com/Jahia/content-revision-history/compare/1_4_0...1_4_1) (2026-09-02)
+
+A host site's theme could decorate the module's own list items. Cosmetic on the revision list and
+considerably worse in the comparison panel, which can be hundreds of rows. Recommended for anyone
+running 1.4.0 on a site whose theme numbers ordered lists; nothing else changes, and no migration
+is needed.
+
+### Bug fixes
+
+* **css**: Stopped a host theme numbering the module's own list items. The Jahia Academy's theme
+  carries `.jac-content ol>li:before { content: counters(b,"."); counter-increment: b; ... }`,
+  which puts a numbered blue badge on every ordered-list item on the page; this module renders
+  inside `.jac-content` and emits two `<ol>`s, so the badge landed on every revision in the list and
+  on every row of every comparison. Both lists already set `list-style: none`, which removes the
+  NATIVE marker and does nothing about a generated one -- which is why it painted through a
+  stylesheet that looks like it should have stopped it. The override names the component root as
+  well as the list, deliberately: the host rule is (0,1,3) and the obvious
+  `.crh-revision-list > li::before` is only (0,1,2), so it loses and looks exactly like the fix not
+  working. `counter-increment` is reset as well as `content`, because the host rule advances a
+  counter shared with the page's own ordered lists -- left running, our rows would silently renumber
+  a genuine numbered list further down the host page. ([commit](https://github.com/Jahia/content-revision-history/commit/1e3215d))
+
+### Other changes
+
+* **test**: The new end-to-end case asserts what a browser computes rather than what a specificity
+  calculation predicts, and injects a control `<ol>` the module does not own to prove the host rule
+  is in force -- without it, a silently failed style injection would report `none` everywhere and
+  pass for the wrong reason. Verified by mutation: with the selectors weakened to the naive
+  one-class form, the suite goes 92/93 with only that test failing, on the real badge content. 93
+  end-to-end tests, up from 92. ([commit](https://github.com/Jahia/content-revision-history/commit/1e3215d))
+
 ## [1.4.0](https://github.com/Jahia/content-revision-history/compare/1_3_1...1_4_0) (2026-09-02)
 
 Per-site configuration, a settings panel to drive it, and the security work that turned out to be
