@@ -33,7 +33,7 @@ class RevisionDiffServiceTest {
         // session. Act/Assert on the gate DIRECTLY: asserting this through compare() proves
         // nothing, because with no repository compare() denies for several reasons at once and
         // the assertion passes just as well with the gate deleted. Verified by mutation.
-        assertFalse(service.viewerMayReadHistory(HISTORY),
+        assertFalse(service.viewerMayReadHistory(HISTORY, "live"),
                 "a permission check that cannot reach a verdict has not granted anything");
     }
 
@@ -44,7 +44,7 @@ class RevisionDiffServiceTest {
         // weaker but still necessary property: a security refusal must not escape as an
         // exception, which would surface as a server error page or be swallowed by a caller
         // that then carries on regardless.
-        RevisionDiffView view = service.compare(HISTORY, ONE, OTHER, "en");
+        RevisionDiffView view = service.compare(HISTORY, ONE, OTHER, "en", "live");
 
         assertNotNull(view, "the service must always return a view, never null");
         assertFalse(view.isAvailable());
@@ -54,14 +54,31 @@ class RevisionDiffServiceTest {
     }
 
     @Test
-    @DisplayName("With no request context, entries are read from the PUBLISHED workspace")
+    @DisplayName("The render's own workspace is honoured, both of them")
+    void renderingWorkspaceIsHonoured() {
+        // Both directions matter, and neither used to happen. The workspace is now supplied by
+        // the view from renderContext, because JCRSessionFactory's no-argument accessor answers
+        // "default" whatever is being rendered -- so the previous implementation could not return
+        // "live" at all except by throwing, and the permission gate built on it refused every
+        // anonymous visitor. See RevisionDiffService#viewerMayRead.
+        assertEquals("live", RevisionDiffService.renderingWorkspace("live"),
+                "a visitor's comparison must describe the entries they can actually see");
+        assertEquals("default", RevisionDiffService.renderingWorkspace("default"),
+                "hardcoding live would answer 'not found' for an unpublished revision that is "
+                        + "plainly on the screen in an editor's preview");
+    }
+
+    @Test
+    @DisplayName("An unrecognised workspace falls back to the PUBLISHED one")
     void renderingWorkspaceFallsBackToPublished() {
-        // Arrange -- no Jahia context, so the rendering workspace cannot be determined.
-        // Act/Assert. The direction of this fallback matters: defaulting to "default" would make
-        // a comparison describe unpublished editorial values (a renamed label, a changed date) on
-        // a public page. Defaulting to "live" can only ever show less than the viewer might be
-        // entitled to, which is the safe direction for a public-facing feature.
-        assertEquals("live", RevisionDiffService.renderingWorkspace());
+        // The direction of this fallback matters: defaulting to "default" would make a comparison
+        // describe unpublished editorial values (a renamed label, a changed date) on a public
+        // page. Defaulting to "live" can only ever show less than the viewer might be entitled
+        // to, which is the safe direction for a public-facing feature.
+        for (String unusable : new String[]{null, "", "  ", "DEFAULT", "live2", "../default"}) {
+            assertEquals("live", RevisionDiffService.renderingWorkspace(unusable),
+                    "must fall back rather than pass through: " + unusable);
+        }
     }
 
     @Test
@@ -72,7 +89,7 @@ class RevisionDiffServiceTest {
         for (String bad : new String[]{null, "", "../../etc", "not-a-uuid",
                 "11111111-1111-1111-1111-11111111111"}) {
             // Act
-            RevisionDiffView view = service.compare(HISTORY, bad, OTHER, "en");
+            RevisionDiffView view = service.compare(HISTORY, bad, OTHER, "en", "live");
 
             // Assert
             assertFalse(view.isAvailable(), "must refuse: " + bad);
@@ -84,7 +101,7 @@ class RevisionDiffServiceTest {
     @DisplayName("Comparing a revision with itself is answered before the permission gate")
     void sameRevisionIsAnsweredEarly() {
         // Arrange/Act -- a pure argument fact, so it needs no session and must not depend on one.
-        RevisionDiffView view = service.compare(HISTORY, ONE, ONE, "en");
+        RevisionDiffView view = service.compare(HISTORY, ONE, ONE, "en", "live");
 
         // Assert
         assertFalse(view.isAvailable());

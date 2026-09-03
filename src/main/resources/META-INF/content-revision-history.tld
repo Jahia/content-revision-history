@@ -53,8 +53,8 @@
         </description>
         <name>compare</name>
         <function-class>org.jahia.modules.revisionhistory.RevisionHistoryFunctions</function-class>
-        <function-signature>org.jahia.modules.revisionhistory.RevisionDiffView compare(java.lang.String, java.lang.String, java.lang.String, java.lang.String)</function-signature>
-        <example>${crh:compare(currentNode.identifier, selectedFrom, selectedTo, currentResource.locale)}</example>
+        <function-signature>org.jahia.modules.revisionhistory.RevisionDiffView compare(java.lang.String, java.lang.String, java.lang.String, java.lang.String, java.lang.String)</function-signature>
+        <example>${crh:compare(currentNode.identifier, selectedFrom, selectedTo, currentResource.locale, renderContext.workspace)}</example>
     </function>
     <function>
         <description>

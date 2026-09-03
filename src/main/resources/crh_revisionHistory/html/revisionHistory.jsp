@@ -175,8 +175,13 @@
              toString(), which yields the underscore form Jahia uses for language codes and for
              the snapshot folder name ("pt_BR"). locale.language returns only the primary subtag
              ("pt"), so on any region-qualified site the lookup missed the folder capture had
-             written and every comparison answered "no snapshot recorded" forever. --%>
-        <c:set var="view" value="${crh:compare(currentNode.identifier, selectedFrom, selectedTo, currentResource.locale)}"/>
+             written and every comparison answered "no snapshot recorded" forever.
+
+             renderContext.workspace is passed because only the view knows it. The service used to
+             ask JCRSessionFactory, whose no-argument accessor answers "default" regardless of what
+             is being rendered, and its permission gate therefore refused every anonymous visitor
+             on a perfectly public page. --%>
+        <c:set var="view" value="${crh:compare(currentNode.identifier, selectedFrom, selectedTo, currentResource.locale, renderContext.workspace)}"/>
 
         <%-- A plain section, deliberately. revision-history.js adds popover="auto" and
              role="dialog" at runtime; writing them here would hide the comparison outright from

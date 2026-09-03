@@ -88,10 +88,13 @@ public class RevisionDiffService {
      * @param oneIdentifier     one selected revision; <b>visitor-supplied, never trusted</b>
      * @param otherIdentifier   the other selected revision; likewise untrusted
      * @param language          the rendering language, selecting the snapshot partition
+     * @param workspace         the workspace this page is being rendered from, from the view's own
+     *                          {@code renderContext}; see {@link #renderingWorkspace(String)} for
+     *                          why it cannot be inferred here instead
      * @return always a view; ask {@link RevisionDiffView#isAvailable()} before reading the diff
      */
     public RevisionDiffView compare(String historyIdentifier, String oneIdentifier,
-                                    String otherIdentifier, String language) {
+                                    String otherIdentifier, String language, String workspace) {
         if (!isIdentifier(historyIdentifier) || !isIdentifier(oneIdentifier)
                 || !isIdentifier(otherIdentifier)) {
             return RevisionDiffView.unavailable(REASON_NOT_FOUND, null);
@@ -99,7 +102,10 @@ public class RevisionDiffService {
         if (oneIdentifier.equals(otherIdentifier)) {
             return RevisionDiffView.unavailable(REASON_SAME_REVISION, null);
         }
-        if (!viewerMayReadHistory(historyIdentifier)) {
+        // Normalised first so the gate and the read it guards can never disagree about which
+        // workspace the question was asked in.
+        final String entryWorkspace = renderingWorkspace(workspace);
+        if (!viewerMayReadHistory(historyIdentifier, entryWorkspace)) {
             // Deliberately the same answer as a bad identifier: a viewer who may not see this
             // history must not be able to tell it apart from one that does not exist.
             return RevisionDiffView.unavailable(REASON_NOT_FOUND, null);
@@ -111,7 +117,6 @@ public class RevisionDiffService {
             // same entries the visitor just chose from. Snapshots are never published at all, so
             // they can only come from `default`. Reading both from `default` meant the control
             // and its result could describe different revisions.
-            final String entryWorkspace = renderingWorkspace();
             // Locale, not null: crh:snapshotRef is i18n, so without one the session cannot resolve
             // the pin and every pinned revision would compare as though it had never been pinned.
             return JCRTemplate.getInstance().doExecuteWithSystemSessionAsUser(null, entryWorkspace,
@@ -166,8 +171,8 @@ public class RevisionDiffService {
         String newerLabel = stringOrNull(newer, PROP_REVISION_LABEL);
         String olderLabel = stringOrNull(older, PROP_REVISION_LABEL);
 
-        Map<String, JCRNodeWrapper> snapshotByEntry =
-                snapshotsFor(snapshotSession, history, language);
+        Map<String, JCRNodeWrapper> snapshotByEntry = snapshotsFor(snapshotSession, history,
+                language, entrySession.getWorkspace().getName());
         JCRNodeWrapper newerSnapshot = snapshotByEntry.get(newer.getIdentifier());
         JCRNodeWrapper olderSnapshot = snapshotByEntry.get(older.getIdentifier());
         if (newerSnapshot == null) {
@@ -228,24 +233,36 @@ public class RevisionDiffService {
      * {@link #compare} instead proves nothing: with no repository, compare denies for a dozen
      * reasons at once, so the assertion passes just as well with this gate deleted.
      */
-    boolean viewerMayReadHistory(String historyIdentifier) {
-        return viewerMayRead(historyIdentifier);
+    boolean viewerMayReadHistory(String historyIdentifier, String workspace) {
+        return viewerMayRead(historyIdentifier, workspace);
     }
 
     /**
-     * Can the current user read this node in their own session?
+     * Can the current user read this node in their own session, in the workspace being rendered?
+     *
+     * <p><b>The workspace argument is the whole correctness of this check.</b>
+     * {@code JCRSessionFactory.getCurrentUserSession()} resolves the USER from the thread but
+     * hard-defaults the WORKSPACE to {@code default}: in the 8.2.3.2 bytecode a null workspace is
+     * replaced by the literal {@code "default"}, with no thread-local inference of the render's
+     * workspace anywhere. So the no-argument call does not mean "the session this page is being
+     * rendered with", it means "the current user, in the EDIT workspace". An anonymous visitor has
+     * no read access to {@code default} at all, so asking it denied every guest -- on content as
+     * public as content gets -- while every editor passed, which is exactly why reviewing and
+     * testing as {@code root} never showed it. Measured on a published page, one URL, differing
+     * only by authentication: guest got "not part of this history", root got the diff.
      *
      * <p>One implementation for both questions the gate asks -- the history component, and the page
      * the snapshots actually belong to. Two copies of a fail-closed permission check are two
      * chances for one of them to stop failing closed.
      */
-    private boolean viewerMayRead(String identifier) {
+    private boolean viewerMayRead(String identifier, String workspace) {
         try {
-            JCRSessionWrapper viewer = JCRSessionFactory.getInstance().getCurrentUserSession();
+            JCRSessionWrapper viewer =
+                    JCRSessionFactory.getInstance().getCurrentUserSession(workspace);
             return viewer != null && viewer.getNodeByIdentifier(identifier) != null;
         } catch (RepositoryException | RuntimeException denied) {
-            logger.debug("Refusing access to {}: the current user cannot read it",
-                    identifier, denied);
+            logger.debug("Refusing access to {} in {}: the current user cannot read it",
+                    identifier, workspace, denied);
             return false;
         }
     }
@@ -258,21 +275,23 @@ public class RevisionDiffService {
      * make an editor's preview of an unpublished entry answer "not found" for a revision that is
      * plainly on the screen in front of them.
      *
-     * <p>Falls back to {@code live} when there is no request context, because the fallback for a
-     * public-facing feature should be the published view, never the editorial one. Package-private
-     * so that choice is pinned by a test rather than left to whoever edits this next.
+     * <p>Supplied by the view, because the view is the only thing that actually knows.
+     * {@code renderContext.getWorkspace()} is the render's own answer; the session factory's is
+     * not, and asking it instead is what produced the defect described on {@link #viewerMayRead}.
+     * It also meant this method could never return {@code live} except by throwing, so the
+     * paragraph above described an intention the code did not implement.
+     *
+     * <p>Normalised to the two workspaces that exist rather than passed through, and anything else
+     * falls back to {@code live}, because the fallback for a public-facing feature should be the
+     * published view and never the editorial one. Package-private so that choice is pinned by a
+     * test rather than left to whoever edits this next.
      */
-    static String renderingWorkspace() {
-        try {
-            JCRSessionWrapper current = JCRSessionFactory.getInstance().getCurrentUserSession();
-            String name = current == null || current.getWorkspace() == null
-                    ? null : current.getWorkspace().getName();
-            return name == null || name.trim().isEmpty() ? PUBLISHED_WORKSPACE : name;
-        } catch (RepositoryException | RuntimeException noContext) {
-            logger.debug("No rendering workspace could be determined; comparing published entries",
-                    noContext);
-            return PUBLISHED_WORKSPACE;
+    static String renderingWorkspace(String requested) {
+        if (WORKSPACE.equals(requested) || PUBLISHED_WORKSPACE.equals(requested)) {
+            return requested;
         }
+        logger.debug("No usable rendering workspace ({}); comparing published entries", requested);
+        return PUBLISHED_WORKSPACE;
     }
 
     private static boolean isIdentifier(String value) {
@@ -299,7 +318,8 @@ public class RevisionDiffService {
      * fall out of step with the snapshots themselves.
      */
     private Map<String, JCRNodeWrapper> snapshotsFor(JCRSessionWrapper session,
-                                                     JCRNodeWrapper history, String language)
+                                                     JCRNodeWrapper history, String language,
+                                                     String viewerWorkspace)
             throws RepositoryException {
         JCRNodeWrapper page = enclosingPage(history);
         if (page == null) {
@@ -312,7 +332,7 @@ public class RevisionDiffService {
         // made public while everything served underneath it -- snapshots of the page, flattened by
         // a capture principal and read here with a system session -- came from the page that is
         // not. Authorise the object whose content is actually returned.
-        if (!viewerMayRead(page.getIdentifier())) {
+        if (!viewerMayRead(page.getIdentifier(), viewerWorkspace)) {
             logger.debug("Refusing snapshots of {}: the current user cannot read the page itself",
                     page.getPath());
             return Collections.emptyMap();
