@@ -1,7 +1,42 @@
 Changelog
 =========
 
-## [Unreleased]
+## [1.4.6](https://github.com/Jahia/content-revision-history/compare/1_4_5...1_4_6) (2026-09-03)
+
+**Recommended for every deployment serving a revision history to the public.** Comparing two
+revisions was refused for anyone not logged in, so the module's central feature did not work for
+the audience it exists for. No migration is needed.
+
+One behaviour change to be aware of: a visitor's comparison now describes **published** revision
+entries. It previously described drafts, so an unpublished label or date change was visible on the
+live site.
+
+### Bug fixes
+
+* **diff**: A comparison is authorised in the workspace being rendered. It was authorised in the
+  `default` (edit) workspace no matter what was being served, because
+  `JCRSessionFactory.getCurrentUserSession()` resolves the current *user* from the thread but
+  hard-defaults the *workspace* -- verified in the 8.2.3.2 bytecode, where a null workspace is
+  replaced by the literal `"default"` with no inference of the render's own workspace anywhere.
+  Jahia does not grant `jcr:read_default` to `guest` (measured: 404 on `/cms/render/default`, 200
+  on `/cms/render/live`), so every anonymous visitor was refused with *"One of the selected
+  revisions is not part of this history."* on entirely public content, while every editor passed.
+  The workspace now comes from the view's own `renderContext`. Two further consequences of the same
+  cause are fixed with it: the rendering workspace could never resolve to `live` except by throwing,
+  so a live visitor's comparison described draft entries; and the page-level check behind the
+  snapshot lookup had the identical defect, failing more quietly as an empty panel.
+  ([commit](https://github.com/Jahia/content-revision-history/commit/853e666))
+
+* **backfill**: The shipped Groovy script reconstructs a content node through its own view instead
+  of a page's. A `jacademy:kbEntry` keeps its body in an i18n property *on* the node, which a child
+  walk never sees, so the snapshot held only the title -- and a later comparison against it would
+  have reported the whole body as removed. `reconstruct` now mirrors the three markdown views:
+  a page composes heading-then-areas, a self-rendering type is fetched directly, and anything else
+  emits its own title, its own text properties, then its children, reading those properties through
+  the same `crh:textProperties` the view calls so the two cannot disagree. The same change stops a
+  legitimately empty `jmix:list` aborting the whole run: the empty-body guard could not tell an
+  empty container from silent content loss, and now skips it.
+  ([commit](https://github.com/Jahia/content-revision-history/commit/170d40c))
 
 ### Other changes
 
@@ -13,6 +48,13 @@ Changelog
   and the picker groups by purpose. The `base` branch disappears from the picker entirely as a
   result. Measured on 8.2.4.0: adding a supertype is not a MAJOR definition change, and both types
   move to the intended branch.
+  ([commit](https://github.com/Jahia/content-revision-history/commit/6c70567))
+
+* **tests**: The comparison suite now exercises the public surface as a genuine anonymous visitor.
+  Every spec logs in first and `cy.request` carries the session cookie, so 34 tests asserting the
+  public page were in fact asserting it as `root` -- which is why the defect above shipped. The new
+  tests prove they are anonymous by asserting the edit workspace refuses them, without which a
+  guest test that quietly stayed authenticated would pass just as well.
 
 ## [1.4.5](https://github.com/Jahia/content-revision-history/compare/1_4_4...1_4_5) (2026-09-02)
 
