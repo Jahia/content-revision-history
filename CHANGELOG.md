@@ -1,6 +1,46 @@
 Changelog
 =========
 
+## [1.4.7](https://github.com/Jahia/content-revision-history/compare/1_4_6...1_4_7) (2026-09-03)
+
+**Security release. Upgrade if this module is deployed at all, whether or not any page uses the
+feature.** No migration is needed and no content changes.
+
+### Security
+
+* **GHSA-4hvq-2x8x-49w2 -- stored cross-site scripting via the `.markdown` URL.** The markdown
+  views print node content unescaped, which is deliberate: `bigText.jsp` emits the rich-text
+  `text` property verbatim so `MarkdownNormalizer` can convert HTML to Markdown in one testable
+  place. What made it exploitable was the response *header*. Jahia's `Render` servlet falls back to
+  `getDefaultContentType(templateType)` for a template type absent from its injected map -- which
+  holds only `csv, ics, json, html, rss, text, vcf, xml, js` -- so `markdown` fell through to
+  `text/html; charset=UTF-8`, and every `.markdown` URL was an unescaped HTML document reachable
+  with no session. Reproduced on 8.2.3.2 against 1.4.6: an anonymous GET answered `200` with
+  `Content-Type: text/html` and `<img src=x onerror=...>` placed in a page title came back
+  byte-for-byte intact. **Scope was wider than the module's own feature:** the markdown views are
+  registered for the core types `jnt:page`, `jnt:content` and `jnt:bigText`, so deploying this
+  module added the surface to every page in the installation -- a site that never enabled revision
+  history was exposed anyway. Planting requires editor-tier rights and the victim must open the
+  `.markdown` URL, which is not a normal browsing path, so severity is moderate (CVSS 5.4); the URL
+  is nonetheless public, linkable and unauthenticated. `MarkdownContentTypeFilter` now declares
+  `text/plain; charset=UTF-8` and `X-Content-Type-Options: nosniff` for the whole template type,
+  which fixes the surface rather than the four print sites. Escaping was rejected as the fix: it
+  would archive `<p>Hello</p>` as its own source instead of converting it to `Hello`, corrupting
+  the record the module exists to keep, and it fixes four print sites rather than the class -- the
+  fourth was added to a markdown view after the first report. The response *body* is deliberately
+  unchanged, because the snapshot has to say what the page said, and the display paths were already
+  escaped. Capture is unaffected and was re-tested end to end.
+  ([commit](https://github.com/Jahia/content-revision-history/commit/ec59ec5))
+
+### Other changes
+
+* **tests**: `12-markdownResponseType` asserts the response type on a real render, for a revisioned
+  page and for a page that never opted in, and asserts the content is still returned verbatim -- so
+  a future "fix" that escapes instead of labelling fails loudly. Six unit tests pin the wiring the
+  header depends on, including that the filter's priority stays below `TemplateScriptFilter`'s
+  final 99.0: above it the filter is registered, reported as active, and never runs, and the only
+  symptom would be the header quietly going back to `text/html`.
+
 ## [1.4.6](https://github.com/Jahia/content-revision-history/compare/1_4_5...1_4_6) (2026-09-03)
 
 **Recommended for every deployment serving a revision history to the public.** Comparing two
