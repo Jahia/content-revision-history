@@ -174,6 +174,36 @@ recording because the filter approach looks attractive:
 - The render used the **visitor's** session, so an editor's first visit captured content that
   anonymous users may not see — and that snapshot was destined to be published.
 
+### The `.markdown` URL is served as plain text, deliberately
+
+The markdown views print node content **unescaped**, and that is intentional: `bigText.jsp` emits
+the rich-text `text` property verbatim so `MarkdownNormalizer` can convert HTML to Markdown in one
+testable place, and the generic fallback does the same for every text-bearing property. Escaping
+there would archive `<p>Hello</p>` as its own source instead of converting it to `Hello`, corrupting
+the record the module exists to keep.
+
+Up to 1.4.6 that combined with a Jahia default to produce **stored cross-site scripting**
+(GHSA-4hvq-2x8x-49w2). Jahia's `Render` servlet takes the response type from
+`RenderContext.getContentType()` and otherwise falls back to `getDefaultContentType(templateType)`,
+whose injected map holds only `csv, ics, json, html, rss, text, vcf, xml, js`. `markdown` is not
+among them, so the fallback returned `text/html; charset=UTF-8` and every `.markdown` URL was an
+unescaped HTML document — reachable anonymously, on **every page in the installation**, because the
+views are registered for the core types `jnt:page`, `jnt:content` and `jnt:bigText` rather than for
+this module's own. A site that never enabled the feature was exposed by having the module deployed.
+
+`MarkdownContentTypeFilter` fixes it at the surface rather than at the four print sites, by
+declaring `text/plain; charset=UTF-8` plus `X-Content-Type-Options: nosniff` for the whole template
+type. Measured on 8.2.3.2, anonymously, before and after: `text/html` with the payload intact, then
+`text/plain` with the payload intact. The bytes are unchanged — what changed is that the browser is
+no longer told to parse them as a document. Capture is unaffected: `GuestMarkdownFetcher` already
+sends `Accept: text/html, text/plain`, reads raw UTF-8 bytes and never inspects the type, and jsoup
+parses markup regardless of the header it arrived under.
+
+Two things follow for anyone editing this module. **Do not "fix" a raw print in a markdown view by
+escaping it** — the spec `12-markdownResponseType` fails if you do, and it should. And **do not
+raise the filter's priority above 99**: `TemplateScriptFilter` is final at 99.0, so a higher number
+means the filter never runs and the response quietly goes back to being HTML.
+
 ## How the editorial and captured halves join
 
 An editor authors a **revision entry** (label, date, summary); the module captures **snapshots**.
