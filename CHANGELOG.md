@@ -1,7 +1,38 @@
 Changelog
 =========
 
-## Unreleased
+## [1.4.8](https://github.com/Jahia/content-revision-history/compare/1_4_7...1_4_8) (2026-09-04)
+
+**Security release, and it supersedes 1.4.7 -- upgrade even if you already installed 1.4.7.** The
+1.4.7 fix for GHSA-4hvq-2x8x-49w2 held for only one request per cache lifetime; this completes it,
+and closes a second exposure where the `.markdown` endpoint was reachable on every page. It is also
+a large fidelity release: the snapshot and the comparison viewer now agree with the page in cases
+where they did not. No migration and no content change -- existing snapshots are untouched (the
+Markdown generator version moved to 6, so a comparison that spans the change is flagged as a
+formatting change, as designed).
+
+### Security
+
+* **GHSA-4hvq-2x8x-49w2 completed -- the 1.4.7 fix held for only one request per cache lifetime.**
+  `MarkdownContentTypeFilter` ran at priority 98, above Jahia's fragment cache (`CacheFilter`
+  16.5), and the render chain stops at the first filter whose `prepare()` returns content -- which
+  on a cache hit is the cache filter. So the `text/plain` + `nosniff` headers were set on the cache
+  *miss* only; every following anonymous request of the same `.markdown` URL was served as
+  `text/html` with the unescaped body. Measured on 8.2.3.2 with 1.4.7 deployed: request 1
+  `text/plain`, requests 2 and 3 `text/html`. The filter now runs at priority 5, ahead of every
+  filter that can end the chain early. **1.4.7 is vulnerable; 1.4.8 is the patched version.**
+* The unit test pins the real bound (`< 16`, the cache) instead of `< 99` (`TemplateScriptFilter`),
+  and `12-markdownResponseType` asserts the headers on a sequence of byte-identical requests after
+  the publication's asynchronous cache flush has settled -- the single fetches it made before could
+  pass against a filter that only worked on a miss, and did.
+* **The `.markdown` endpoint is gated to opted-in pages** (#46). The markdown views are registered
+  on the core `jnt:page`/`jnt:content` types, so installing the module opened an anonymous
+  `.markdown` URL on *every* page of every site, and `crh:textProperties` handed a visitor every
+  text-bearing property of every guest-readable node -- including properties the page's HTML view
+  never displays. Not an ACL bypass, but it crossed "not shown by the template" into "not exposed"
+  and broke the promise to change nothing until a page opts in. A `.markdown` render whose page is
+  not within a `jmix:publiclyRevisioned` node now answers 404 with no body. Capture is unaffected:
+  it only ever fetches `.markdown` for a revisioned page or content node.
 
 ### Fixed -- fidelity of the record
 
@@ -24,6 +55,7 @@ Changelog
   everywhere, the viewer honours the escapes, and `*italic*` is rendered.
 * Generator version bumped to 6. Snapshots written by earlier generators are unchanged; a
   comparison across the boundary is flagged as a formatting change, as before.
+
 ### Fixed -- capture trigger
 
 * **A revisioned content node inside a container is captured** (#19). The path memo answered for
@@ -37,6 +69,34 @@ Changelog
 * `PublicationSnapshotListener` has unit tests for the first time (#37): revisioned block in a
   container, on a plain page, revisioned sub-page, plain page, language union, memo reuse, and the
   three cancellation outcomes.
+
+### Fixed -- page snapshots
+
+* **A page's snapshot no longer includes its sub-pages** (#23). Sub-pages are children of the page
+  node and the page view recursed into them, so revisioning `/home` snapshotted the whole site
+  (a permanent `OVERSIZE`), and under the cap a republish after an unrelated sub-page changed made
+  the comparison show text that never appeared on the page. A sub-page owns its own history when
+  it opts in.
+
+### Fixed -- comparison viewer
+
+* **An emphasis span covering more than one sentence is no longer shredded** (#47). The sentence
+  splitter masks `[...](...)` links but nothing masked `*...*` / `**...**`, so a two-sentence
+  italic had its delimiters split across lines and the viewer showed literal asterisks. Emphasis
+  spans are masked like links now (escaped `\*` from #27 is not mistaken for a delimiter).
+* **Content beginning a line with `#`, `- ` or `N. ` is no longer shown as a heading or list item**
+  (#44). The normaliser escapes those shapes at the start of content lines (`\#`, `\-`, `2\.`),
+  leaving its own headings, list items and fenced code untouched; the viewer already unescapes them.
+  Same class as #27, at the other position.
+
+### Fixed -- revision summaries
+
+* **Site-relative and fragment links in a revision summary keep their `href`** (#26). The
+  sanitiser resolved every URL against an empty base URI, which fails for a relative link, so
+  jsoup stripped the attribute and "see the <a>policy page</a>" rendered as dead text. Unwrapped
+  block elements (`div`, table cells, headings) are now separated by a space instead of running
+  together as `onetwo`.
+
 ### Fixed -- per-site settings
 
 * **Saving from the panel writes back to the file that configures the site** (#21). The target
@@ -62,13 +122,12 @@ Changelog
   resets the shared static credential after each test, and the global-principal fallback is
   asserted positively instead of relying on test order (#35).
 
-### Fixed -- revision summaries
+### Fixed -- durable status
 
-* **Site-relative and fragment links in a revision summary keep their `href`** (#26). The
-  sanitiser resolved every URL against an empty base URI, which fails for a relative link, so
-  jsoup stripped the attribute and "see the <a>policy page</a>" rendered as dead text. Unwrapped
-  block elements (`div`, table cells, headings) are now separated by a space instead of running
-  together as `onetwo`.
+* **A capture failure can always be recorded** (#48). `recordStatus` reached a language guard that
+  validated against the site's configured languages while capture is triggered for its active-live
+  languages; when they differed the durable FAILED record threw and was swallowed, leaving the gap
+  only in the log. The guard now accepts the union of both sets.
 
 ### Tests
 
@@ -78,60 +137,6 @@ Changelog
 * Capture: coordinate validation is tested through the public write path rather than by reflection
   on the patterns; the snapshot name is built in one place and the collision check is tested
   against a real session mock, including the unreadable case (#36).
-
-### Security
-
-* **The `.markdown` endpoint is gated to opted-in pages** (#46). The markdown views are registered
-  on the core `jnt:page`/`jnt:content` types, so installing the module opened an anonymous
-  `.markdown` URL on *every* page of every site, and `crh:textProperties` handed a visitor every
-  text-bearing property of every guest-readable node -- including properties the page's HTML view
-  never displays. Not an ACL bypass, but it crossed "not shown by the template" into "not exposed"
-  and broke the promise to change nothing until a page opts in. A `.markdown` render whose page is
-  not within a `jmix:publiclyRevisioned` node now answers 404 with no body. Capture is unaffected:
-  it only ever fetches `.markdown` for a revisioned page or content node.
-
-### Fixed -- comparison viewer
-
-* **An emphasis span covering more than one sentence is no longer shredded** (#47). The sentence
-  splitter masks `[...](...)` links but nothing masked `*...*` / `**...**`, so a two-sentence
-  italic had its delimiters split across lines and the viewer showed literal asterisks. Emphasis
-  spans are masked like links now (escaped `\*` from #27 is not mistaken for a delimiter).
-
-### Fixed -- durable status
-
-* **A capture failure can always be recorded** (#48). `recordStatus` reached a language guard that
-  validated against the site's configured languages while capture is triggered for its active-live
-  languages; when they differed the durable FAILED record threw and was swallowed, leaving the gap
-  only in the log. The guard now accepts the union of both sets.
-
-
-* **Content beginning a line with `#`, `- ` or `N. ` is no longer shown as a heading or list item**
-  (#44). The normaliser escapes those shapes at the start of content lines (`\#`, `\-`, `2\.`),
-  leaving its own headings, list items and fenced code untouched; the viewer already unescapes them.
-  Same class as #27, at the other position.
-
-### Fixed -- page snapshots
-
-* **A page's snapshot no longer includes its sub-pages** (#23). Sub-pages are children of the page
-  node and the page view recursed into them, so revisioning `/home` snapshotted the whole site
-  (a permanent `OVERSIZE`), and under the cap a republish after an unrelated sub-page changed made
-  the comparison show text that never appeared on the page. A sub-page owns its own history when
-  it opts in.
-
-### Security
-
-* **GHSA-4hvq-2x8x-49w2 -- the 1.4.7 fix held for one request per cache lifetime.**
-  `MarkdownContentTypeFilter` ran at priority 98, above Jahia's fragment cache (`CacheFilter`
-  16.5), and the render chain stops at the first filter whose `prepare()` returns content -- which
-  on a cache hit is the cache filter. So the `text/plain` + `nosniff` headers were set on the cache
-  *miss* only; every following anonymous request of the same `.markdown` URL was served as
-  `text/html` with the unescaped body. Measured on 8.2.3.2 with 1.4.7 deployed: request 1
-  `text/plain`, requests 2 and 3 `text/html`. The filter now runs at priority 5, ahead of every
-  filter that can end the chain early. **Treat 1.4.7 as vulnerable.**
-* The unit test pins the real bound (`< 16`, the cache) instead of `< 99` (`TemplateScriptFilter`),
-  and `12-markdownResponseType` asserts the headers on a sequence of byte-identical requests after
-  the publication's asynchronous cache flush has settled -- the single fetches it made before could
-  pass against a filter that only worked on a miss, and did.
 
 ## [1.4.7](https://github.com/Jahia/content-revision-history/compare/1_4_6...1_4_7) (2026-09-03)
 
