@@ -213,11 +213,12 @@ export const SiteSettings = () => {
                 </Field>
 
                 <Field id="crh-field-max-snapshots" label={t('settings.maxSnapshots')}>
+                    {/* 2 is SiteSettingsRegistry.MIN_MAX_SNAPSHOTS: retention never deletes the newest snapshot, so 1 cannot be honoured and the registry, save() and the mutation all refuse it. */}
                     <Input
                         data-sel-role="crh-max-snapshots"
                         aria-label={t('settings.maxSnapshots')}
                         type="number"
-                        min={1}
+                        min={2}
                         value={String(current.maxSnapshots)}
                         onChange={e => update({maxSnapshots: e.target.value})}
                     />

@@ -37,6 +37,30 @@ Changelog
 * `PublicationSnapshotListener` has unit tests for the first time (#37): revisioned block in a
   container, on a plain page, revisioned sub-page, plain page, language union, memo reuse, and the
   three cancellation outcomes.
+### Fixed -- per-site settings
+
+* **Saving from the panel writes back to the file that configures the site** (#21). The target
+  used to be derived from the site key alone, so a site configured from an operator-named file
+  (`...site-corp-prod.cfg`) got a second `...site-corp.cfg`, the hand-added `capture.secret` was
+  not carried into it, the two files competed across restarts and "Use defaults" removed only the
+  new one. The file FileInstall delivered the site from is remembered and rewritten.
+* **"Use defaults" takes effect immediately** (#28): the in-memory settings are cleared with the
+  file, so the panel's refetch no longer shows the deleted values and a publication in the
+  FileInstall window is not captured under them.
+* **One site-key rule** (#29): the registry applied a stricter pattern to the file name than the
+  capture path applied to the site, so `_intranet` captured normally but could not save settings.
+  Both now use the capture rule (`[A-Za-z0-9_-]`, one safe path segment).
+* **Validation failures reach the administrator** (#30): a line break or backslash in a value, an
+  unusable key, or a file refused unread now surface as GraphQL validation errors with the
+  registry's message instead of "Internal Server Error(s) while executing query".
+* The "Kept from the previous file" banner is written once, not once per save (#31).
+* One retention minimum everywhere (#32): a `retention.maxSnapshots` below 2 in the file is raised
+  to 2 with a warning, as `save()` and the mutation already refused it, and the panel's input says
+  `min=2`.
+* Tests: `carriageReturnIsRefused` now exercises the line-break check rather than the loopback guard
+  it was accidentally hitting, and the backslash refusal is tested (#34); `CaptureIdentityTest`
+  resets the shared static credential after each test, and the global-principal fallback is
+  asserted positively instead of relying on test order (#35).
 
 ### Security
 
