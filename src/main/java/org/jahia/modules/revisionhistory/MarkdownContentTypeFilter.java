@@ -1,5 +1,6 @@
 package org.jahia.modules.revisionhistory;
 
+import org.jahia.services.content.JCRNodeWrapper;
 import org.jahia.services.render.RenderContext;
 import org.jahia.services.render.Resource;
 import org.jahia.services.render.filter.AbstractFilter;
@@ -10,6 +11,7 @@ import org.osgi.service.component.annotations.Component;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javax.jcr.RepositoryException;
 import javax.servlet.http.HttpServletResponse;
 
 /**
@@ -66,6 +68,17 @@ import javax.servlet.http.HttpServletResponse;
  * GuestMarkdownFetcher} already sends {@code Accept: text/html, text/plain}, reads the body as raw
  * UTF-8 bytes and never inspects the response type, and jsoup parses markup regardless of the
  * header it arrived under.
+ *
+ * <p><b>It also gates the endpoint to opted-in pages.</b> The markdown views are registered on the
+ * core {@code jnt:page} / {@code jnt:content} types, so without a gate the {@code .markdown} URL
+ * exists for <em>every</em> page of every site the module is installed on, and {@code
+ * crh:textProperties} hands an anonymous visitor every text-bearing property of every
+ * guest-readable node -- including properties the node's HTML view never displays. That is not an
+ * ACL bypass (a guest-unreadable node still 404s), but it crosses "not shown by the template" into
+ * "not exposed", and it breaks the module's promise to change nothing until a page opts in (issue
+ * #46). So a {@code .markdown} render whose page is not within a {@code jmix:publiclyRevisioned}
+ * node answers 404 with no body. Capture is unaffected: it only ever fetches {@code .markdown} for
+ * a revisioned page or a revisioned content node, which is exactly what passes the gate.
  */
 @Component(service = RenderFilter.class, immediate = true)
 public class MarkdownContentTypeFilter extends AbstractFilter {
@@ -110,6 +123,15 @@ public class MarkdownContentTypeFilter extends AbstractFilter {
      */
     @Override
     public String prepare(RenderContext renderContext, Resource resource, RenderChain chain) {
+        if (!servesRevisionedContent(renderContext)) {
+            HttpServletResponse notFound = renderContext.getResponse();
+            if (notFound != null) {
+                notFound.setStatus(HttpServletResponse.SC_NOT_FOUND);
+            }
+            // Non-null return ends the chain here, at priority 5, before any view runs -- so not one
+            // property is emitted. The body is empty; the status is what marks it absent.
+            return "";
+        }
         renderContext.setContentType(MARKDOWN_CONTENT_TYPE);
         HttpServletResponse response = renderContext.getResponse();
         if (response != null) {
@@ -118,5 +140,31 @@ public class MarkdownContentTypeFilter extends AbstractFilter {
             response.setHeader(NOSNIFF_HEADER, NOSNIFF_VALUE);
         }
         return null;
+    }
+
+    /**
+     * @return whether the page being rendered opted into revision history -- the only pages allowed
+     *         to serve {@code .markdown}
+     *
+     * <p>The MAIN resource is what matters, not the filtered {@code resource}: a page's markdown
+     * composes nested {@code template:module} renders of its children, all sharing the one main
+     * resource, so one check on it settles the whole request. Fail-closed: if the mixin cannot be
+     * determined, the render is refused rather than risk exposing a page whose status is unknown --
+     * a refused capture records FAILED and retries on the next publish, which is recoverable;
+     * leaking is not.
+     */
+    private boolean servesRevisionedContent(RenderContext renderContext) {
+        Resource main = renderContext == null ? null : renderContext.getMainResource();
+        if (main == null) {
+            return false;
+        }
+        try {
+            JCRNodeWrapper node = main.getNode();
+            return node != null && RevisionedAncestor.of(node) != null;
+        } catch (RepositoryException | RuntimeException cannotTell) {
+            logger.warn("Could not determine whether the page for {} opted into revision history;"
+                    + " refusing its .markdown render", main.getPath(), cannotTell);
+            return false;
+        }
     }
 }

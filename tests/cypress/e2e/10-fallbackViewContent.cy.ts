@@ -114,13 +114,15 @@ describe('the generic markdown fallback emits content, not just titles', () => {
             expect(response.body, 'the parent snapshot must be what a visitor sees on THAT page')
                 .to.not.contain(subPageMarker);
         });
-        // The sub-page still renders on its own URL: skipping it from the parent loses nothing.
+        // The sub-page did not opt in, so its own .markdown is refused entirely (issue #46): the
+        // endpoint exists only for pages carrying jmix:publiclyRevisioned. It would serve if it
+        // opted in; skipping it from the parent is a separate rule (#23) from gating the endpoint.
         cy.request<string>({
             url: `/cms/render/default/${language}${subPagePath}.markdown`,
             failOnStatusCode: false
         }).then(response => {
-            expect(response.status).to.equal(200);
-            expect(response.body).to.contain(`# ${subPageMarker}`);
+            expect(response.status, 'a page that never opted in must not serve .markdown').to.equal(404);
+            expect(response.body ?? '', 'and must leak nothing').to.not.contain(subPageMarker);
         });
     });
 
