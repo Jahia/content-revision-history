@@ -324,8 +324,8 @@ public final class MarkdownDiff {
             Delta delta = deltas.get(i);
             int changeStart = delta.getOriginal().getPosition();
 
-            emitUnchangedRun(out, oldLines, oldTable, oldIndex, newIndex, changeStart - oldIndex,
-                    i > 0, true);
+            emitUnchangedRun(out, oldLines, oldTable, newTable, oldIndex, newIndex,
+                    changeStart - oldIndex, i > 0, true);
 
             newIndex += changeStart - oldIndex;
             oldIndex = changeStart;
@@ -338,8 +338,8 @@ public final class MarkdownDiff {
             newIndex += added.size();
         }
 
-        emitUnchangedRun(out, oldLines, oldTable, oldIndex, newIndex, oldLines.size() - oldIndex,
-                !deltas.isEmpty(), false);
+        emitUnchangedRun(out, oldLines, oldTable, newTable, oldIndex, newIndex,
+                oldLines.size() - oldIndex, !deltas.isEmpty(), false);
 
         return new Result(out, counter.added, counter.removed, truncated);
     }
@@ -406,8 +406,8 @@ public final class MarkdownDiff {
      * @param beforeChange whether a change follows it (so it needs leading context)
      */
     private static void emitUnchangedRun(List<Line> out, List<String> oldLines, boolean[] oldTable,
-                                         int oldStart, int newStart, int length, boolean afterChange,
-                                         boolean beforeChange) {
+                                         boolean[] newTable, int oldStart, int newStart, int length,
+                                         boolean afterChange, boolean beforeChange) {
         if (length <= 0) {
             return;
         }
@@ -416,24 +416,32 @@ public final class MarkdownDiff {
 
         if (length <= head + tail) {
             for (int i = 0; i < length; i++) {
-                out.add(unchanged(oldLines.get(oldStart + i), oldStart + i + 1, newStart + i + 1,
-                        oldTable[oldStart + i]));
+                emitUnchanged(out, oldLines, oldTable, newTable, oldStart + i, newStart + i);
             }
             return;
         }
         for (int i = 0; i < head; i++) {
-            out.add(unchanged(oldLines.get(oldStart + i), oldStart + i + 1, newStart + i + 1,
-                    oldTable[oldStart + i]));
+            emitUnchanged(out, oldLines, oldTable, newTable, oldStart + i, newStart + i);
         }
         out.add(new Line(LineType.GAP, "", -1, -1, length - head - tail, null, false));
         for (int i = length - tail; i < length; i++) {
-            out.add(unchanged(oldLines.get(oldStart + i), oldStart + i + 1, newStart + i + 1,
-                    oldTable[oldStart + i]));
+            emitUnchanged(out, oldLines, oldTable, newTable, oldStart + i, newStart + i);
         }
     }
 
-    private static Line unchanged(String text, int oldNumber, int newNumber, boolean inTable) {
-        return new Line(LineType.UNCHANGED, text, oldNumber, newNumber, 0, null, inTable);
+    /**
+     * An unchanged line is ONE {@link Line} shown on both sides, so its table formatting is decided
+     * from either revision: a header row whose text did not change is still a table header if a
+     * separator was added (or removed) beneath it in the other revision. Cells read better than a
+     * literal pipe, and the OR only ever renders as a table where a table genuinely exists on some
+     * side, so it never invents one from prose that has a pipe on both.
+     */
+    private static void emitUnchanged(List<Line> out, List<String> oldLines, boolean[] oldTable,
+                                      boolean[] newTable, int oldIndex, int newIndex) {
+        boolean inTable = oldTable[oldIndex]
+                || (newIndex < newTable.length && newTable[newIndex]);
+        out.add(new Line(LineType.UNCHANGED, oldLines.get(oldIndex), oldIndex + 1, newIndex + 1, 0,
+                null, inTable));
     }
 
     /**
@@ -491,9 +499,9 @@ public final class MarkdownDiff {
         return inTable;
     }
 
-    /** A separator row: two or more cells, every one exactly {@code ---}. */
+    /** A separator row: two or more cells, every one exactly {@code ---}, past any quote prefix. */
     private static boolean isSeparatorRow(String line) {
-        String[] cells = line.split(" \\| ", -1);
+        String[] cells = afterQuotePrefix(line).split(" \\| ", -1);
         if (cells.length < 2) {
             return false;
         }
@@ -506,7 +514,21 @@ public final class MarkdownDiff {
     }
 
     private static boolean hasCellBoundary(String line) {
-        return line.contains(" | ");
+        return afterQuotePrefix(line).contains(" | ");
+    }
+
+    /**
+     * Drops leading {@code "> "} quote prefixes so a table nested in a blockquote is still
+     * recognised: the normalizer prefixes every row, separator included, so {@code "> --- | ---"}
+     * must be read past the prefix -- the same strip {@link InlineMarkdown#parse} does before it
+     * reads the cells.
+     */
+    private static String afterQuotePrefix(String line) {
+        int i = 0;
+        while (i + 1 < line.length() && line.charAt(i) == '>' && line.charAt(i + 1) == ' ') {
+            i += 2;
+        }
+        return i == 0 ? line : line.substring(i);
     }
 
     /**

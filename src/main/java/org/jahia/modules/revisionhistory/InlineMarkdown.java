@@ -582,8 +582,24 @@ public final class InlineMarkdown {
         if (close + 1 >= end || raw.charAt(close + 1) != '(') {
             return null;
         }
-        int paren = raw.indexOf(')', close + 2);
-        if (paren < 0 || paren >= end) {
+        // Balance the parentheses rather than taking the first ')': an href may contain its own,
+        // e.g. https://en.wikipedia.org/wiki/Foo_(bar). The normalizer stores these unescaped, so
+        // the first ')' is often inside the URL, not the one that closes the link.
+        int depth = 1;
+        int paren = -1;
+        for (int j = close + 2; j < end; j++) {
+            char c = raw.charAt(j);
+            if (c == '(') {
+                depth++;
+            } else if (c == ')') {
+                depth--;
+                if (depth == 0) {
+                    paren = j;
+                    break;
+                }
+            }
+        }
+        if (paren < 0) {
             return null;
         }
         return new int[]{close, paren};

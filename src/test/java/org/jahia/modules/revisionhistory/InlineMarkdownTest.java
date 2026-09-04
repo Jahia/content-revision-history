@@ -10,6 +10,7 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -336,6 +337,34 @@ class InlineMarkdownTest {
 
         assertNull(onlyLink(parsed));
         assertEquals("a [bracketed] word", visible(parsed));
+    }
+
+    @Test
+    @DisplayName("a link href may contain balanced parentheses")
+    void linkHrefWithBalancedParens() {
+        // Wikipedia-style URLs: the href's own ')' must not be read as the link's closing paren.
+        // The normalizer stores these unescaped, so this is real generator output, not a fixture.
+        String raw = "[wiki](https://en.wikipedia.org/wiki/Foo_(bar))";
+        InlineMarkdown.Parsed parsed = InlineMarkdown.parse(raw, none());
+
+        InlineMarkdown.Piece link = onlyLink(parsed);
+        assertEquals("wiki", link.getText());
+        assertEquals("https://en.wikipedia.org/wiki/Foo_(bar)", link.getHref());
+        assertEquals("wiki", visible(parsed), "no stray ')' may leak out after the link");
+    }
+
+    @Test
+    @DisplayName("a quoted table row keeps its quote depth and still splits into cells")
+    void quotedTableRowSplitsIntoCells() {
+        // A table nested in a blockquote: the normalizer prefixes '> ' to every row. InlineMarkdown
+        // strips the prefix first, so the remainder is still read as table cells.
+        InlineMarkdown.Parsed parsed = InlineMarkdown.parse("> Name | Status", none(), true);
+
+        assertEquals(1, parsed.getQuoteDepth());
+        assertNotNull(parsed.getCells());
+        assertEquals(2, parsed.getCells().size());
+        assertEquals("Name", cellVisible(parsed, 0));
+        assertEquals("Status", cellVisible(parsed, 1));
     }
 
     @Test

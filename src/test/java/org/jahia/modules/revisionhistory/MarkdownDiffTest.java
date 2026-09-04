@@ -393,6 +393,35 @@ class MarkdownDiffTest {
     }
 
     @Test
+    @DisplayName("a table nested in a blockquote is still detected as a table")
+    void blockquotedTableDetected() {
+        // The normalizer prefixes '> ' to every row, so the separator is "> --- | ---". Detection
+        // must strip the quote prefix before recognising it, exactly as InlineMarkdown does.
+        String old = "> Name | Status\n> --- | ---\n> Alpha | Active\n> See notes\n";
+        String changed = "> Name | Status\n> --- | ---\n> Alpha | Retired\n> See notes\n";
+
+        MarkdownDiff.Result result = MarkdownDiff.compare(old, changed);
+
+        assertNotNull(lineWithText(result, "> Name | Status").getFormat().getCells(),
+                "a quoted header row is still a table row");
+        assertTrue(lineWithText(result, "> --- | ---").getFormat().isTableSeparator());
+    }
+
+    @Test
+    @DisplayName("an unchanged row is shown as a table when either revision makes it one")
+    void unchangedRowIsTableFromEitherSide() {
+        // The header text is byte-identical (hence unchanged), but a separator added beneath it
+        // turns it into a table header on the new side only. The shared line must still show cells.
+        String old = "Header | Status\n";
+        String changed = "Header | Status\n--- | ---\nRow1 | Active\n";
+
+        MarkdownDiff.Result result = MarkdownDiff.compare(old, changed);
+
+        assertNotNull(lineWithText(result, "Header | Status").getFormat().getCells(),
+                "an unchanged line that becomes a table header must render as cells");
+    }
+
+    @Test
     @DisplayName("a changed cell is highlighted in its own cell only")
     void changedCellHighlightsPerCell() {
         String old = TABLE_OLD;
