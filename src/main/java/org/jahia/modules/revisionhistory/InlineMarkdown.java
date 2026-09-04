@@ -102,12 +102,17 @@ public final class InlineMarkdown {
     /** One line, split into its line-level shape and its inline runs. */
     public static final class Parsed {
         private final int headingLevel;
+        private final int quoteDepth;
+        private final boolean horizontalRule;
         private final String listMarker;
         private final int listDepth;
         private final List<Piece> pieces;
 
-        Parsed(int headingLevel, String listMarker, int listDepth, List<Piece> pieces) {
+        Parsed(int headingLevel, int quoteDepth, boolean horizontalRule, String listMarker,
+               int listDepth, List<Piece> pieces) {
             this.headingLevel = headingLevel;
+            this.quoteDepth = quoteDepth;
+            this.horizontalRule = horizontalRule;
             this.listMarker = listMarker;
             this.listDepth = listDepth;
             this.pieces = Collections.unmodifiableList(pieces);
@@ -123,6 +128,31 @@ public final class InlineMarkdown {
          */
         public int getHeadingLevel() {
             return headingLevel;
+        }
+
+        /**
+         * @return the number of {@code > } quote levels this line sits under, 0 when it is not
+         * quoted
+         *
+         * <p>{@link MarkdownNormalizer} re-applies the {@code > } prefix to every line of a
+         * quotation, and nests it once per enclosing {@code <blockquote>}, so the count is the
+         * nesting depth. The prefixes are removed from {@link #getPieces()}; what remains is the
+         * quoted line's own shape, which is why a heading or list inside a quote still reports its
+         * heading level or list marker.
+         */
+        public int getQuoteDepth() {
+            return quoteDepth;
+        }
+
+        /**
+         * @return true when the whole line is a horizontal rule ({@code ---}) and carries no text
+         *
+         * <p>{@link #getPieces()} is empty for a rule, so the view renders a divider and nothing
+         * else. A table separator row ({@code --- | ---}) is deliberately NOT a rule -- it is table
+         * structure, told apart by its pipes.
+         */
+        public boolean isHorizontalRule() {
+            return horizontalRule;
         }
 
         /** @return {@code "-"} for a bullet, the number text for an ordered item, else null */
@@ -148,11 +178,28 @@ public final class InlineMarkdown {
      */
     public static Parsed parse(String raw, List<MarkdownDiff.Segment> segments) {
         if (raw == null) {
-            return new Parsed(0, null, 0, new ArrayList<Piece>());
+            return new Parsed(0, 0, false, null, 0, new ArrayList<Piece>());
         }
         boolean[] changedByOffset = changedOffsets(raw, segments);
 
         int i = 0;
+        // Blockquote first: MarkdownNormalizer writes "> " per quote level, re-applied to every
+        // line and nested once per enclosing <blockquote>. Strip and count the prefixes; whatever
+        // remains is parsed as an ordinary line, so a quoted heading or list keeps its own shape.
+        int quoteDepth = 0;
+        while (i + 1 < raw.length() && raw.charAt(i) == '>' && raw.charAt(i + 1) == ' ') {
+            quoteDepth++;
+            i += 2;
+        }
+
+        // Horizontal rule: the normalizer emits exactly "---" for <hr>. Require the remainder to be
+        // those three dashes and nothing else, so a table separator row ("--- | ---") -- which has
+        // pipes -- is left to the table path rather than swallowed here.
+        if (raw.length() - i == 3 && raw.charAt(i) == '-' && raw.charAt(i + 1) == '-'
+                && raw.charAt(i + 2) == '-') {
+            return new Parsed(0, quoteDepth, true, null, 0, new ArrayList<Piece>());
+        }
+
         int headingLevel = 0;
         while (headingLevel < MAX_HEADING_LEVEL && i + headingLevel < raw.length()
                 && raw.charAt(i + headingLevel) == '#') {
@@ -193,7 +240,8 @@ public final class InlineMarkdown {
             }
         }
 
-        return new Parsed(headingLevel, listMarker, listDepth, run(raw, i, changedByOffset));
+        return new Parsed(headingLevel, quoteDepth, false, listMarker, listDepth,
+                run(raw, i, changedByOffset));
     }
 
     /**

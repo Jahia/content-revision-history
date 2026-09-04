@@ -106,6 +106,88 @@ class InlineMarkdownTest {
         assertEquals("-30% capacity", visible(parsed));
     }
 
+    // ------------------------------------------------------------------ blockquote
+
+    @Test
+    @DisplayName("a quoted line reports its depth and drops the '> ' prefix")
+    void blockquotePrefix() {
+        InlineMarkdown.Parsed parsed = InlineMarkdown.parse("> Quoted advice", none());
+
+        assertEquals(1, parsed.getQuoteDepth());
+        assertEquals("Quoted advice", visible(parsed));
+        assertEquals(0, parsed.getHeadingLevel());
+    }
+
+    @Test
+    @DisplayName("nested quotes count each '> ' as a level")
+    void nestedBlockquote() {
+        // MarkdownNormalizer re-applies '> ' per level, so a quote inside a quote is "> > ".
+        InlineMarkdown.Parsed parsed = InlineMarkdown.parse("> > Deeply quoted", none());
+
+        assertEquals(2, parsed.getQuoteDepth());
+        assertEquals("Deeply quoted", visible(parsed));
+    }
+
+    @Test
+    @DisplayName("a heading inside a quote keeps both its depth and its level")
+    void headingInsideBlockquote() {
+        // renderBlockquote prefixes every produced line, so a quoted heading is "> ## Title".
+        InlineMarkdown.Parsed parsed = InlineMarkdown.parse("> ## Quoted heading", none());
+
+        assertEquals(1, parsed.getQuoteDepth());
+        assertEquals(2, parsed.getHeadingLevel());
+        assertEquals("Quoted heading", visible(parsed));
+    }
+
+    @Test
+    @DisplayName("a '>' not followed by a space is content, not a quote")
+    void angleWithoutSpaceIsContent() {
+        // The prefix the normalizer writes is exactly "> "; a bare '>' is arithmetic or a chevron.
+        InlineMarkdown.Parsed parsed = InlineMarkdown.parse(">3 items remain", none());
+
+        assertEquals(0, parsed.getQuoteDepth());
+        assertEquals(">3 items remain", visible(parsed));
+    }
+
+    @Test
+    @DisplayName("a changed word in a quote is still highlighted after the prefix is removed")
+    void changedWordSurvivesQuotePrefix() {
+        InlineMarkdown.Parsed parsed = InlineMarkdown.parse("> Quoted policy",
+                segments("> Quoted ", false, "policy", true));
+
+        assertEquals("Quoted policy", visible(parsed));
+        assertEquals("policy", changedText(parsed), "the highlight must land past the '> '");
+    }
+
+    // ------------------------------------------------------------------ horizontal rule
+
+    @Test
+    @DisplayName("a line that is exactly '---' is a horizontal rule with no content")
+    void horizontalRule() {
+        InlineMarkdown.Parsed parsed = InlineMarkdown.parse("---", none());
+
+        assertTrue(parsed.isHorizontalRule());
+        assertEquals("", visible(parsed), "a rule carries no text");
+    }
+
+    @Test
+    @DisplayName("a table separator row is not mistaken for a horizontal rule")
+    void tableSeparatorIsNotARule() {
+        // "--- | --- | ---" contains dashes but is a table separator, handled elsewhere.
+        InlineMarkdown.Parsed parsed = InlineMarkdown.parse("--- | --- | ---", none());
+
+        assertFalse(parsed.isHorizontalRule(), "the pipes make this a separator row, not a rule");
+    }
+
+    @Test
+    @DisplayName("dashes with trailing text are content, not a rule")
+    void dashesWithTextAreContent() {
+        InlineMarkdown.Parsed parsed = InlineMarkdown.parse("---ish, roughly", none());
+
+        assertFalse(parsed.isHorizontalRule());
+        assertEquals("---ish, roughly", visible(parsed));
+    }
+
     // ------------------------------------------------------------------ inline marks
 
     @Test
