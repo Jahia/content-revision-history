@@ -79,6 +79,13 @@ Changelog
   on the patterns; the snapshot name is built in one place and the collision check is tested
   against a real session mock, including the unreadable case (#36).
 
+### Fixed -- comparison viewer
+
+* **Content beginning a line with `#`, `- ` or `N. ` is no longer shown as a heading or list item**
+  (#44). The normaliser escapes those shapes at the start of content lines (`\#`, `\-`, `2\.`),
+  leaving its own headings, list items and fenced code untouched; the viewer already unescapes them.
+  Same class as #27, at the other position.
+
 ### Fixed -- page snapshots
 
 * **A page's snapshot no longer includes its sub-pages** (#23). Sub-pages are children of the page

@@ -120,6 +120,23 @@ public final class MarkdownNormalizer {
     /** The Markdown quote prefix, re-applied per line by {@link #semanticLineBreaks}. */
     private static final String QUOTE_PREFIX = "> ";
 
+    /**
+     * Marks a line the normaliser itself made structural -- a heading, a list item, a fence or a
+     * line of fenced code -- so that {@link #escapeLineStart} leaves it alone. Private-use, like
+     * the link placeholder, and removed before output; it exists only between rendering and the
+     * sentence splitter, because lines start wherever the splitter cuts a sentence and only the
+     * renderer knows which starts are syntax (issue #44).
+     */
+    private static final char STRUCTURE = '\uE002';
+
+    /** Content shapes {@link InlineMarkdown} reads as line-level syntax: heading, bullet, ordered item. */
+    private static final Pattern LINE_START_HEADING = Pattern.compile("^#");
+    private static final Pattern LINE_START_BULLET = Pattern.compile("^- ");
+    private static final Pattern LINE_START_ORDERED = Pattern.compile("^(\\d+)\\. ");
+
+    /** A heading the markdown VIEWS emit as text: {@code # title}, {@code ## title}. */
+    private static final Pattern VIEW_HEADING = Pattern.compile("(?m)^(#{1,6} )");
+
     /** Elements whose bodies must never survive into the snapshot (scripts, styles, embedded SVG markup). */
     private static final String DANGEROUS_ELEMENTS = "script, style, noscript, svg, template";
 
@@ -256,7 +273,10 @@ public final class MarkdownNormalizer {
      */
     private static String viewText(String wholeText) {
         String spaced = UNICODE_SPACE.matcher(wholeText).replaceAll(" ");
-        return escapeInlineSyntax(LINE_LEADING_SPACE.matcher(spaced).replaceAll(""));
+        String escaped = escapeInlineSyntax(LINE_LEADING_SPACE.matcher(spaced).replaceAll(""));
+        // The views write headings as text ("# title"), so those line starts ARE syntax. Anything
+        // else a view emits at a line start -- a plain string beginning with "- " -- is content.
+        return VIEW_HEADING.matcher(escaped).replaceAll(STRUCTURE + "$1");
     }
 
     /**
@@ -353,7 +373,7 @@ public final class MarkdownNormalizer {
         ensureBlankLine(out);
         StringBuilder inner = new StringBuilder();
         renderChildren(el, inner, listDepth);
-        out.append("#".repeat(level)).append(' ').append(inner.toString().trim());
+        out.append(STRUCTURE).append("#".repeat(level)).append(' ').append(inner.toString().trim());
         ensureBlankLine(out);
     }
 
@@ -388,7 +408,11 @@ public final class MarkdownNormalizer {
         ensureBlankLine(out);
         String content = el.wholeText();
         String fence = fenceLongerThanAnyRunIn(content);
-        out.append(fence).append('\n').append(content).append('\n').append(fence);
+        // Every line of the block is structural: a code comment starting with '#' must not be
+        // escaped as though it were prose.
+        out.append(STRUCTURE).append(fence).append('\n')
+                .append(content.replace("\n", "\n" + STRUCTURE).isEmpty() ? "" : STRUCTURE + content.replace("\n", "\n" + STRUCTURE))
+                .append('\n').append(STRUCTURE).append(fence);
         ensureBlankLine(out);
     }
 
@@ -428,7 +452,7 @@ public final class MarkdownNormalizer {
                 continue;
             }
             ensureNewline(out);
-            out.append(indent).append(ordered ? (counter++ + ". ") : "- ");
+            out.append(indent).append(STRUCTURE).append(ordered ? (counter++ + ". ") : "- ");
             // Rendered into its own buffer so block children cannot separate the marker from the
             // text: <li><p>first</p></li> is CKEditor's routine output, and rendering it straight
             // into `out` produced "-\n\nfirst" -- a bare hyphen the comparison did not read as a
@@ -712,10 +736,46 @@ public final class MarkdownNormalizer {
     }
 
     private static void appendTrimmedLine(StringBuilder sb, String paragraph, int start, int end) {
-        String line = paragraph.substring(start, end).trim();
-        if (!line.isEmpty()) {
-            sb.append(line).append('\n');
+        String segment = paragraph.substring(start, end).trim();
+        if (segment.isEmpty()) {
+            return;
         }
+        // A segment can hold several physical lines (a <br>, a nested list), and each one is a
+        // line start the viewer will read.
+        String[] lines = segment.split("\n", -1);
+        for (int i = 0; i < lines.length; i++) {
+            lines[i] = escapeLineStart(lines[i]);
+        }
+        sb.append(String.join("\n", lines)).append('\n');
+    }
+
+    /**
+     * Content that begins a line with what {@link InlineMarkdown} reads as line-level syntax is
+     * escaped; a line the renderer marked as structure has its marker removed and is left as is.
+     *
+     * <p>{@code Done. # not a heading} used to yield the line {@code # not a heading}, which the
+     * comparison panel showed as a heading; {@code - not a bullet} became a list item and
+     * {@code 2. Not a list} an ordered one. The archive was right and the panel misrepresented it
+     * -- the same defect as the inline asterisks of #27, at the other position (issue #44).
+     */
+    static String escapeLineStart(String line) {
+        int firstNonSpace = 0;
+        while (firstNonSpace < line.length() && line.charAt(firstNonSpace) == ' ') {
+            firstNonSpace++;
+        }
+        String indent = line.substring(0, firstNonSpace);
+        String body = line.substring(firstNonSpace);
+        if (body.indexOf(STRUCTURE) >= 0) {
+            return indent + body.replace(String.valueOf(STRUCTURE), "");
+        }
+        if (LINE_START_HEADING.matcher(body).find() || LINE_START_BULLET.matcher(body).find()) {
+            return indent + '\\' + body;
+        }
+        Matcher ordered = LINE_START_ORDERED.matcher(body);
+        if (ordered.find()) {
+            return indent + ordered.group(1) + "\\. " + body.substring(ordered.end());
+        }
+        return line;
     }
 
     /** True when the candidate sentence fragment ends with a known abbreviation, not a real end. */

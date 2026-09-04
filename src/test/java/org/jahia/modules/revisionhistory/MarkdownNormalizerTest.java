@@ -791,6 +791,61 @@ class MarkdownNormalizerTest {
         assertTrue(md.startsWith("# Rated \\*\\*\\*\\*\\*"), md);
     }
 
+
+    // --- #44: line-start syntax in content ------------------------------------------------------
+
+    @Test
+    @DisplayName("#44: content beginning a line with #, '- ' or 'N. ' is escaped; structure is not")
+    void lineStartSyntaxInContentIsEscaped() {
+        String md = MarkdownNormalizer.normalize(
+                "<h2>Real heading</h2>"
+                        + "<p># not a heading</p>"
+                        + "<p>Two lines.<br># after a break</p>"
+                        + "<p>- not a bullet</p>"
+                        // Lowercase after the dot: "2. Not" is a sentence boundary to BreakIterator and
+                        // would be split into "2." and "Not a list", which is a different (harmless)
+                        // shape -- "2." alone is content to the viewer.
+                        + "<p>2. not a list</p>"
+                        + "<ul><li>real item<ul><li>nested</li></ul></li></ul>"
+                        + "<ol start=\"3\"><li>third</li></ol>"
+                        + "<pre># a comment\n- code</pre>");
+
+        assertTrue(md.contains("## Real heading\n"), md);
+        assertTrue(md.contains("\n\\# not a heading\n"), md);
+        assertTrue(md.contains("Two lines.\n\\# after a break\n"), "a <br> starts a line too: " + md);
+        assertTrue(md.contains("\n\\- not a bullet\n"), md);
+        assertTrue(md.contains("\n2\\. not a list\n"), md);
+        assertTrue(md.contains("- real item\n  - nested\n"), md);
+        assertTrue(md.contains("3. third\n"), md);
+        assertTrue(md.contains("```\n# a comment\n- code\n```"), "fenced code is untouched: " + md);
+        assertFalse(md.contains("\uE002"), "the structure marker must never reach the output");
+    }
+
+    @Test
+    @DisplayName("#44: the viewer shows escaped line starts as the text they were")
+    void escapedLineStartsRoundTripThroughTheViewer() {
+        for (String raw : new String[]{"\\# not a heading", "\\- not a bullet", "2\\. Not a list"}) {
+            InlineMarkdown.Parsed parsed = InlineMarkdown.parse(raw, java.util.Collections.emptyList());
+            assertEquals(0, parsed.getHeadingLevel(), raw);
+            assertEquals(null, parsed.getListMarker(), raw);
+            StringBuilder visible = new StringBuilder();
+            for (InlineMarkdown.Piece piece : parsed.getPieces()) {
+                visible.append(piece.getText());
+            }
+            assertEquals(raw.replace("\\", ""), visible.toString());
+        }
+    }
+
+    @Test
+    @DisplayName("#44: view-emitted headings stay headings; a view-emitted plain string starting with '- ' does not")
+    void viewHeadingsAreStructureButViewStringsAreContent() {
+        String md = MarkdownNormalizer.normalize("# Page title\n\n## Section\n\n- a plain string value\n\n#1 priority\n");
+
+        assertTrue(md.startsWith("# Page title\n\n## Section\n"), md);
+        assertTrue(md.contains("\\- a plain string value"), md);
+        assertTrue(md.contains("\\#1 priority"), "'#' without a space is content to the viewer, escaped anyway: " + md);
+    }
+
     private static int countOf(String haystack, String needle) {
         int count = 0;
         for (int at = haystack.indexOf(needle); at >= 0; at = haystack.indexOf(needle, at + needle.length())) {
