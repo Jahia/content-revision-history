@@ -3,9 +3,11 @@ import {addNode, deleteNode, publishAndWaitJobEnding} from '@jahia/cypress';
 /**
  * The `.markdown` URL must not be an HTML document. This is a security regression test.
  *
- * GHSA-4hvq-2x8x-49w2, stored XSS, fixed in 1.4.7. The markdown views print node content with no
+ * GHSA-4hvq-2x8x-49w2, stored XSS, fixed in 1.4.7. The markdown views print RICH TEXT with no
  * escaping, and that is deliberate: `bigText.jsp` emits the rich-text `text` property verbatim so
- * `MarkdownNormalizer` can convert the HTML to Markdown in one testable place. What made it a
+ * `MarkdownNormalizer` can convert the HTML to Markdown in one testable place. (Plain strings and
+ * titles are escaped since issue #18 -- they are text, and a literal `<style>` in one swallowed the
+ * rest of the page -- but that is a fidelity rule, not the security fix.) What made it a
  * vulnerability was the response HEADER. Jahia's Render servlet falls back to
  * `getDefaultContentType(templateType)` for a type absent from its injected map -- which holds only
  * csv, ics, json, html, rss, text, vcf, xml, js -- so `markdown` fell through to
@@ -148,17 +150,19 @@ describe('the markdown template type is served as plain text, not HTML', () => {
         });
     });
 
-    it('still returns the content verbatim, because the record must stay faithful', () => {
-        // The fix must change how the bytes are LABELLED, never what they are. If a future change
-        // "fixes" this by escaping instead, this test fails -- and it should: escaping corrupts the
-        // archive, which is the one thing this module exists to keep.
+    it('still returns the content faithfully, because the record must say what the page said', () => {
+        // The header fix changes how the bytes are LABELLED, never what they mean. The payload sits
+        // in the page TITLE, which is plain text, so the view emits it HTML-escaped (issue #18): the
+        // parser reads it back as the literal text `<img ...>` and that is what the snapshot holds.
+        // Rich text (bigText) is still emitted raw so it can be converted rather than archived as
+        // its own source -- that path is covered by the capture specs.
+        const escapedPayload = payload.replace(/</g, '&lt;').replace(/>/g, '&gt;');
         fetchMarkdown(revisionedPagePath).then(response => {
             expect(response.body, 'the title text must survive').to.contain(marker);
-            expect(
-                response.body,
-                'the markup must reach the snapshot as text; escaping it here would archive rich ' +
-                    'text as its own source rather than converting it'
-            ).to.contain(payload);
+            expect(response.body, 'a plain-text title is escaped, not parsed').to.contain(escapedPayload);
+            expect(response.body, 'the raw tag must not appear: it would be parsed as markup').to.not.contain(
+                payload
+            );
         });
     });
 

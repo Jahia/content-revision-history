@@ -634,4 +634,168 @@ class MarkdownNormalizerTest {
 
         assertEquals("This is a long sentence that wrapped.\n", md);
     }
+
+    // --- Fidelity fixes (issues #18, #20, #22, #25, #27) ---------------------------------------
+
+    @Test
+    @DisplayName("generator version is 6: the fidelity fixes change the output of existing content")
+    void generatorVersionIsSixAfterTheFidelityFixes() {
+        // Tables, list items with block children, quotations, embeds and literal asterisks all
+        // normalise differently from generator 5. Pinned so the next output-changing edit has to
+        // bump it consciously, or the diff viewer cannot flag a formatting-only change.
+        assertEquals("6", MarkdownNormalizer.GENERATOR_VERSION);
+    }
+
+    @Test
+    @DisplayName("#18: a plain-text title holding a raw-text tag no longer swallows the rest of the page")
+    void escapedPlainTextRawTextTagDoesNotSwallowThePage() {
+        // Arrange: what the views now emit -- the title escaped (it is text), rich text raw.
+        String view = "# Set the &lt;style&gt; attribute here.\n\n<p>SECOND SECTION KEEPS GOING.</p>";
+
+        // Act
+        String md = MarkdownNormalizer.normalize(view);
+
+        // Assert: both halves survive, and the title reads as the text the property held.
+        assertTrue(md.contains("SECOND SECTION KEEPS GOING."), md);
+        assertTrue(md.contains("<style>"), "the record must say what the title said: " + md);
+    }
+
+    @Test
+    @DisplayName("#18: the same tag printed RAW still swallows the page -- which is why the views escape")
+    void rawRawTextTagStillSwallowsThePage() {
+        // Documents the hazard the escaping guards against, so nobody removes the escaping believing
+        // jsoup would cope. It does not: <style> is a raw-text element to an HTML parser and
+        // consumes everything to EOF, which DANGEROUS_ELEMENTS then removes.
+        String md = MarkdownNormalizer.normalize("# Set the <style> attribute here.\n\n<p>SECOND</p>");
+
+        assertFalse(md.contains("SECOND"), md);
+    }
+
+    @Test
+    @DisplayName("#20: rows of a nested table are rendered once, inside their cell")
+    void nestedTableRowsRenderOnce() {
+        String md = MarkdownNormalizer.normalize(
+                "<table><tr><td>outer<table><tr><td>inner</td></tr></table></td></tr></table>");
+
+        assertEquals(1, countOf(md, "inner"), "the inner row was emitted once per enclosing level: " + md);
+        assertTrue(md.contains("outer"), md);
+    }
+
+    @Test
+    @DisplayName("#20: output stays proportional to input for deeply nested tables")
+    void deeplyNestedTablesDoNotExplode() {
+        // Generator 5 grew about fourfold per level: 595 bytes at depth 18 became 262 KB and depth
+        // 26 exhausted a 512 MB heap in the capture job.
+        StringBuilder html = new StringBuilder();
+        int depth = 26;
+        for (int i = 0; i < depth; i++) {
+            html.append("<table><tr><td>L").append(i);
+        }
+        for (int i = 0; i < depth; i++) {
+            html.append("</td></tr></table>");
+        }
+
+        String md = MarkdownNormalizer.normalize(html.toString());
+
+        assertTrue(md.length() < html.length(), "output " + md.length() + " chars for " + html.length() + " in");
+        assertEquals(1, countOf(md, "L25"), md);
+    }
+
+    @Test
+    @DisplayName("#22: a list item wrapping a block element keeps its bullet")
+    void listItemWithBlockChildKeepsItsBullet() {
+        // CKEditor's routine output. Generator 5 produced "-\n\nfirst\n\n-\n\nsecond".
+        String md = MarkdownNormalizer.normalize("<ul><li><p>first</p></li><li><p>second</p></li></ul>");
+
+        assertEquals("- first\n- second\n", md);
+    }
+
+    @Test
+    @DisplayName("#22: a second paragraph inside an item continues the item, indented")
+    void secondParagraphInAnItemContinuesTheItem() {
+        String md = MarkdownNormalizer.normalize("<ul><li><p>first</p><p>more</p></li><li>second</li></ul>");
+
+        assertEquals("- first\n  more\n- second\n", md);
+    }
+
+    @Test
+    @DisplayName("#25: an ordered list honours its start number")
+    void orderedListHonoursStart() {
+        String md = MarkdownNormalizer.normalize("<ol start=\"3\"><li>a</li><li>b</li></ol>");
+
+        assertEquals("3. a\n4. b\n", md);
+    }
+
+    @Test
+    @DisplayName("#25: moving a sentence into a quotation is a visible change")
+    void blockquoteIsRecorded() {
+        String plain = MarkdownNormalizer.normalize("<p>We deny liability. We always did.</p>");
+        String quoted = MarkdownNormalizer.normalize("<blockquote><p>We deny liability. We always did.</p></blockquote>");
+
+        assertNotEquals(plain, quoted);
+        assertEquals("> We deny liability.\n> We always did.\n", quoted,
+                "every sentence line of the quotation carries the prefix");
+    }
+
+    @Test
+    @DisplayName("#25: an embed records its source, so a changed video is a changed record")
+    void embedSourceIsRecorded() {
+        String one = MarkdownNormalizer.normalize("<p>Watch:</p><iframe src=\"https://vid/1\"></iframe>");
+        String two = MarkdownNormalizer.normalize("<p>Watch:</p><iframe src=\"https://vid/2\"></iframe>");
+
+        assertNotEquals(one, two);
+        assertTrue(one.contains("[embed](https://vid/1)"), one);
+        String video = MarkdownNormalizer.normalize("<video><source src=\"https://vid/clip.mp4\"></video>");
+        assertTrue(video.contains("[embed](https://vid/clip.mp4)"), video);
+        String unsafe = MarkdownNormalizer.normalize("<iframe src=\"javascript:alert(1)\"></iframe>");
+        assertFalse(unsafe.contains("javascript"), unsafe);
+    }
+
+    @Test
+    @DisplayName("#25: a table caption, a header row and a rule are all in the record")
+    void captionHeaderRowAndRuleAreRecorded() {
+        String md = MarkdownNormalizer.normalize(
+                "<table><caption>Fees 2024</caption><tr><th>A</th><th>B</th></tr><tr><td>1</td><td>2</td></tr></table>"
+                        + "<hr><p>after</p>");
+
+        assertTrue(md.contains("Fees 2024"), md);
+        assertTrue(md.contains("A | B\n--- | ---\n1 | 2"), md);
+        assertTrue(md.contains("---\n\nafter"), md);
+        assertNotEquals(md, MarkdownNormalizer.normalize(
+                "<table><caption>Fees 2025</caption><tr><th>A</th><th>B</th></tr><tr><td>1</td><td>2</td></tr></table>"
+                        + "<hr><p>after</p>"));
+    }
+
+    @Test
+    @DisplayName("#27: literal backslashes and asterisks are escaped so the viewer shows the archive")
+    void literalInlineSyntaxIsEscaped() {
+        String md = MarkdownNormalizer.normalize("<p>Path is C:\\Users\\bob and 2 ** 8 is 256.</p>");
+
+        assertTrue(md.contains("C:\\\\Users\\\\bob"), md);
+        assertTrue(md.contains("2 \\*\\* 8"), md);
+        // Round trip: what the comparison displays is what the page said.
+        String line = md.trim();
+        StringBuilder visible = new StringBuilder();
+        for (InlineMarkdown.Piece piece : InlineMarkdown.parse(line, java.util.Collections.emptyList()).getPieces()) {
+            visible.append(piece.getText());
+            assertFalse(piece.isBold(), "a literal ** must not bold anything");
+        }
+        assertEquals("Path is C:\\Users\\bob and 2 ** 8 is 256.", visible.toString());
+    }
+
+    @Test
+    @DisplayName("#27: view-emitted text is escaped too, and headings keep their hashes")
+    void viewTextIsEscapedWithoutTouchingStructure() {
+        String md = MarkdownNormalizer.normalize("# Rated *****\n\n<p>body</p>");
+
+        assertTrue(md.startsWith("# Rated \\*\\*\\*\\*\\*"), md);
+    }
+
+    private static int countOf(String haystack, String needle) {
+        int count = 0;
+        for (int at = haystack.indexOf(needle); at >= 0; at = haystack.indexOf(needle, at + needle.length())) {
+            count++;
+        }
+        return count;
+    }
 }

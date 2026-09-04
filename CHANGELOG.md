@@ -3,6 +3,28 @@ Changelog
 
 ## Unreleased
 
+### Fixed -- fidelity of the record
+
+* **A literal `<style>`, `<script>`, `<xmp>`, `<noscript>` or `<!--` in a plain string property or
+  a title no longer deletes the rest of the page from the snapshot** (#18). Plain strings and titles
+  are text and are now escaped before the HTML parser sees them; only rich-text properties are
+  parsed as markup. Before, `"Set the <style> attribute here."` followed by a second section stored
+  `Set the\n` -- no warning, no flag, and the next capture diffed "identical" against it.
+* **Nested tables** render once, inside their cell (#20). `table.select("tr")` was a descendant
+  selector, so inner rows were emitted once per enclosing level: about fourfold growth per level,
+  duplicated rows in the record, and an `OutOfMemoryError` in the capture job at depth 26.
+* **A list item wrapping a block element keeps its bullet** (#22). `<li><p>first</p></li>`, which is
+  CKEditor's routine output, produced a bare hyphen, a blank line and unindented text.
+* **Quotations, embedded media, table captions, header rows, rules and ordered-list start numbers
+  are in the record** (#25). Each used to be dropped, so moving a sentence into a `<blockquote>`,
+  pointing an `<iframe>` at a different video or renaming a caption diffed as identical.
+* **The comparison panel shows what the archive says** (#27). The normaliser escaped backslashes
+  only inside link text while the viewer treated every backslash as an escape and any `**` as a
+  delimiter, so `C:\Users\bob` displayed as `C:Usersbob`. Literal `\` and `*` are now escaped
+  everywhere, the viewer honours the escapes, and `*italic*` is rendered.
+* Generator version bumped to 6. Snapshots written by earlier generators are unchanged; a
+  comparison across the boundary is flagged as a formatting change, as before.
+
 ### Security
 
 * **GHSA-4hvq-2x8x-49w2 -- the 1.4.7 fix held for one request per cache lifetime.**
