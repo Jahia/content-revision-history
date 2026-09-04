@@ -511,6 +511,14 @@ capture.baseUrl         =              # rarely needed; see below
 Changes apply without a restart: Felix FileInstall delivers the file to the module in a few
 seconds.
 
+The file name is a convention; the `siteKey` **property** is what names the site. You can call
+the file anything ending in `.cfg` under the module's factory pid, and the settings panel writes
+back to **whichever file delivered the site** rather than creating a second one under the
+conventional name — which is also the file "Use defaults" removes. `retention.maxSnapshots` has a
+floor of **2**: pruning never deletes a page's newest snapshot (it is the next dedupe baseline), so
+1 cannot be honoured; a lower value in the file is raised to 2 with a warning, and the panel and
+GraphQL refuse it outright.
+
 ### `capture.baseUrl`, and why it is almost never what you want per site
 
 It can be set per site, and it usually should not be. It addresses **this node's own HTTP
@@ -818,9 +826,11 @@ Verified by publishing a real change afterwards and confirming the capture was `
 Snapshots are kept indefinitely and are **not** pruned by age. That is deliberate: the record
 exists to answer "what did this page say on that date", and a retention window is a window in
 which that question stops having an answer. The only bound is
-`MAX_SNAPSHOTS_PER_PAGE_LANGUAGE` (500 per page and language); when it is reached the oldest are
-dropped and the running total is written to `crh:prunedCount`, so history that was discarded is
-visible as discarded rather than indistinguishable from history that never existed.
+`MAX_SNAPSHOTS_PER_PAGE_LANGUAGE` (500 per page and language, configurable per site down to a
+floor of 2); when it is reached the oldest are dropped and the running total is written to
+`crh:prunedCount`, so history that was discarded is visible as discarded rather than
+indistinguishable from history that never existed. A snapshot a published revision entry still
+cites is never pruned, whatever the cap: it is the evidence behind a public claim.
 
 ## Not yet implemented
 
