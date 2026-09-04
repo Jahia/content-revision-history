@@ -24,6 +24,19 @@ Changelog
   everywhere, the viewer honours the escapes, and `*italic*` is rendered.
 * Generator version bumped to 6. Snapshots written by earlier generators are unchanged; a
   comparison across the boundary is flagged as a formatting change, as before.
+### Fixed -- capture trigger
+
+* **A revisioned content node inside a container is captured** (#19). The path memo answered for
+  it with the enclosing page's uuid (or "none"), because the container had been memoised first in
+  tree order; the block's history was never written, with no status and no log line. A node that
+  carries the mixin is now its own owner before the memo is consulted.
+* **A capture job cancelled on module stop or orderly shutdown leaves a durable `FAILED` status**
+  on every page and language it was to capture, with a message saying to republish (#24). It used
+  to be dropped with one INFO line, so the folder kept saying `STORED` and the gap looked like "no
+  change". A crash cannot be recorded; everything else now is.
+* `PublicationSnapshotListener` has unit tests for the first time (#37): revisioned block in a
+  container, on a plain page, revisioned sub-page, plain page, language union, memo reuse, and the
+  three cancellation outcomes.
 
 ### Security
 
