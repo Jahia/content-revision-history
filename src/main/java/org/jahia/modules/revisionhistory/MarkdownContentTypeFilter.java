@@ -46,8 +46,21 @@ import javax.servlet.http.HttpServletResponse;
  * assumed, because a fix that silently does nothing is worse here than no fix -- it closes the
  * advisory without closing the hole.
  *
- * <p>Priority is below {@code TemplateScriptFilter}'s 99.0 on purpose: that filter is final and
- * nothing after it is ever chained, so a higher number would mean this never runs.
+ * <p><b>Priority must be below the fragment cache, not merely below the final filter.</b>
+ * {@code RenderChain.doFilter} stops at the <em>first</em> filter whose {@code prepare} returns
+ * non-null, and {@code CacheFilter} (priority 16.5; the legacy {@code AggregateCacheFilter} sits at
+ * 16.0) returns the cached body from {@code prepare} on a hit. It applies to this template type: its
+ * only skip is {@code json}, and it is on for {@code live}. Version 1.4.7 shipped this filter at 98
+ * -- below {@code TemplateScriptFilter}'s 99 but above the cache -- and so it ran only on a cache
+ * miss. Measured on 8.2.3.2: the first anonymous request answered {@code text/plain} with
+ * {@code nosniff}; the second and third, served from the cache, answered {@code text/html} with the
+ * unescaped body intact. The advisory was closed for exactly one request per cache lifetime.
+ *
+ * <p>Hence {@link #PRIORITY} is below every filter that can end the chain early --
+ * {@code MarkedForDeletionFilter} at 10 included, so a deleted page's short response is typed
+ * correctly too. Nothing lower ({@code EditModeFilter}, {@code SourceFormatterFilter},
+ * {@code ExternalizeHtmlFilter}, {@code StaticAssetsFilter}) returns content from {@code prepare}
+ * for a live markdown render.
  *
  * <p>The capture path is unaffected, which was checked rather than hoped: {@code
  * GuestMarkdownFetcher} already sends {@code Accept: text/html, text/plain}, reads the body as raw
@@ -73,8 +86,11 @@ public class MarkdownContentTypeFilter extends AbstractFilter {
     static final String NOSNIFF_HEADER = "X-Content-Type-Options";
     static final String NOSNIFF_VALUE = "nosniff";
 
-    /** Must stay under TemplateScriptFilter's 99.0, which terminates the chain. */
-    private static final float PRIORITY = 98f;
+    /**
+     * Must stay under the cache filters (16.0 / 16.5), which end the chain on a hit, and under
+     * MarkedForDeletionFilter (10), which ends it for a deleted node. See the class comment.
+     */
+    private static final float PRIORITY = 5f;
 
     @Activate
     public void start() {

@@ -1,6 +1,23 @@
 Changelog
 =========
 
+## Unreleased
+
+### Security
+
+* **GHSA-4hvq-2x8x-49w2 -- the 1.4.7 fix held for one request per cache lifetime.**
+  `MarkdownContentTypeFilter` ran at priority 98, above Jahia's fragment cache (`CacheFilter`
+  16.5), and the render chain stops at the first filter whose `prepare()` returns content -- which
+  on a cache hit is the cache filter. So the `text/plain` + `nosniff` headers were set on the cache
+  *miss* only; every following anonymous request of the same `.markdown` URL was served as
+  `text/html` with the unescaped body. Measured on 8.2.3.2 with 1.4.7 deployed: request 1
+  `text/plain`, requests 2 and 3 `text/html`. The filter now runs at priority 5, ahead of every
+  filter that can end the chain early. **Treat 1.4.7 as vulnerable.**
+* The unit test pins the real bound (`< 16`, the cache) instead of `< 99` (`TemplateScriptFilter`),
+  and `12-markdownResponseType` asserts the headers on a sequence of byte-identical requests after
+  the publication's asynchronous cache flush has settled -- the single fetches it made before could
+  pass against a filter that only worked on a miss, and did.
+
 ## [1.4.7](https://github.com/Jahia/content-revision-history/compare/1_4_6...1_4_7) (2026-09-03)
 
 **Security release. Upgrade if this module is deployed at all, whether or not any page uses the

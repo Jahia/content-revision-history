@@ -33,10 +33,19 @@ import static org.mockito.Mockito.when;
 class MarkdownContentTypeFilterTest {
 
     /**
-     * TemplateScriptFilter's priority. It is final: nothing ordered after it is ever chained, so a
-     * filter at or above this number silently never executes.
+     * The lowest-numbered filter that can end the chain before the view runs, on the path an
+     * anonymous visitor takes: the fragment cache. {@code AggregateCacheFilter} (legacy) sits at
+     * 16.0 and {@code CacheFilter} at 16.5; on a hit their {@code prepare} returns the cached body,
+     * and {@code RenderChain.doFilter} stops at the first non-null {@code prepare}. A filter
+     * numbered above them runs only on a cache miss.
+     *
+     * <p>Not 99. Version 1.4.7 pinned {@code < 99} ({@code TemplateScriptFilter}), shipped at 98, and
+     * the header held for exactly one request per cache lifetime -- measured, not inferred.
      */
-    private static final float TEMPLATE_SCRIPT_FILTER_PRIORITY = 99f;
+    private static final float LEGACY_CACHE_FILTER_PRIORITY = 16f;
+
+    /** Ends the chain for a node marked for deletion; the typed response must survive that too. */
+    private static final float MARKED_FOR_DELETION_FILTER_PRIORITY = 10f;
 
     private MarkdownContentTypeFilter filter;
 
@@ -81,16 +90,26 @@ class MarkdownContentTypeFilterTest {
     }
 
     @Test
-    @DisplayName("It runs BELOW the filter that terminates the chain")
-    void priorityIsBelowTheFinalFilter() {
-        // Not a style preference. TemplateScriptFilter sits at 99.0 and is final, so a filter
-        // numbered at or above it is registered, is reported as active, and never executes -- and
-        // the symptom is simply that the header stays text/html. This repository has already been
-        // caught by exactly that: an earlier filter used priority 999 and its execute() was never
-        // called.
-        assertTrue(filter.getPriority() < TEMPLATE_SCRIPT_FILTER_PRIORITY,
-                "a filter at or above 99.0 never runs, so the fix would silently not apply;"
-                        + " actual priority: " + filter.getPriority());
+    @DisplayName("It runs BEFORE the fragment cache, so a cache hit is typed too")
+    void priorityIsBelowTheCacheFilters() {
+        // Not a style preference, and not the bound this test used to pin. The chain stops at the
+        // first prepare() that returns non-null; on a warm cache that is CacheFilter at 16.5 (or
+        // the legacy AggregateCacheFilter at 16.0), which applies to the markdown template type in
+        // live. A filter above them runs on the cache miss only, and every following anonymous
+        // request is served as text/html with the unescaped body -- which is what 1.4.7 did.
+        assertTrue(filter.getPriority() < LEGACY_CACHE_FILTER_PRIORITY,
+                "a filter at or above 16.0 is skipped on a fragment-cache hit, so the header"
+                        + " holds for one request per cache lifetime; actual priority: "
+                        + filter.getPriority());
+    }
+
+    @Test
+    @DisplayName("It runs before the marked-for-deletion short-circuit as well")
+    void priorityIsBelowTheMarkedForDeletionFilter() {
+        // MarkedForDeletionFilter (10) also returns from prepare() early. A .markdown URL for a
+        // page marked for deletion must not become an HTML document either.
+        assertTrue(filter.getPriority() < MARKED_FOR_DELETION_FILTER_PRIORITY,
+                "actual priority: " + filter.getPriority());
     }
 
     @Test
