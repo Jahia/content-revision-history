@@ -31,6 +31,7 @@ import java.util.AbstractMap;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Function;
 import java.util.Set;
 
 import static org.jahia.modules.revisionhistory.RevisionHistoryConstants.*;
@@ -68,17 +69,50 @@ public class PublicationSnapshotListener implements PublicationEventListener {
 
     private static final Logger logger = LoggerFactory.getLogger(PublicationSnapshotListener.class);
 
-    /** Registered on module start; Jahia calls this back for every completed publication. */
+    /** Writes one durable capture status; abstracted so the cancellation path can be unit-tested. */
+    @FunctionalInterface
+    interface StatusRecorder {
+        void record(String siteKey, String pageUuid, String language, CaptureStatus status, String message);
+    }
+
     /**
-     * Jobs this listener has enqueued but that may not have fired yet, as (name, group) pairs.
+     * Jobs this listener has enqueued but that may not have fired yet, keyed by (name, group) and
+     * carrying the pages and languages each one was to capture.
      *
      * <p>Jobs are scheduled in Quartz's RAM store, whose lifecycle is independent of this
      * bundle. If the module is stopped between a publication and the job firing, Quartz would
      * still try to run {@link SnapshotCaptureJob} from a stopped bundle, and whatever failed
      * there would never reach the durable status recorder -- leaving the publication with no
      * trace at all, which is exactly the silent gap this module exists to prevent.
+     *
+     * <p>The payload is kept, not just the key, because cancelling a job is itself a capture that
+     * did not happen. It used to be dropped with one INFO line, so the page folder went on showing
+     * the previous publication's STORED and the gap was indistinguishable from "the content did
+     * not change" (issue #24). Now every cancelled (page, language) gets a durable FAILED status
+     * saying to republish. A RAM job does not survive a restart either; an orderly shutdown
+     * deactivates this component first, so the same path records it. A crash cannot be recorded.
      */
-    private final Map<Map.Entry<String, String>, Boolean> scheduledJobs = new ConcurrentHashMap<>();
+    private final Map<Map.Entry<String, String>, Map<String, Set<String>>> scheduledJobs =
+            new ConcurrentHashMap<>();
+
+    private final StatusRecorder statusRecorder;
+    private final Function<String, String> siteKeyResolver;
+
+    /** The DS constructor: real status writes, real site resolution. */
+    public PublicationSnapshotListener() {
+        this(defaultStatusRecorder(), PublicationSnapshotListener::siteKeyOf);
+    }
+
+    /** For tests: the two collaborators that otherwise reach the repository through statics. */
+    PublicationSnapshotListener(StatusRecorder statusRecorder, Function<String, String> siteKeyResolver) {
+        this.statusRecorder = statusRecorder;
+        this.siteKeyResolver = siteKeyResolver;
+    }
+
+    private static StatusRecorder defaultStatusRecorder() {
+        RevisionSnapshotService service = new RevisionSnapshotService();
+        return service::recordStatus;
+    }
 
     // AtomicReference rather than a volatile field: see java:S3077. volatile publishes the
     // reference but not the object behind it, so the old form obliged a reader to verify that this
@@ -117,26 +151,57 @@ public class PublicationSnapshotListener implements PublicationEventListener {
         if (scheduledJobs.isEmpty()) {
             return;
         }
-        int cancelled = 0;
         try {
-            Scheduler scheduler = ServicesRegistry.getInstance().getSchedulerService().getRAMScheduler();
-            for (Map.Entry<String, String> job : scheduledJobs.keySet()) {
-                try {
-                    if (scheduler.deleteJob(job.getKey(), job.getValue())) {
-                        cancelled++;
-                    }
-                } catch (Exception e) {
-                    logger.warn("Could not cancel pending capture job {}", job.getKey(), e);
-                }
-            }
+            cancelOutstandingJobs(ServicesRegistry.getInstance().getSchedulerService().getRAMScheduler());
         } catch (Exception e) {
             logger.warn("Could not reach the scheduler to cancel pending capture jobs", e);
+            scheduledJobs.clear();
+        }
+    }
+
+    /**
+     * @param scheduler the RAM scheduler the jobs were handed to
+     * @return how many jobs were still pending and are now cancelled -- and recorded as such
+     */
+    int cancelOutstandingJobs(Scheduler scheduler) {
+        int cancelled = 0;
+        try {
+            for (Map.Entry<Map.Entry<String, String>, Map<String, Set<String>>> job : scheduledJobs.entrySet()) {
+                String name = job.getKey().getKey();
+                try {
+                    if (scheduler.deleteJob(name, job.getKey().getValue())) {
+                        cancelled++;
+                        // Durable, per page and language, because a cancelled capture is a capture
+                        // that did not happen and the folder must not go on saying STORED.
+                        recordNotCaptured(job.getValue(), "Capture was cancelled: the module stopped"
+                                + " before the capture job ran. Republish the page to capture it.");
+                    }
+                } catch (Exception e) {
+                    logger.warn("Could not cancel pending capture job {}", name, e);
+                }
+            }
         } finally {
             scheduledJobs.clear();
         }
         if (cancelled > 0) {
-            logger.info("Cancelled {} pending revision snapshot capture job(s) on module stop", cancelled);
+            logger.info("Cancelled {} pending revision snapshot capture job(s) on module stop;"
+                    + " each affected page/language now carries a FAILED status", cancelled);
         }
+        return cancelled;
+    }
+
+    /** Remembers a scheduled job with what it was to capture, so cancelling it can be recorded. */
+    void remember(String jobName, String jobGroup, Map<String, Set<String>> languagesByPage) {
+        Map<String, Set<String>> copy = new LinkedHashMap<>();
+        for (Map.Entry<String, Set<String>> entry : languagesByPage.entrySet()) {
+            copy.put(entry.getKey(), new LinkedHashSet<>(entry.getValue()));
+        }
+        scheduledJobs.put(new AbstractMap.SimpleEntry<>(jobName, jobGroup), copy);
+    }
+
+    /** @return how many jobs are remembered as pending; for tests */
+    int pendingJobs() {
+        return scheduledJobs.size();
     }
 
     /** Called by the job when it starts, so a completed job is not cancelled later. */
@@ -188,31 +253,39 @@ public class PublicationSnapshotListener implements PublicationEventListener {
         if (infos == null || infos.isEmpty()) {
             return new LinkedHashMap<>();
         }
-        return JCRTemplate.getInstance().doExecuteWithSystemSessionAsUser(null, WORKSPACE, null, (JCRCallback<Map<String, Set<String>>>) session -> {
-                    Map<String, Set<String>> languagesByPage = new LinkedHashMap<>();
-                    Map<String, String> memo = new HashMap<>();
-                    int inspected = 0;
-                    for (PublicationEvent.ContentPublicationInfo info : infos) {
-                        if (++inspected > MAX_PUBLICATION_INFOS_INSPECTED
-                                || languagesByPage.size() >= MAX_PAGES_PER_PUBLICATION) {
-                            logger.warn("Publication event too large; inspected {} nodes and stopped",
-                                    inspected - 1);
-                            break;
-                        }
-                        String pageUuid = owningRevisionedPage(session, info, memo);
-                        if (pageUuid == null) {
-                            continue;
-                        }
-                        Set<String> languages = languagesByPage
-                                .computeIfAbsent(pageUuid, k -> new LinkedHashSet<>());
-                        Collection<String> published = info.getPublicationLanguages();
-                        if (published != null) {
-                            languages.addAll(published);
-                        }
-                    }
-                    fillInMissingLanguages(session, languagesByPage);
-                    return languagesByPage;
-                });
+        return JCRTemplate.getInstance().doExecuteWithSystemSessionAsUser(null, WORKSPACE, null,
+                (JCRCallback<Map<String, Set<String>>>) session -> resolveRevisionedPages(infos, session));
+    }
+
+    /**
+     * The resolution itself, on a session the caller provides -- so it can be exercised without a
+     * repository. Nothing in this class was unit-tested before, which is how issue #19 shipped.
+     */
+    Map<String, Set<String>> resolveRevisionedPages(Collection<PublicationEvent.ContentPublicationInfo> infos,
+                                                    JCRSessionWrapper session) {
+        Map<String, Set<String>> languagesByPage = new LinkedHashMap<>();
+        Map<String, String> memo = new HashMap<>();
+        int inspected = 0;
+        for (PublicationEvent.ContentPublicationInfo info : infos) {
+            if (++inspected > MAX_PUBLICATION_INFOS_INSPECTED
+                    || languagesByPage.size() >= MAX_PAGES_PER_PUBLICATION) {
+                logger.warn("Publication event too large; inspected {} nodes and stopped",
+                        inspected - 1);
+                break;
+            }
+            String pageUuid = owningRevisionedPage(session, info, memo);
+            if (pageUuid == null) {
+                continue;
+            }
+            Set<String> languages = languagesByPage
+                    .computeIfAbsent(pageUuid, k -> new LinkedHashSet<>());
+            Collection<String> published = info.getPublicationLanguages();
+            if (published != null) {
+                languages.addAll(published);
+            }
+        }
+        fillInMissingLanguages(session, languagesByPage);
+        return languagesByPage;
     }
 
     /**
@@ -249,20 +322,30 @@ public class PublicationSnapshotListener implements PublicationEventListener {
     }
 
     /**
-     * @param memo path to owning revisioned-page uuid ({@code ""} for none). Only non-page
-     *             ancestors are memoised: a memo entry on a page path would shadow sub-pages,
-     *             which are pages in their own right and may opt in independently.
-     * @return the uuid of the nearest enclosing revisioned page, or null
+     * @param memo path to owning revisioned-page uuid ({@code ""} for none). Only non-page,
+     *             non-revisioned ancestors are memoised: a memo entry on a page path would shadow
+     *             sub-pages, which are pages in their own right and may opt in independently.
+     * @return the uuid of the nearest enclosing revisioned node, or null
+     *
+     * <p>The node is looked at BEFORE the memo is consulted. The memo is keyed by path prefix, and
+     * publication infos arrive in tree order, so a container was memoised first and a revisioned
+     * content node inside it then matched the container's prefix and took the container's answer --
+     * the enclosing page's uuid, or "none". The block's own history was never written, with no
+     * status and no log line (issue #19). A node that carries the mixin is its own owner, whatever
+     * the memo says about the path above it; the memo still spares the walk for everything else.
      */
     private String owningRevisionedPage(JCRSessionWrapper session,
                                         PublicationEvent.ContentPublicationInfo info,
                                         Map<String, String> memo) {
-        String remembered = lookUpMemo(info.getNodePath(), memo);
-        if (remembered != null) {
-            return remembered.isEmpty() ? null : remembered;
-        }
         try {
             JCRNodeWrapper start = session.getNodeByIdentifier(info.getNodeIdentifier());
+            if (RevisionedAncestor.ownsItsOwnHistory(start)) {
+                return start.getIdentifier();
+            }
+            String remembered = lookUpMemo(info.getNodePath(), memo);
+            if (remembered != null) {
+                return remembered.isEmpty() ? null : remembered;
+            }
             List<String> visitedContentPaths = new ArrayList<>();
             // One walk, shared with the comparison service and the snapshot picker. It used to
             // live here and ask "am I a page?" before "is this revisioned?", which walked straight
@@ -319,7 +402,7 @@ public class PublicationSnapshotListener implements PublicationEventListener {
             // useRAM = true: the work is transient, and re-running it hours later against
             // content that has moved on would record the wrong thing, not a missing thing.
             ServicesRegistry.getInstance().getSchedulerService().scheduleJobNow(detail, true);
-            scheduledJobs.put(new AbstractMap.SimpleEntry<>(detail.getName(), detail.getGroup()), Boolean.TRUE);
+            remember(detail.getName(), detail.getGroup(), languagesByPage);
             logger.info("Scheduled revision snapshot capture for {} page(s)", pages.size());
         } catch (Exception e) {
             logger.error("Could not schedule the revision snapshot capture job for {}", payload, e);
@@ -336,20 +419,23 @@ public class PublicationSnapshotListener implements PublicationEventListener {
      * it had never been attempted.
      */
     private void recordSchedulingFailure(Map<String, Set<String>> languagesByPage, Exception cause) {
-        RevisionSnapshotService service = new RevisionSnapshotService();
-        String message = "The capture job could not be scheduled ("
-                + cause.getClass().getSimpleName() + ": " + cause.getMessage() + ")";
+        recordNotCaptured(languagesByPage, "The capture job could not be scheduled ("
+                + cause.getClass().getSimpleName() + ": " + cause.getMessage() + ")");
+    }
+
+    /** A FAILED status for every page/language a job was to capture and did not. */
+    private void recordNotCaptured(Map<String, Set<String>> languagesByPage, String message) {
         for (Map.Entry<String, Set<String>> entry : languagesByPage.entrySet()) {
             for (String language : entry.getValue()) {
                 try {
-                    service.recordStatus(siteKeyOf(entry.getKey()), entry.getKey(), language,
+                    statusRecorder.record(siteKeyResolver.apply(entry.getKey()), entry.getKey(), language,
                             CaptureStatus.FAILED, message);
                 } catch (RuntimeException alsoFailed) {
                     // Recording the failure must never mask the failure being recorded.
                     // recordStatus declares no checked exception because it swallows its own
                     // repository errors internally -- which is a separate reported finding, not
                     // one this batch touches.
-                    logger.error("Could not record the scheduling failure for page {} [{}]",
+                    logger.error("Could not record the missed capture for page {} [{}]",
                             entry.getKey(), language, alsoFailed);
                 }
             }
@@ -357,7 +443,7 @@ public class PublicationSnapshotListener implements PublicationEventListener {
     }
 
     /** @return the site key owning the page, or "unknown" when it cannot be resolved */
-    private String siteKeyOf(String pageUuid) {
+    private static String siteKeyOf(String pageUuid) {
         try {
             return JCRTemplate.getInstance().doExecuteWithSystemSessionAsUser(null, WORKSPACE, null,
                     (JCRCallback<String>) session -> {
