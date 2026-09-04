@@ -42,7 +42,7 @@ public final class MarkdownNormalizer {
      * Stamped on every snapshot so the diff viewer can flag "formatting change" instead of
      * showing spurious churn between snapshots produced by different generators.
      */
-    public static final String GENERATOR_VERSION = "5";
+    public static final String GENERATOR_VERSION = "6";
 
     /**
      * Defensive cap on raw view output accepted for normalization. 2,000,000 characters (~2 MB of
@@ -88,7 +88,37 @@ public final class MarkdownNormalizer {
     /** Block-level tags handled generically: separated from surrounding content by a blank line. */
     private static final Set<String> BLOCK_TAGS = Set.of(
             "p", "div", "section", "article", "header", "footer", "aside",
-            "blockquote", "dl", "dt", "dd", "figure", "figcaption", "main", "nav", "address");
+            "dl", "dt", "dd", "figure", "figcaption", "main", "nav", "address");
+
+    /**
+     * Embedded media. Each used to fall through to the generic branch, which rendered its children
+     * and dropped the element -- so an {@code <iframe src>} pointing at a different video normalised
+     * to the same text as before and the change diffed as identical. The record is a Markdown link
+     * to the source, which {@code InlineMarkdown} deliberately leaves literal so a source change is
+     * visible.
+     */
+    private static final Set<String> EMBED_TAGS = Set.of("iframe", "video", "audio", "object", "embed");
+
+    /** Row containers the HTML5 parser inserts or authors write; rows are read from these only. */
+    private static final Set<String> ROW_GROUP_TAGS = Set.of("thead", "tbody", "tfoot");
+
+    /**
+     * Characters {@link InlineMarkdown} reads as syntax: a backslash starts an escape and an
+     * asterisk is an emphasis delimiter. A literal one in content must reach it escaped, or the
+     * comparison panel shows something other than what the archive says -- {@code C:\Users\bob}
+     * displayed as {@code C:Usersbob}. The normaliser used to escape only inside link text.
+     */
+    private static final Pattern INLINE_SYNTAX = Pattern.compile("[\\\\*]");
+
+    /**
+     * Blank lines inside one list item, produced by a block child such as CKEditor's routine
+     * {@code <li><p>text</p></li>}. Left in place they separate the bullet from its text, and the
+     * list is gone from both the snapshot and the comparison.
+     */
+    private static final Pattern BLANK_LINES_IN_ITEM = Pattern.compile("\\n{2,}");
+
+    /** The Markdown quote prefix, re-applied per line by {@link #semanticLineBreaks}. */
+    private static final String QUOTE_PREFIX = "> ";
 
     /** Elements whose bodies must never survive into the snapshot (scripts, styles, embedded SVG markup). */
     private static final String DANGEROUS_ELEMENTS = "script, style, noscript, svg, template";
@@ -226,21 +256,47 @@ public final class MarkdownNormalizer {
      */
     private static String viewText(String wholeText) {
         String spaced = UNICODE_SPACE.matcher(wholeText).replaceAll(" ");
-        return LINE_LEADING_SPACE.matcher(spaced).replaceAll("");
+        return escapeInlineSyntax(LINE_LEADING_SPACE.matcher(spaced).replaceAll(""));
+    }
+
+    /**
+     * Escapes what {@link InlineMarkdown} would otherwise read as syntax, in ordinary text.
+     *
+     * <p>Applied to every text node and to view-emitted text, not only to link text as before, so
+     * the two sides of the contract agree: the parser treats every backslash as an escape and every
+     * asterisk pair as emphasis, and after this the only backslashes and asterisks it sees are the
+     * ones the normaliser itself wrote as syntax. Code blocks are exempt -- {@link #renderPre}
+     * fences them and the parser does not look inside a fence.
+     */
+    static String escapeInlineSyntax(String text) {
+        return INLINE_SYNTAX.matcher(text).replaceAll("\\\\$0");
     }
 
     private static void renderNode(Node node, StringBuilder out, int listDepth) {
         if (node instanceof TextNode) {
-            out.append(((TextNode) node).text());
+            out.append(escapeInlineSyntax(((TextNode) node).text()));
             return;
         }
         if (!(node instanceof Element)) {
             return;
         }
         Element el = (Element) node;
-        switch (el.tagName().toLowerCase(Locale.ROOT)) {
+        String tag = el.tagName().toLowerCase(Locale.ROOT);
+        if (EMBED_TAGS.contains(tag)) {
+            renderEmbed(el, out);
+            return;
+        }
+        switch (tag) {
             case "br":
                 out.append('\n');
+                return;
+            case "hr":
+                ensureBlankLine(out);
+                out.append("---");
+                ensureBlankLine(out);
+                return;
+            case "blockquote":
+                renderBlockquote(el, out, listDepth);
                 return;
             case "img":
                 renderImage(el, out);
@@ -366,42 +422,153 @@ public final class MarkdownNormalizer {
             ensureNewline(out);
         }
         String indent = "  ".repeat(depth);
-        int counter = 1;
+        int counter = ordered ? startNumber(list) : 1;
         for (Element li : list.children()) {
             if (!"li".equals(li.tagName())) {
                 continue;
             }
             ensureNewline(out);
             out.append(indent).append(ordered ? (counter++ + ". ") : "- ");
-            renderChildren(li, out, depth + 1);
+            // Rendered into its own buffer so block children cannot separate the marker from the
+            // text: <li><p>first</p></li> is CKEditor's routine output, and rendering it straight
+            // into `out` produced "-\n\nfirst" -- a bare hyphen the comparison did not read as a
+            // list marker, followed by unindented text. A second paragraph inside the item
+            // continues the item on the next line, indented under the marker.
+            StringBuilder item = new StringBuilder();
+            renderChildren(li, item, depth + 1);
+            out.append(BLANK_LINES_IN_ITEM.matcher(item.toString().trim())
+                    .replaceAll("\n" + indent + "  "));
         }
         if (depth == 0) {
             ensureBlankLine(out);
         }
     }
 
-    private static void renderTable(Element table, StringBuilder out, int listDepth) {
+    /**
+     * @param list an {@code <ol>}
+     * @return its {@code start} attribute, or 1 when absent or unusable
+     */
+    private static int startNumber(Element list) {
+        String start = list.attr("start").trim();
+        if (start.isEmpty()) {
+            return 1;
+        }
+        try {
+            return Math.max(1, Integer.parseInt(start));
+        } catch (NumberFormatException notANumber) {
+            return 1;
+        }
+    }
+
+    /**
+     * Quoted text keeps its {@code > } prefix, which {@link #semanticLineBreaks} re-applies to every
+     * sentence line of the paragraph. Before this, blockquote was a plain block tag, so moving a
+     * sentence into a quotation -- or out of one -- diffed as identical.
+     */
+    private static void renderBlockquote(Element el, StringBuilder out, int listDepth) {
         ensureBlankLine(out);
-        Elements rows = table.select("tr");
-        for (int i = 0; i < rows.size(); i++) {
-            if (i > 0) {
-                ensureNewline(out);
+        StringBuilder inner = new StringBuilder();
+        renderChildren(el, inner, listDepth);
+        // Each paragraph of the quotation is its own quoted block, so the sentence splitter sees
+        // paragraphs that each start with the prefix rather than one with the prefix in the middle.
+        for (String block : BLANK_LINES_IN_ITEM.split(inner.toString().trim())) {
+            ensureBlankLine(out);
+            for (String line : block.split("\n")) {
+                out.append(QUOTE_PREFIX).append(line).append('\n');
             }
-            renderTableRow(rows.get(i), out, listDepth);
         }
         ensureBlankLine(out);
     }
 
-    private static void renderTableRow(Element row, StringBuilder out, int listDepth) {
+    /**
+     * Embedded media as a link to its source. Nothing of the element's own text is emitted; for
+     * these elements the children are fallback content, not the thing the visitor saw.
+     */
+    private static void renderEmbed(Element el, StringBuilder out) {
+        String src = sanitizeUrl(embedSource(el));
+        if (src != null) {
+            out.append("[embed](").append(src).append(')');
+        }
+    }
+
+    private static String embedSource(Element el) {
+        if (el.hasAttr("src")) {
+            return el.attr("src");
+        }
+        if (el.hasAttr("data")) {
+            return el.attr("data");
+        }
+        Element source = el.selectFirst("> source[src]");
+        return source == null ? null : source.attr("src");
+    }
+
+    private static void renderTable(Element table, StringBuilder out, int listDepth) {
+        ensureBlankLine(out);
+        Element caption = table.selectFirst("> caption");
+        if (caption != null) {
+            StringBuilder captionBuf = new StringBuilder();
+            renderChildren(caption, captionBuf, listDepth);
+            out.append(captionBuf.toString().trim());
+            ensureBlankLine(out);
+        }
+        List<Element> rows = directRows(table);
+        for (int i = 0; i < rows.size(); i++) {
+            if (i > 0) {
+                ensureNewline(out);
+            }
+            int headerCells = renderTableRow(rows.get(i), out, listDepth);
+            if (headerCells > 0) {
+                // A header row is followed by a separator row, so <th> and <td> are distinguishable
+                // in the record and a cell promoted to a header is a visible change.
+                ensureNewline(out);
+                out.append(String.join(" | ", java.util.Collections.nCopies(headerCells, "---")));
+            }
+        }
+        ensureBlankLine(out);
+    }
+
+    /**
+     * The table's own rows, and only those.
+     *
+     * <p>{@code table.select("tr")} is a descendant selector: with a table nested in a cell it
+     * returned the inner rows as rows of the outer table too, so every inner row was rendered once
+     * per enclosing level. Output grew about fourfold per level -- 595 bytes of input at depth 18
+     * became 262 KB, and depth 26 exhausted a 512 MB heap in the capture job -- and the inner rows
+     * appeared twice in the record. Nested tables now render inside their cell, once.
+     */
+    private static List<Element> directRows(Element table) {
+        List<Element> rows = new ArrayList<>();
+        for (Element child : table.children()) {
+            String tag = child.tagName().toLowerCase(Locale.ROOT);
+            if ("tr".equals(tag)) {
+                rows.add(child);
+            } else if (ROW_GROUP_TAGS.contains(tag)) {
+                for (Element row : child.children()) {
+                    if ("tr".equals(row.tagName().toLowerCase(Locale.ROOT))) {
+                        rows.add(row);
+                    }
+                }
+            }
+        }
+        return rows;
+    }
+
+    /**
+     * @return the number of cells when every cell is a {@code <th>} (a header row), else 0
+     */
+    private static int renderTableRow(Element row, StringBuilder out, int listDepth) {
         Elements cells = row.select("> td, > th");
+        boolean allHeaders = !cells.isEmpty();
         for (int j = 0; j < cells.size(); j++) {
             if (j > 0) {
                 out.append(" | ");
             }
+            allHeaders &= "th".equals(cells.get(j).tagName().toLowerCase(Locale.ROOT));
             StringBuilder cellBuf = new StringBuilder();
             renderChildren(cells.get(j), cellBuf, listDepth);
             out.append(cellBuf.toString().trim());
         }
+        return allHeaders ? cells.size() : 0;
     }
 
     /**
@@ -433,9 +600,9 @@ public final class MarkdownNormalizer {
         return ALLOWED_SCHEMES.contains(m.group(1).toLowerCase(Locale.ROOT)) ? href : null;
     }
 
-    /** Prevents link/image text from reintroducing Markdown link/image syntax. */
+    /** Prevents link/image text from reintroducing Markdown link, image or emphasis syntax. */
     private static String escapeMarkdownText(String text) {
-        return text.replace("\\", "\\\\").replace("[", "\\[").replace("]", "\\]");
+        return escapeInlineSyntax(text).replace("[", "\\[").replace("]", "\\]");
     }
 
     private static void ensureBlankLine(StringBuilder sb) {
@@ -484,6 +651,18 @@ public final class MarkdownNormalizer {
 
     /** Shields Markdown link/image spans from the sentence splitter, then restores them. */
     private static String splitSentencesProtectingLinks(String paragraph, Locale locale) {
+        if (paragraph.startsWith(QUOTE_PREFIX)) {
+            // A quoted paragraph arrives as "> line\n> line". Splitting it into sentences would
+            // leave the prefix on the first sentence only, so the quote is split unprefixed and the
+            // prefix put back on every line.
+            String unquoted = paragraph.replace("\n" + QUOTE_PREFIX, "\n").substring(QUOTE_PREFIX.length());
+            String split = splitSentencesProtectingLinks(unquoted, locale);
+            StringBuilder quoted = new StringBuilder(split.length() + 16);
+            for (String line : split.split("\n")) {
+                quoted.append(QUOTE_PREFIX).append(line).append('\n');
+            }
+            return quoted.toString().trim();
+        }
         List<String> links = new ArrayList<>();
         String masked = maskLinks(paragraph, links);
         String split = splitSentences(masked, locale);

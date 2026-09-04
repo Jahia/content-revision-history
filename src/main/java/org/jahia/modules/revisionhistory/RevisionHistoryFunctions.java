@@ -168,7 +168,7 @@ public final class RevisionHistoryFunctions {
             }
             java.util.List<String> text = textOf(property);
             if (!text.isEmpty()) {
-                byName.put(name, text);
+                byName.put(name, isRichText(property) ? text : escapedForMarkup(text));
             }
         } catch (RepositoryException unreadable) {
             // One unreadable property must not cost the whole node its content.
@@ -196,6 +196,50 @@ public final class RevisionHistoryFunctions {
             addIfNotBlank(text, property.getString());
         }
         return text;
+    }
+
+    /**
+     * Only a rich-text property holds markup; every other string is text and must reach the
+     * parser as text.
+     *
+     * <p>The whole view output is parsed as HTML by {@code MarkdownNormalizer}, and a plain string
+     * printed raw into it is parsed as markup. For most strings that only cost the odd stray
+     * {@code <b>}. For five it cost the rest of the page: a literal {@code <style>},
+     * {@code <script>}, {@code <xmp>}, {@code <noscript>} or {@code <!--} in ANY plain property,
+     * page title or node title is a raw-text or comment element to an HTML parser, which swallows
+     * everything to the end of the document -- and the normaliser then removes it as dangerous.
+     * Measured: {@code "Set the <style> attribute here."} followed by a second section produced the
+     * snapshot {@code "Set the\n"}, with no warning and no flag, and the next capture diffed
+     * "identical" against it. A contributor who can write one string could blank the record below it.
+     *
+     * <p>A property whose definition cannot be read is treated as plain: escaping text that was
+     * markup is recoverable and visible; parsing text that was not is neither.
+     */
+    static boolean isRichText(javax.jcr.Property property) {
+        try {
+            javax.jcr.nodetype.PropertyDefinition definition = property.getDefinition();
+            return definition instanceof org.jahia.services.content.nodetypes.ExtendedPropertyDefinition
+                    && ((org.jahia.services.content.nodetypes.ExtendedPropertyDefinition) definition)
+                            .getSelector() == org.jahia.services.content.nodetypes.SelectorType.RICHTEXT;
+        } catch (RepositoryException | RuntimeException undefined) {
+            return false;
+        }
+    }
+
+    private static java.util.List<String> escapedForMarkup(java.util.List<String> values) {
+        java.util.List<String> escaped = new java.util.ArrayList<>(values.size());
+        for (String value : values) {
+            escaped.add(escapeForMarkup(value));
+        }
+        return escaped;
+    }
+
+    /**
+     * Makes a plain string inert to an HTML parser. jsoup decodes entities exactly once while
+     * tokenising, so the snapshot still reads {@code <style>} -- as the text the property held.
+     */
+    static String escapeForMarkup(String text) {
+        return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;");
     }
 
     private static void addIfNotBlank(java.util.List<String> into, String value) {

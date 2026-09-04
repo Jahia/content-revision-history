@@ -199,8 +199,12 @@ no longer told to parse them as a document. Capture is unaffected: `GuestMarkdow
 sends `Accept: text/html, text/plain`, reads raw UTF-8 bytes and never inspects the type, and jsoup
 parses markup regardless of the header it arrived under.
 
-Two things follow for anyone editing this module. **Do not "fix" a raw print in a markdown view by
-escaping it** — the spec `12-markdownResponseType` fails if you do, and it should. And **keep the
+Two things follow for anyone editing this module. **Do not "fix" a rich-text print in a markdown
+view by escaping it** — rich text is the one place markup is meant to be parsed, and escaping it
+archives `<p>Hello</p>` as its own source. Plain strings and titles are the opposite case and *are*
+escaped (`fn:escapeXml` in the views, `crh:textProperties` for every non-rich-text property): they
+are text, and a literal `<style>`, `<script>`, `<xmp>`, `<noscript>` or `<!--` in one was a raw-text
+element to the parser that swallowed the rest of the page out of the snapshot, silently. And **keep the
 filter's priority below the fragment cache** (`AggregateCacheFilter` 16.0, `CacheFilter` 16.5; it
 runs at 5). The render chain stops at the first filter whose `prepare()` returns something, and on a
 cache hit that is the cache filter — so anything numbered above it runs on the cache *miss* only.

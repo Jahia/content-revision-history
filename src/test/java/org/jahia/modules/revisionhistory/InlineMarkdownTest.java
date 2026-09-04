@@ -232,4 +232,63 @@ class InlineMarkdownTest {
         }
         assertEquals("bold and [escaped] text", visible(parsed));
     }
+
+    // ------------------------------------------------------------------ #27: symmetric escaping
+
+    @Test
+    @DisplayName("#27: an escaped asterisk is shown literally and toggles nothing")
+    void escapedAsteriskIsLiteral() {
+        InlineMarkdown.Parsed parsed = InlineMarkdown.parse("2 \\*\\* 8 is 256 and 3 \\*\\* 2", none());
+
+        assertEquals("2 ** 8 is 256 and 3 ** 2", visible(parsed));
+        for (InlineMarkdown.Piece piece : parsed.getPieces()) {
+            assertFalse(piece.isBold());
+            assertFalse(piece.isItalic());
+        }
+    }
+
+    @Test
+    @DisplayName("#27: an escaped backslash is one visible backslash")
+    void escapedBackslashIsVisible() {
+        InlineMarkdown.Parsed parsed = InlineMarkdown.parse("Path is C:\\\\Users\\\\bob", none());
+
+        assertEquals("Path is C:\\Users\\bob", visible(parsed));
+    }
+
+    @Test
+    @DisplayName("#27: italic is rendered and its delimiters removed")
+    void italicIsRendered() {
+        InlineMarkdown.Parsed parsed = InlineMarkdown.parse("This is *not* **ever** allowed", none());
+
+        assertEquals("This is not ever allowed", visible(parsed));
+        List<String> italics = new ArrayList<>();
+        List<String> bolds = new ArrayList<>();
+        for (InlineMarkdown.Piece piece : parsed.getPieces()) {
+            if (piece.isItalic()) {
+                italics.add(piece.getText());
+            }
+            if (piece.isBold()) {
+                bolds.add(piece.getText());
+            }
+        }
+        assertEquals(Arrays.asList("not"), italics);
+        assertEquals(Arrays.asList("ever"), bolds);
+    }
+
+    @Test
+    @DisplayName("#27: a lone asterisk from an older snapshot stays content")
+    void loneAsteriskIsContent() {
+        InlineMarkdown.Parsed parsed = InlineMarkdown.parse("Rated 4* overall", none());
+
+        assertEquals("Rated 4* overall", visible(parsed));
+    }
+
+    @Test
+    @DisplayName("#27: an escaped delimiter does not close an open span")
+    void escapedDelimiterDoesNotClose() {
+        // "**a \\*\\* b" -- the only other ** is escaped, so the opener is content.
+        InlineMarkdown.Parsed parsed = InlineMarkdown.parse("**a \\*\\* b", none());
+
+        assertEquals("**a ** b", visible(parsed));
+    }
 }

@@ -256,4 +256,57 @@ class RevisionHistoryFunctionsTextPropertiesTest {
 
         assertTrue(RevisionHistoryFunctions.textProperties(node).isEmpty());
     }
+
+    // ------------------------------------------------------------------ #18: plain strings are text
+
+    @Test
+    @DisplayName("#18: a plain string is escaped, so a literal <style> cannot swallow the page")
+    void plainStringIsEscapedForTheMarkupStream() throws Exception {
+        // No definition on the mock, which is also what an undefined (residual) property looks like:
+        // treated as plain, because escaping markup is recoverable and parsing text is not.
+        JCRNodeWrapper node = nodeWith(Collections.singletonList(
+                prop("hint", PropertyType.STRING, "Set the <style> attribute & <!-- note -->.", false)), false);
+
+        List<String> values = RevisionHistoryFunctions.textProperties(node);
+
+        assertEquals(Collections.singletonList(
+                "Set the &lt;style&gt; attribute &amp; &lt;!-- note --&gt;."), values);
+    }
+
+    @Test
+    @DisplayName("#18: a rich-text property is passed through raw, because it IS markup")
+    void richTextIsPassedThroughRaw() throws Exception {
+        Property rich = prop("body", PropertyType.STRING, "<p>Hello <b>there</b></p>", false);
+        org.jahia.services.content.nodetypes.ExtendedPropertyDefinition definition =
+                mock(org.jahia.services.content.nodetypes.ExtendedPropertyDefinition.class);
+        when(definition.getSelector()).thenReturn(org.jahia.services.content.nodetypes.SelectorType.RICHTEXT);
+        when(rich.getDefinition()).thenReturn(definition);
+        JCRNodeWrapper node = nodeWith(Collections.singletonList(rich), false);
+
+        List<String> values = RevisionHistoryFunctions.textProperties(node);
+
+        assertEquals(Collections.singletonList("<p>Hello <b>there</b></p>"), values);
+    }
+
+    @Test
+    @DisplayName("#18: a small-text selector is plain even though its definition is readable")
+    void smallTextIsPlain() throws Exception {
+        Property small = prop("label", PropertyType.STRING, "a < b", false);
+        org.jahia.services.content.nodetypes.ExtendedPropertyDefinition definition =
+                mock(org.jahia.services.content.nodetypes.ExtendedPropertyDefinition.class);
+        when(definition.getSelector()).thenReturn(org.jahia.services.content.nodetypes.SelectorType.SMALLTEXT);
+        when(small.getDefinition()).thenReturn(definition);
+
+        assertFalse(RevisionHistoryFunctions.isRichText(small));
+        assertEquals("a &lt; b", RevisionHistoryFunctions.escapeForMarkup("a < b"));
+    }
+
+    @Test
+    @DisplayName("#18: a definition that cannot be read means plain, not rich")
+    void unreadableDefinitionMeansPlain() throws Exception {
+        Property broken = prop("x", PropertyType.STRING, "text", false);
+        when(broken.getDefinition()).thenThrow(new RepositoryException("gone"));
+
+        assertFalse(RevisionHistoryFunctions.isRichText(broken));
+    }
 }

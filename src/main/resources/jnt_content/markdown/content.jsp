@@ -18,6 +18,9 @@
   emitting nothing loses the record and looks like success. The function also logs a WARN for a node
   that yields neither text nor children, which is the loud fall-through this design always required.
 --%>
-<c:if test="${not empty currentNode.propertiesAsString['jcr:title']}">## ${currentNode.propertiesAsString['jcr:title']}<%= System.getProperty("line.separator") %><%= System.getProperty("line.separator") %></c:if>
+<%-- Titles and plain strings are TEXT and are escaped so the HTML parser reads them as text:
+     a literal <style> or <!-- in a title otherwise swallows the rest of the page (issue #18).
+     Rich-text properties are the only markup, and crh:textProperties passes those through raw. --%>
+<c:if test="${not empty currentNode.propertiesAsString['jcr:title']}">## ${fn:escapeXml(currentNode.propertiesAsString['jcr:title'])}<%= System.getProperty("line.separator") %><%= System.getProperty("line.separator") %></c:if>
 <c:forEach items="${crh:textProperties(currentNode)}" var="value">${value}<%= System.getProperty("line.separator") %><%= System.getProperty("line.separator") %></c:forEach>
 <c:forEach items="${currentNode.nodes}" var="child"><c:if test="${not fn:startsWith(child.name, 'j:')}"><template:module node="${child}" editable="false"/><%= System.getProperty("line.separator") %></c:if></c:forEach>

@@ -13,9 +13,15 @@ import java.util.List;
  * sink out of a public page built from captured content. This reads only what
  * {@link MarkdownNormalizer} emits, and that grammar is closed and tiny: {@code #}-repeat
  * headings, {@code - } and {@code N. } list items with two-space indents, {@code **bold**},
- * {@code [text](href)}, {@code ![alt](src)}, {@code |} table cells, and the backslash escapes
- * {@code \\}, {@code \[}, {@code \]}. Anything it does not recognise stays literal text, which is
- * exactly what the view did for everything before.
+ * {@code *italic*}, {@code [text](href)}, {@code ![alt](src)}, {@code |} table cells, and the
+ * backslash escapes {@code \\}, {@code \*}, {@code \[}, {@code \]}. Anything it does not recognise
+ * stays literal text, which is exactly what the view did for everything before.
+ *
+ * <p><b>The escaping contract is symmetric.</b> The normaliser escapes every literal backslash and
+ * asterisk in text; this reads every backslash as an escape and every delimiter pair as emphasis.
+ * It used to be one-sided -- the normaliser escaped inside link text only -- so a stored
+ * {@code C:\Users\bob} was displayed as {@code C:Usersbob} and {@code 2 ** 8 is 256 and 3 ** 2}
+ * came out mostly bold: the archive was right and the panel misrepresented it.
  *
  * <p><b>Links and images are deliberately left as their literal Markdown.</b> Collapsing
  * {@code [text](href)} to {@code text} would hide an href change: the words stay the same, the
@@ -31,8 +37,11 @@ import java.util.List;
  */
 public final class InlineMarkdown {
 
-    /** Bold delimiter, and the only inline mark that is rendered rather than left literal. */
+    /** Bold delimiter. */
     private static final String BOLD = "**";
+
+    /** Italic delimiter: a single asterisk that is not half of a bold delimiter. */
+    private static final char ITALIC = '*';
 
     private static final int MAX_HEADING_LEVEL = 6;
 
@@ -47,13 +56,15 @@ public final class InlineMarkdown {
     public static final class Piece {
         private final String text;
         private final boolean bold;
+        private final boolean italic;
         private final int rawStart;
         private final int rawEnd;
         private final boolean changed;
 
-        Piece(String text, boolean bold, int rawStart, int rawEnd, boolean changed) {
+        Piece(String text, boolean bold, boolean italic, int rawStart, int rawEnd, boolean changed) {
             this.text = text;
             this.bold = bold;
+            this.italic = italic;
             this.rawStart = rawStart;
             this.rawEnd = rawEnd;
             this.changed = changed;
@@ -66,6 +77,10 @@ public final class InlineMarkdown {
 
         public boolean isBold() {
             return bold;
+        }
+
+        public boolean isItalic() {
+            return italic;
         }
 
         /** @return whether the word-level diff marked this run as changed */
@@ -219,24 +234,34 @@ public final class InlineMarkdown {
         StringBuilder visible = new StringBuilder();
         List<int[]> spans = new ArrayList<>();
         List<Boolean> bolds = new ArrayList<>();
+        List<Boolean> italics = new ArrayList<>();
 
         boolean bold = false;
+        boolean italic = false;
         int i = from;
         while (i < raw.length()) {
             if (raw.charAt(i) == '\\' && i + 1 < raw.length()) {
-                // MarkdownNormalizer escapes '\', '[' and ']' on the way in. Showing the escape
-                // is showing its own bookkeeping.
+                // MarkdownNormalizer escapes '\', '*', '[' and ']' on the way in. Showing the
+                // escape is showing its own bookkeeping.
                 visible.append(raw.charAt(i + 1));
                 spans.add(new int[]{i, i + 2});
                 bolds.add(bold);
+                italics.add(italic);
                 i += 2;
-            } else if (raw.startsWith(BOLD, i) && (bold || closesLater(raw, i))) {
+            } else if (raw.startsWith(BOLD, i) && (bold || closesLater(raw, i, BOLD))) {
                 bold = !bold;
                 i += BOLD.length();
+            } else if (raw.charAt(i) == ITALIC && !raw.startsWith(BOLD, i)
+                    && (italic || italicClosesLater(raw, i))) {
+                // A single asterisk only: the first half of an unmatched "**" is content, not an
+                // italic opener, or "2 ** 8" would lose both asterisks to an empty italic span.
+                italic = !italic;
+                i++;
             } else {
                 visible.append(raw.charAt(i));
                 spans.add(new int[]{i, i + 1});
                 bolds.add(bold);
+                italics.add(italic);
                 i++;
             }
         }
@@ -245,14 +270,16 @@ public final class InlineMarkdown {
         int k = 0;
         while (k < visible.length()) {
             boolean runBold = bolds.get(k);
+            boolean runItalic = italics.get(k);
             boolean runChanged = changedAt(changedByOffset, spans.get(k)[0]);
             int start = k;
             while (k < visible.length()
                     && bolds.get(k) == runBold
+                    && italics.get(k) == runItalic
                     && changedAt(changedByOffset, spans.get(k)[0]) == runChanged) {
                 k++;
             }
-            pieces.add(new Piece(visible.substring(start, k), runBold,
+            pieces.add(new Piece(visible.substring(start, k), runBold, runItalic,
                     spans.get(start)[0], spans.get(k - 1)[1], runChanged));
         }
         return pieces;
@@ -263,14 +290,36 @@ public final class InlineMarkdown {
     }
 
     /**
-     * Does a bold span opened here ever close?
+     * Does a span opened here ever close?
      *
-     * <p>Asked only of an OPENING delimiter. A lone {@code **} is content -- "2 ** 8 is 256" --
-     * and must not bold the rest of the line. Once inside a span the next {@code **} closes it
-     * unconditionally, because nothing follows a closing delimiter for this to find, and asking
-     * this of it left the closer on screen as literal text.
+     * <p>Asked only of an OPENING delimiter. With the normaliser escaping literal asterisks a lone
+     * delimiter should no longer occur, but an older snapshot (generator 5 or earlier) can still
+     * hold one -- "2 ** 8 is 256" -- and it must not style the rest of the line. Once inside a
+     * span the next delimiter closes it unconditionally, because nothing follows a closing
+     * delimiter for this to find, and asking this of it left the closer on screen as literal text.
+     * An escaped delimiter does not close anything.
      */
-    private static boolean closesLater(String raw, int at) {
-        return raw.indexOf(BOLD, at + BOLD.length()) >= 0;
+    private static boolean closesLater(String raw, int at, String delimiter) {
+        int next = raw.indexOf(delimiter, at + delimiter.length());
+        while (next > 0 && raw.charAt(next - 1) == '\\') {
+            next = raw.indexOf(delimiter, next + delimiter.length());
+        }
+        return next >= 0;
+    }
+
+    /** Is there a later single, unescaped asterisk -- one that is not half of a {@code **}? */
+    private static boolean italicClosesLater(String raw, int at) {
+        for (int k = at + 1; k < raw.length(); k++) {
+            if (raw.charAt(k) != ITALIC) {
+                continue;
+            }
+            boolean escaped = raw.charAt(k - 1) == '\\';
+            boolean pairedBefore = raw.charAt(k - 1) == ITALIC;
+            boolean pairedAfter = k + 1 < raw.length() && raw.charAt(k + 1) == ITALIC;
+            if (!escaped && !pairedBefore && !pairedAfter) {
+                return true;
+            }
+        }
+        return false;
     }
 }
