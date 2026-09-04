@@ -67,6 +67,15 @@ public final class InlineMarkdown {
     /** Two or more leading slashes or backslashes: a protocol-relative reference, always rejected. */
     private static final Pattern PROTOCOL_RELATIVE = Pattern.compile("^[/\\\\]{2,}");
 
+    /**
+     * ASCII control characters, stripped from a URL BEFORE the scheme is matched -- exactly as
+     * {@code MarkdownNormalizer.sanitizeUrl} does. Browsers strip tab, CR and LF from a URL before
+     * parsing its scheme, so {@code java\tscript:} is {@code javascript:} to them; without this a
+     * control char inside the scheme would defeat {@link #LINK_SCHEME} and fall through as a
+     * "scheme-less, safe relative URL".
+     */
+    private static final Pattern URL_CONTROL_CHARS = Pattern.compile("[\\x00-\\x1F\\x7F]");
+
     private InlineMarkdown() {
         // static utility
     }
@@ -515,8 +524,8 @@ public final class InlineMarkdown {
         }
         int close = span[0];
         int paren = span[1];
-        String href = raw.substring(close + 2, paren);
-        if (!hrefAllowed(href)) {
+        String href = sanitizeHref(raw.substring(close + 2, paren));
+        if (href == null) {
             return open;
         }
         // One changed flag for the whole span: a destination-only edit lands on the href, which is
@@ -580,16 +589,23 @@ public final class InlineMarkdown {
         return new int[]{close, paren};
     }
 
-    /** Mirrors {@code MarkdownNormalizer.sanitizeUrl}'s allow-list on the read side. */
-    private static boolean hrefAllowed(String href) {
+    /**
+     * Mirrors {@code MarkdownNormalizer.sanitizeUrl}'s allow-list on the read side, control-char
+     * strip included, and returns the cleaned href to emit (never the raw one) or null to reject.
+     * Emitting the cleaned value matters: a tab left in the string would be stripped by the browser
+     * to the same {@code javascript:} the check rejects, so the check and the emitted attribute must
+     * agree on exactly which characters count.
+     */
+    private static String sanitizeHref(String rawHref) {
+        String href = URL_CONTROL_CHARS.matcher(rawHref).replaceAll("").trim();
         if (href.isEmpty() || PROTOCOL_RELATIVE.matcher(href).find()) {
-            return false;
+            return null;
         }
         Matcher m = LINK_SCHEME.matcher(href);
         if (!m.find()) {
-            return true;
+            return href;
         }
-        return ALLOWED_SCHEMES.contains(m.group(1).toLowerCase(Locale.ROOT));
+        return ALLOWED_SCHEMES.contains(m.group(1).toLowerCase(Locale.ROOT)) ? href : null;
     }
 
     private static boolean anyChanged(boolean[] changedByOffset, int start, int end) {

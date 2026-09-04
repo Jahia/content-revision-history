@@ -294,6 +294,21 @@ class InlineMarkdownTest {
     }
 
     @Test
+    @DisplayName("a control-char-obfuscated scheme is stripped and rejected, not read as relative")
+    void controlCharSchemeRejected() {
+        // "java\tscript:" -- the tab breaks the scheme regex, so without stripping control chars
+        // first the guard would fall through to "no scheme -> relative -> allowed". Browsers strip
+        // the tab and resolve it to javascript:, so it must be rejected the way the normalizer does.
+        String raw = "[click](java	script:alert(1))";
+        InlineMarkdown.Parsed parsed = InlineMarkdown.parse(raw, none());
+
+        assertNull(onlyLink(parsed), "must not become a link");
+        for (InlineMarkdown.Piece piece : parsed.getPieces()) {
+            assertNull(piece.getHref(), "no href reaches the page");
+        }
+    }
+
+    @Test
     @DisplayName("an image is not turned into a link and stays literal")
     void imageStaysLiteral() {
         // Images are out of scope: the '!' guards the '[' so the link parser never fires.
