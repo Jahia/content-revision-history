@@ -25,6 +25,9 @@ describe('the generic markdown fallback emits content, not just titles', () => {
     const pagePath = `/sites/${siteKey}/home/crh-fallback`;
     const marker = 'PRESS-BODY-MARKER-9f3a';
     const titleMarker = 'Fallback probe heading';
+    /** A sub-page of the probe page; its text must NOT be part of the parent's snapshot (#23). */
+    const subPagePath = `${pagePath}/crh-fallback-sub`;
+    const subPageMarker = 'SUBPAGE-TITLE-MARKER-77c1';
 
     const renderMarkdown = () => cy.request<string>({
         url: `/cms/render/default/${language}${pagePath}.markdown`,
@@ -54,6 +57,18 @@ describe('the generic markdown fallback emits content, not just titles', () => {
                 {name: 'jcr:title', value: titleMarker, language},
                 {name: 'body', value: `<p>${marker}</p>`, language}
             ]
+        });
+        // A sub-page under the probe. Sub-pages are children of the page node, so the page view
+        // used to recurse into them and a page's snapshot covered its whole subtree.
+        addNode({
+            parentPathOrId: pagePath,
+            name: 'crh-fallback-sub',
+            primaryNodeType: 'jnt:page',
+            properties: [
+                {name: 'jcr:title', value: subPageMarker, language},
+                {name: 'j:templateName', value: 'simple'}
+            ],
+            children: [{name: 'area-main', primaryNodeType: 'jnt:contentList'}]
         });
         publishAndWaitJobEnding(pagePath, [language]);
         // Wait for the render to actually carry the content rather than for a fixed interval:
@@ -90,6 +105,22 @@ describe('the generic markdown fallback emits content, not just titles', () => {
             // doubled title would corrupt every heading in every snapshot.
             const occurrences = response.body.split(titleMarker).length - 1;
             expect(occurrences, 'the title appears once, not twice').to.equal(1);
+        });
+    });
+
+    it('#23: does not include its sub-pages, which are pages in their own right', () => {
+        cy.login();
+        renderMarkdown().then(response => {
+            expect(response.body, 'the parent snapshot must be what a visitor sees on THAT page')
+                .to.not.contain(subPageMarker);
+        });
+        // The sub-page still renders on its own URL: skipping it from the parent loses nothing.
+        cy.request<string>({
+            url: `/cms/render/default/${language}${subPagePath}.markdown`,
+            failOnStatusCode: false
+        }).then(response => {
+            expect(response.status).to.equal(200);
+            expect(response.body).to.contain(`# ${subPageMarker}`);
         });
     });
 
