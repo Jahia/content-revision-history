@@ -1,6 +1,23 @@
 Changelog
 =========
 
+## Unreleased
+
+### Added
+
+* **The comparison viewer now renders blockquotes, horizontal rules, tables and links instead of
+  their raw Markdown.** The side-by-side diff already showed headings, lists, **bold** and
+  *italic* formatted; it now also renders `> ` blockquotes as an indented bar, `---` as a rule,
+  `| a | b |` rows as separated cells rather than a line of pipes, and `[text](href)` as a real
+  link. Links keep the guarantee that a destination change can never hide: the whole link is
+  highlighted when its target moves, even if the visible words did not, and only `http`, `https`,
+  `mailto` and site-relative targets are ever emitted as an `href`. Line-level shape stays
+  appearance only -- a heading or quote is styled, never a real `<h1>` or `<blockquote>` -- so the
+  panel never splices the snapshot's structure into the host page's outline. Two limitations are
+  inherited from how tables are stored: a single-column table's separator is indistinguishable
+  from a horizontal rule, and a literal ` | ` inside a cell reads as a cell boundary. Images stay
+  as their literal Markdown.
+
 ## [1.4.9](https://github.com/Jahia/content-revision-history/compare/1_4_8...1_4_9) (2026-09-04)
 
 ### Added
