@@ -350,4 +350,64 @@ class MarkdownDiffTest {
         String line = "  two  spaces\tand a tab ";
         assertEquals(line, String.join("", MarkdownDiff.tokenize(line)));
     }
+
+    // ------------------------------------------------------------------ tables (block context)
+
+    private static MarkdownDiff.Line lineWithText(MarkdownDiff.Result result, String text) {
+        return result.getLines().stream()
+                .filter(l -> text.equals(l.getText()))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("no line with text: " + text));
+    }
+
+    /**
+     * A table lives across several lines, so only the diff -- which sees the whole sequence -- can
+     * tell {@link InlineMarkdown} that a "Name | Status" line is a table row rather than prose that
+     * happens to contain a pipe. These assert that context is supplied.
+     */
+    // The change sits in the table body so the header, separator and a trailing prose line all stay
+    // within the 3 lines of context either side and are emitted as real lines rather than collapsed
+    // into a gap -- which is what lets these assert on them.
+    private static final String TABLE_OLD = "Name | Status\n--- | ---\nAlpha | Active\nSee notes\n";
+    private static final String TABLE_NEW = "Name | Status\n--- | ---\nAlpha | Retired\nSee notes\n";
+
+    @Test
+    @DisplayName("a table's header and body rows are parsed into cells; the separator is marked")
+    void tableRowsBecomeCells() {
+        MarkdownDiff.Result result = MarkdownDiff.compare(TABLE_OLD, TABLE_NEW);
+
+        // Header row: two cells, read as a table because a separator follows it.
+        assertNotNull(lineWithText(result, "Name | Status").getFormat().getCells());
+        assertEquals(2, lineWithText(result, "Name | Status").getFormat().getCells().size());
+        // Separator row: recognised as structure, not content.
+        assertTrue(lineWithText(result, "--- | ---").getFormat().isTableSeparator());
+    }
+
+    @Test
+    @DisplayName("prose next to a table is not turned into cells")
+    void proseBesideTableStaysProse() {
+        MarkdownDiff.Result result = MarkdownDiff.compare(TABLE_OLD, TABLE_NEW);
+
+        assertNull(lineWithText(result, "See notes").getFormat().getCells(),
+                "a paragraph is not a table row even when a table sits right above it");
+    }
+
+    @Test
+    @DisplayName("a changed cell is highlighted in its own cell only")
+    void changedCellHighlightsPerCell() {
+        String old = TABLE_OLD;
+        String changed = TABLE_NEW;
+
+        MarkdownDiff.Result result = MarkdownDiff.compare(old, changed);
+
+        MarkdownDiff.Line added = result.getLines().stream()
+                .filter(MarkdownDiff.Line::isAdded)
+                .findFirst().orElseThrow(AssertionError::new);
+        List<List<InlineMarkdown.Piece>> cells = added.getFormat().getCells();
+        assertNotNull(cells, "the changed body row is still a table row");
+        assertEquals(2, cells.size());
+        // First cell "Alpha" unchanged, second cell "Retired" carries the highlight.
+        assertTrue(cells.get(0).stream().noneMatch(InlineMarkdown.Piece::isChanged));
+        assertTrue(cells.get(1).stream().anyMatch(InlineMarkdown.Piece::isChanged));
+    }
 }

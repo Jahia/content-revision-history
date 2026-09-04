@@ -113,7 +113,7 @@ public final class MarkdownDiff {
         private final InlineMarkdown.Parsed format;
 
         Line(LineType type, String text, int oldNumber, int newNumber, int gapSize,
-             List<Segment> segments) {
+             List<Segment> segments, boolean inTableBlock) {
             this.type = type;
             this.text = text;
             this.oldNumber = oldNumber;
@@ -125,7 +125,9 @@ public final class MarkdownDiff {
             // Computed here rather than in the view: this class is documented as immutable and as
             // holding no JCR, and the view is a JSP with no session left to lean on. It also means
             // the crossing of formatting against the word-level segments happens exactly once.
-            this.format = InlineMarkdown.parse(text, this.segments);
+            // inTableBlock is a block property the caller worked out from the whole line sequence: a
+            // line cannot tell on its own that it is a table row rather than prose with a pipe.
+            this.format = InlineMarkdown.parse(text, this.segments, inTableBlock);
         }
 
         public LineType getType() {
@@ -305,6 +307,11 @@ public final class MarkdownDiff {
             newLines = capped(newLines);
         }
 
+        // Which lines sit inside a table, worked out once over each whole sequence. A line cannot
+        // tell this about itself, so it is decided here and handed to each Line for rendering.
+        boolean[] oldTable = tableRows(oldLines);
+        boolean[] newTable = tableRows(newLines);
+
         Patch patch = DiffUtils.diff(oldLines, newLines);
         List<Delta> deltas = patch.getDeltas();
 
@@ -317,7 +324,7 @@ public final class MarkdownDiff {
             Delta delta = deltas.get(i);
             int changeStart = delta.getOriginal().getPosition();
 
-            emitUnchangedRun(out, oldLines, oldIndex, newIndex, changeStart - oldIndex,
+            emitUnchangedRun(out, oldLines, oldTable, oldIndex, newIndex, changeStart - oldIndex,
                     i > 0, true);
 
             newIndex += changeStart - oldIndex;
@@ -325,13 +332,13 @@ public final class MarkdownDiff {
 
             List<String> removed = stringLines(delta.getOriginal());
             List<String> added = stringLines(delta.getRevised());
-            emitChange(out, removed, added, oldIndex, newIndex, counter);
+            emitChange(out, removed, added, oldIndex, newIndex, counter, oldTable, newTable);
 
             oldIndex += removed.size();
             newIndex += added.size();
         }
 
-        emitUnchangedRun(out, oldLines, oldIndex, newIndex, oldLines.size() - oldIndex,
+        emitUnchangedRun(out, oldLines, oldTable, oldIndex, newIndex, oldLines.size() - oldIndex,
                 !deltas.isEmpty(), false);
 
         return new Result(out, counter.added, counter.removed, truncated);
@@ -398,8 +405,8 @@ public final class MarkdownDiff {
      * @param afterChange  whether a change precedes this run (so it needs trailing context)
      * @param beforeChange whether a change follows it (so it needs leading context)
      */
-    private static void emitUnchangedRun(List<Line> out, List<String> oldLines, int oldStart,
-                                         int newStart, int length, boolean afterChange,
+    private static void emitUnchangedRun(List<Line> out, List<String> oldLines, boolean[] oldTable,
+                                         int oldStart, int newStart, int length, boolean afterChange,
                                          boolean beforeChange) {
         if (length <= 0) {
             return;
@@ -409,21 +416,24 @@ public final class MarkdownDiff {
 
         if (length <= head + tail) {
             for (int i = 0; i < length; i++) {
-                out.add(unchanged(oldLines.get(oldStart + i), oldStart + i + 1, newStart + i + 1));
+                out.add(unchanged(oldLines.get(oldStart + i), oldStart + i + 1, newStart + i + 1,
+                        oldTable[oldStart + i]));
             }
             return;
         }
         for (int i = 0; i < head; i++) {
-            out.add(unchanged(oldLines.get(oldStart + i), oldStart + i + 1, newStart + i + 1));
+            out.add(unchanged(oldLines.get(oldStart + i), oldStart + i + 1, newStart + i + 1,
+                    oldTable[oldStart + i]));
         }
-        out.add(new Line(LineType.GAP, "", -1, -1, length - head - tail, null));
+        out.add(new Line(LineType.GAP, "", -1, -1, length - head - tail, null, false));
         for (int i = length - tail; i < length; i++) {
-            out.add(unchanged(oldLines.get(oldStart + i), oldStart + i + 1, newStart + i + 1));
+            out.add(unchanged(oldLines.get(oldStart + i), oldStart + i + 1, newStart + i + 1,
+                    oldTable[oldStart + i]));
         }
     }
 
-    private static Line unchanged(String text, int oldNumber, int newNumber) {
-        return new Line(LineType.UNCHANGED, text, oldNumber, newNumber, 0, null);
+    private static Line unchanged(String text, int oldNumber, int newNumber, boolean inTable) {
+        return new Line(LineType.UNCHANGED, text, oldNumber, newNumber, 0, null, inTable);
     }
 
     /**
@@ -435,21 +445,68 @@ public final class MarkdownDiff {
      * as a plain block removal followed by a block addition rather than an invented alignment.
      */
     private static void emitChange(List<Line> out, List<String> removed, List<String> added,
-                                   int oldIndex, int newIndex, Counter counter) {
+                                   int oldIndex, int newIndex, Counter counter,
+                                   boolean[] oldTable, boolean[] newTable) {
         boolean pairable = !removed.isEmpty() && removed.size() == added.size();
 
         for (int i = 0; i < removed.size(); i++) {
             List<Segment> segments = pairable
                     ? segmentsFor(removed.get(i), added.get(i), true) : null;
-            out.add(new Line(LineType.REMOVED, removed.get(i), oldIndex + i + 1, -1, 0, segments));
+            out.add(new Line(LineType.REMOVED, removed.get(i), oldIndex + i + 1, -1, 0, segments,
+                    oldTable[oldIndex + i]));
             counter.removed++;
         }
         for (int i = 0; i < added.size(); i++) {
             List<Segment> segments = pairable
                     ? segmentsFor(removed.get(i), added.get(i), false) : null;
-            out.add(new Line(LineType.ADDED, added.get(i), -1, newIndex + i + 1, 0, segments));
+            out.add(new Line(LineType.ADDED, added.get(i), -1, newIndex + i + 1, 0, segments,
+                    newTable[newIndex + i]));
             counter.added++;
         }
+    }
+
+    /**
+     * Marks which lines sit inside a table: a header row, the {@code --- | ---} separator beneath
+     * it, and the contiguous body rows after -- the exact shape {@link MarkdownNormalizer} emits.
+     *
+     * <p>Computed over the whole sequence because membership is not a line-local property: a lone
+     * {@code Name | Status} is indistinguishable from prose that contains a pipe. The separator, by
+     * contrast, IS unambiguous (every cell is {@code ---}), so it anchors the block -- the row above
+     * it is the header, the pipe-bearing rows below it are the body.
+     */
+    private static boolean[] tableRows(List<String> lines) {
+        boolean[] inTable = new boolean[lines.size()];
+        for (int i = 0; i < lines.size(); i++) {
+            if (!isSeparatorRow(lines.get(i))) {
+                continue;
+            }
+            inTable[i] = true;
+            if (i > 0 && hasCellBoundary(lines.get(i - 1))) {
+                inTable[i - 1] = true;
+            }
+            for (int j = i + 1; j < lines.size() && hasCellBoundary(lines.get(j)); j++) {
+                inTable[j] = true;
+            }
+        }
+        return inTable;
+    }
+
+    /** A separator row: two or more cells, every one exactly {@code ---}. */
+    private static boolean isSeparatorRow(String line) {
+        String[] cells = line.split(" \\| ", -1);
+        if (cells.length < 2) {
+            return false;
+        }
+        for (String cell : cells) {
+            if (!"---".equals(cell)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static boolean hasCellBoundary(String line) {
+        return line.contains(" | ");
     }
 
     /**

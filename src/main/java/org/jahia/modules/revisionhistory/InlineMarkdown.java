@@ -149,18 +149,22 @@ public final class InlineMarkdown {
         private final int headingLevel;
         private final int quoteDepth;
         private final boolean horizontalRule;
+        private final boolean tableSeparator;
         private final String listMarker;
         private final int listDepth;
         private final List<Piece> pieces;
+        private final List<List<Piece>> cells;
 
-        Parsed(int headingLevel, int quoteDepth, boolean horizontalRule, String listMarker,
-               int listDepth, List<Piece> pieces) {
+        Parsed(int headingLevel, int quoteDepth, boolean horizontalRule, boolean tableSeparator,
+               String listMarker, int listDepth, List<Piece> pieces, List<List<Piece>> cells) {
             this.headingLevel = headingLevel;
             this.quoteDepth = quoteDepth;
             this.horizontalRule = horizontalRule;
+            this.tableSeparator = tableSeparator;
             this.listMarker = listMarker;
             this.listDepth = listDepth;
             this.pieces = Collections.unmodifiableList(pieces);
+            this.cells = cells == null ? null : Collections.unmodifiableList(cells);
         }
 
         /**
@@ -200,6 +204,32 @@ public final class InlineMarkdown {
             return horizontalRule;
         }
 
+        /**
+         * @return true when this line is a table's header/body separator ({@code --- | ---})
+         *
+         * <p>It carries no content -- {@link #getCells()} is null and {@link #getPieces()} empty --
+         * so the view draws a divider between the header and the body and shows no text. Only
+         * recognised inside a table block (see {@link #parse(String, List, boolean)}); a stray
+         * dashes-and-pipes line elsewhere stays literal.
+         */
+        public boolean isTableSeparator() {
+            return tableSeparator;
+        }
+
+        /**
+         * @return the row's cells, each a list of inline pieces, or null when the line is not a
+         * table row
+         *
+         * <p>A table row is split at {@code " | "} -- the exact separator {@link MarkdownNormalizer}
+         * writes between cells -- and each cell is inline-parsed in its own right, so bold, italic,
+         * links and the word-level highlight all work per cell. Non-table lines return null and the
+         * view renders {@link #getPieces()} instead. Table membership is a block property the caller
+         * supplies; a lone line cannot tell a table row from prose that merely contains a pipe.
+         */
+        public List<List<Piece>> getCells() {
+            return cells;
+        }
+
         /** @return {@code "-"} for a bullet, the number text for an ordered item, else null */
         public String getListMarker() {
             return listMarker;
@@ -222,8 +252,22 @@ public final class InlineMarkdown {
      * @return the line's rendered shape, with each run marked changed or not
      */
     public static Parsed parse(String raw, List<MarkdownDiff.Segment> segments) {
+        return parse(raw, segments, false);
+    }
+
+    /**
+     * @param inTableBlock whether the caller has determined this line sits inside a table (a header
+     *                     or body row, or the separator between them). Table membership cannot be
+     *                     read from a line in isolation -- prose containing a pipe is indistinct
+     *                     from a two-cell row -- so it is supplied from the surrounding diff, which
+     *                     sees the whole sequence. Only when true are {@code " | "} boundaries read
+     *                     as cells and a {@code --- | ---} line read as a separator.
+     * @see #parse(String, List)
+     */
+    public static Parsed parse(String raw, List<MarkdownDiff.Segment> segments,
+                               boolean inTableBlock) {
         if (raw == null) {
-            return new Parsed(0, 0, false, null, 0, new ArrayList<Piece>());
+            return new Parsed(0, 0, false, false, null, 0, new ArrayList<Piece>(), null);
         }
         boolean[] changedByOffset = changedOffsets(raw, segments);
 
@@ -242,7 +286,17 @@ public final class InlineMarkdown {
         // pipes -- is left to the table path rather than swallowed here.
         if (raw.length() - i == 3 && raw.charAt(i) == '-' && raw.charAt(i + 1) == '-'
                 && raw.charAt(i + 2) == '-') {
-            return new Parsed(0, quoteDepth, true, null, 0, new ArrayList<Piece>());
+            return new Parsed(0, quoteDepth, true, false, null, 0, new ArrayList<Piece>(), null);
+        }
+
+        // Table: only when the caller says this line is inside a table block. A "--- | ---" row is
+        // the header/body separator; anything else is a row split into cells at " | ".
+        if (inTableBlock) {
+            if (isSeparatorRow(raw, i)) {
+                return new Parsed(0, quoteDepth, false, true, null, 0, new ArrayList<Piece>(), null);
+            }
+            return new Parsed(0, quoteDepth, false, false, null, 0, new ArrayList<Piece>(),
+                    splitCells(raw, i, changedByOffset));
         }
 
         int headingLevel = 0;
@@ -285,8 +339,46 @@ public final class InlineMarkdown {
             }
         }
 
-        return new Parsed(headingLevel, quoteDepth, false, listMarker, listDepth,
-                run(raw, i, changedByOffset));
+        return new Parsed(headingLevel, quoteDepth, false, false, listMarker, listDepth,
+                run(raw, i, changedByOffset), null);
+    }
+
+    /**
+     * A table's header/body separator: two or more cells, every one exactly {@code ---}. A single
+     * {@code ---} is a horizontal rule, already handled; a single-column table's separator is
+     * genuinely indistinguishable from one, an ambiguity inherited from how the separator is
+     * stored.
+     */
+    private static boolean isSeparatorRow(String raw, int from) {
+        String remainder = raw.substring(from);
+        String[] cells = remainder.split(" \\| ", -1);
+        if (cells.length < 2) {
+            return false;
+        }
+        for (String cell : cells) {
+            if (!"---".equals(cell)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * Splits a table row into cells at {@code " | "} -- the exact join {@link MarkdownNormalizer}
+     * writes -- and inline-parses each cell over its own slice of the raw line, so the word-level
+     * highlight lands in the right cell. A literal {@code " | "} inside a cell would be read as a
+     * boundary; the normaliser does not escape it, an inherited limitation of the table encoding.
+     */
+    private static List<List<Piece>> splitCells(String raw, int from, boolean[] changedByOffset) {
+        List<List<Piece>> cells = new ArrayList<>();
+        int cellStart = from;
+        int boundary;
+        while ((boundary = raw.indexOf(" | ", cellStart)) >= 0) {
+            cells.add(run(raw, cellStart, boundary, changedByOffset));
+            cellStart = boundary + 3;
+        }
+        cells.add(run(raw, cellStart, raw.length(), changedByOffset));
+        return cells;
     }
 
     /**
@@ -327,6 +419,15 @@ public final class InlineMarkdown {
      * yields a single link run that highlights even when only the destination moved.
      */
     private static List<Piece> run(String raw, int from, boolean[] changedByOffset) {
+        return run(raw, from, raw.length(), changedByOffset);
+    }
+
+    /**
+     * As {@link #run(String, int, boolean[])} but bounded to {@code [from, end)}, so a single table
+     * cell is parsed without a delimiter, bracket or href reaching past {@code " | "} into the next
+     * cell. A whole line is just the case {@code end == raw.length()}.
+     */
+    private static List<Piece> run(String raw, int from, int end, boolean[] changedByOffset) {
         StringBuilder visible = new StringBuilder();
         List<int[]> spans = new ArrayList<>();
         List<Boolean> bolds = new ArrayList<>();
@@ -336,9 +437,9 @@ public final class InlineMarkdown {
         boolean bold = false;
         boolean italic = false;
         int i = from;
-        while (i < raw.length()) {
+        while (i < end) {
             char c = raw.charAt(i);
-            if (c == '\\' && i + 1 < raw.length()) {
+            if (c == '\\' && i + 1 < end) {
                 // MarkdownNormalizer escapes '\', '*', '[' and ']' on the way in. Showing the
                 // escape is showing its own bookkeeping.
                 visible.append(raw.charAt(i + 1));
@@ -351,7 +452,7 @@ public final class InlineMarkdown {
             }
             if (c == '[' && (i == from || raw.charAt(i - 1) != '!')) {
                 // A '[' not preceded by '!' may open a link; '!' guards an image, left literal.
-                int after = emitLinkIfPresent(raw, i, bold, italic, changedByOffset,
+                int after = emitLinkIfPresent(raw, i, end, bold, italic, changedByOffset,
                         visible, spans, bolds, italics, hrefs);
                 if (after > i) {
                     i = after;
@@ -359,11 +460,11 @@ public final class InlineMarkdown {
                 }
                 // Not a well-formed or allow-listed link: fall through and treat '[' as content.
             }
-            if (raw.startsWith(BOLD, i) && (bold || closesLater(raw, i, BOLD))) {
+            if (raw.startsWith(BOLD, i) && (bold || closesLater(raw, i, end, BOLD))) {
                 bold = !bold;
                 i += BOLD.length();
             } else if (c == ITALIC && !raw.startsWith(BOLD, i)
-                    && (italic || italicClosesLater(raw, i))) {
+                    && (italic || italicClosesLater(raw, i, end))) {
                 // A single asterisk only: the first half of an unmatched "**" is content, not an
                 // italic opener, or "2 ** 8" would lose both asterisks to an empty italic span.
                 italic = !italic;
@@ -405,10 +506,10 @@ public final class InlineMarkdown {
      * the offset just past the closing {@code ')'}. Otherwise appends nothing and returns
      * {@code open}, so the caller renders the {@code '['} as content.
      */
-    private static int emitLinkIfPresent(String raw, int open, boolean bold, boolean italic,
+    private static int emitLinkIfPresent(String raw, int open, int end, boolean bold, boolean italic,
             boolean[] changedByOffset, StringBuilder visible, List<int[]> spans,
             List<Boolean> bolds, List<Boolean> italics, List<String> hrefs) {
-        int[] span = matchLink(raw, open);
+        int[] span = matchLink(raw, open, end);
         if (span == null) {
             return open;
         }
@@ -450,9 +551,9 @@ public final class InlineMarkdown {
      * {@code ']'} must be immediately followed by {@code '('}; a {@code ')'} must follow. Escapes
      * inside the text are skipped so a {@code \]} does not close it early.
      */
-    private static int[] matchLink(String raw, int open) {
+    private static int[] matchLink(String raw, int open, int end) {
         int close = -1;
-        for (int j = open + 1; j < raw.length(); j++) {
+        for (int j = open + 1; j < end; j++) {
             char c = raw.charAt(j);
             if (c == '\\') {
                 j++;
@@ -469,11 +570,11 @@ public final class InlineMarkdown {
         if (close < 0 || close == open + 1) {
             return null;
         }
-        if (close + 1 >= raw.length() || raw.charAt(close + 1) != '(') {
+        if (close + 1 >= end || raw.charAt(close + 1) != '(') {
             return null;
         }
         int paren = raw.indexOf(')', close + 2);
-        if (paren < 0) {
+        if (paren < 0 || paren >= end) {
             return null;
         }
         return new int[]{close, paren};
@@ -514,23 +615,23 @@ public final class InlineMarkdown {
      * delimiter for this to find, and asking this of it left the closer on screen as literal text.
      * An escaped delimiter does not close anything.
      */
-    private static boolean closesLater(String raw, int at, String delimiter) {
+    private static boolean closesLater(String raw, int at, int end, String delimiter) {
         int next = raw.indexOf(delimiter, at + delimiter.length());
-        while (next > 0 && raw.charAt(next - 1) == '\\') {
+        while (next > 0 && next + delimiter.length() <= end && raw.charAt(next - 1) == '\\') {
             next = raw.indexOf(delimiter, next + delimiter.length());
         }
-        return next >= 0;
+        return next >= 0 && next + delimiter.length() <= end;
     }
 
     /** Is there a later single, unescaped asterisk -- one that is not half of a {@code **}? */
-    private static boolean italicClosesLater(String raw, int at) {
-        for (int k = at + 1; k < raw.length(); k++) {
+    private static boolean italicClosesLater(String raw, int at, int end) {
+        for (int k = at + 1; k < end; k++) {
             if (raw.charAt(k) != ITALIC) {
                 continue;
             }
             boolean escaped = raw.charAt(k - 1) == '\\';
             boolean pairedBefore = raw.charAt(k - 1) == ITALIC;
-            boolean pairedAfter = k + 1 < raw.length() && raw.charAt(k + 1) == ITALIC;
+            boolean pairedAfter = k + 1 < end && raw.charAt(k + 1) == ITALIC;
             if (!escaped && !pairedBefore && !pairedAfter) {
                 return true;
             }

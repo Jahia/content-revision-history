@@ -333,6 +333,76 @@ class InlineMarkdownTest {
         assertTrue(link.isBold(), "the link sits inside a bold span");
     }
 
+    // ------------------------------------------------------------------ tables
+
+    private static String cellVisible(InlineMarkdown.Parsed parsed, int index) {
+        StringBuilder out = new StringBuilder();
+        for (InlineMarkdown.Piece piece : parsed.getCells().get(index)) {
+            out.append(piece.getText());
+        }
+        return out.toString();
+    }
+
+    @Test
+    @DisplayName("in a table block, a '--- | ---' row is the separator, not content")
+    void tableSeparatorRow() {
+        InlineMarkdown.Parsed parsed = InlineMarkdown.parse("--- | --- | ---", none(), true);
+
+        assertTrue(parsed.isTableSeparator());
+        assertFalse(parsed.isHorizontalRule(), "a separator is table structure, not a rule");
+    }
+
+    @Test
+    @DisplayName("in a table block, a row splits into cells at ' | '")
+    void tableRowSplitsIntoCells() {
+        InlineMarkdown.Parsed parsed = InlineMarkdown.parse("Name | Status | Owner", none(), true);
+
+        assertFalse(parsed.isTableSeparator());
+        assertEquals(3, parsed.getCells().size());
+        assertEquals("Name", cellVisible(parsed, 0));
+        assertEquals("Status", cellVisible(parsed, 1));
+        assertEquals("Owner", cellVisible(parsed, 2));
+    }
+
+    @Test
+    @DisplayName("cells carry their own inline formatting and links")
+    void tableCellsAreInlineParsed() {
+        InlineMarkdown.Parsed parsed =
+                InlineMarkdown.parse("**Name** | [site](/s)", none(), true);
+
+        assertEquals(2, parsed.getCells().size());
+        assertEquals("Name", cellVisible(parsed, 0));
+        assertTrue(parsed.getCells().get(0).get(0).isBold(), "first cell is bold");
+
+        InlineMarkdown.Piece linkCell = parsed.getCells().get(1).get(0);
+        assertTrue(linkCell.isLink());
+        assertEquals("site", linkCell.getText());
+        assertEquals("/s", linkCell.getHref());
+    }
+
+    @Test
+    @DisplayName("a changed word is highlighted in its own cell only")
+    void tableCellHighlightCrossing() {
+        // The crossing again, now per cell: segments are positions in the whole raw row.
+        InlineMarkdown.Parsed parsed = InlineMarkdown.parse("Draft | Status",
+                segments("Draft", true, " | Status", false), true);
+
+        assertTrue(parsed.getCells().get(0).get(0).isChanged(), "first cell changed");
+        for (InlineMarkdown.Piece piece : parsed.getCells().get(1)) {
+            assertFalse(piece.isChanged(), "second cell unchanged");
+        }
+    }
+
+    @Test
+    @DisplayName("outside a table block, a pipe line stays literal (the safe default)")
+    void pipeLineOutsideTableStaysLiteral() {
+        // 2-arg parse is table-unaware: a bare pipe in prose must not be read as a cell boundary.
+        InlineMarkdown.Parsed parsed = InlineMarkdown.parse("Name | Status", none());
+
+        assertNull(parsed.getCells());
+        assertEquals("Name | Status", visible(parsed));
+    }
+
     // ------------------------------------------------------------------ the crossing
 
     @Test
