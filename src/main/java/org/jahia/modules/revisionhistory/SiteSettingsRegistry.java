@@ -9,6 +9,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
+import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -24,7 +25,6 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.Set;
-import java.util.regex.Pattern;
 
 /**
  * Per-site capture configuration, one file per site.
@@ -39,7 +39,13 @@ import java.util.regex.Pattern;
  *
  * <p>Each instance is {@code <karaf.etc>/org.jahia.modules.revisionhistory.site-<siteKey>.cfg},
  * keyed by the {@code siteKey} property inside it rather than by the file name: the name is a
- * convention for humans, the property is what this trusts.
+ * convention for humans, the property is what this trusts. Because the name is only a convention,
+ * {@link #save} writes back to <em>the file that delivered the site</em> (FileInstall names it in
+ * {@code felix.fileinstall.filename}), and uses the conventional name only for a site that has no
+ * file yet. It used to derive the target from the site key alone, so a site configured from
+ * {@code ...site-corp-prod.cfg} got a second {@code ...site-corp.cfg} on the first panel save, the
+ * hand-added {@code capture.secret} was not carried into it, two files then competed for the site
+ * across restarts, and "Use defaults" deleted only the new one (issue #21).
  *
  * <h2>Fallback</h2>
  * A site with no file of its own gets {@link SiteCaptureSettings#DEFAULTS}, which reproduces exactly
@@ -87,15 +93,29 @@ public class SiteSettingsRegistry implements ManagedServiceFactory {
     static final String PROP_BASE_URL = "capture.baseUrl";
 
     /**
-     * A site key must be one safe path segment, because it is interpolated into a file name.
-     * Jahia site keys are already restricted to this, so nothing legitimate is refused.
+     * The property Felix FileInstall adds to every configuration it delivers: the URI of the file
+     * it came from. Absent for a configuration created any other way.
      */
-    private static final Pattern SAFE_SITE_KEY = Pattern.compile("[A-Za-z0-9][A-Za-z0-9._-]{0,63}");
+    static final String PROP_FILEINSTALL_FILENAME = "felix.fileinstall.filename";
+
+    /** The banner {@link #save} writes above preserved lines; skipped on re-read so it is written once. */
+    static final String PRESERVED_BANNER = "# Kept from the previous file: settings this module does not manage.";
+
+    /*
+     * One site-key rule for the whole module: RevisionSnapshotService.isValidSiteKey, the capture
+     * path's own. This class used to apply a second, stricter pattern to the file name, which
+     * refused a leading '_' or '-' -- both legal in a Jahia site key (validSiteKeyCharacters =
+     * A-Za-z_0-9-, no position rule). A site such as _intranet captured normally but could not save
+     * settings, and the panel showed "Internal Server Error(s) while executing query" (issue #29).
+     * The shared rule is still one safe path segment: no separator, no dot, so no traversal.
+     */
 
     /** siteKey -> settings. Written on a configuration-admin thread, read on Quartz ones. */
     private final Map<String, SiteCaptureSettings> bySite = new ConcurrentHashMap<>();
     /** OSGi pid -> siteKey, so {@link #deleted} knows which site a pid was for. */
     private final Map<String, String> siteByPid = new ConcurrentHashMap<>();
+    /** siteKey -> the file FileInstall delivered it from, when known; see the class comment. */
+    private final Map<String, Path> fileBySite = new ConcurrentHashMap<>();
 
     /**
      * The active component, for callers that cannot be injected.
@@ -151,19 +171,17 @@ public class SiteSettingsRegistry implements ManagedServiceFactory {
             throw new ConfigurationException(PROP_SITE_KEY,
                     "required: it is what says which site this file configures");
         }
-        // SAFE_SITE_KEY guarantees the key is a safe single path segment for the .cfg file name.
-        // isValidSiteKey is the capture path's own rule, checked here too so this module cannot
-        // accept and persist settings for a site whose every capture would then be refused.
-        if (!SAFE_SITE_KEY.matcher(siteKey).matches()
-                || !RevisionSnapshotService.isValidSiteKey(siteKey)) {
+        // The capture path's own rule, which is also what keeps the key a safe single path segment
+        // for the .cfg file name -- so this module cannot accept and persist settings for a site
+        // whose every capture would then be refused, nor name a file outside the directory.
+        if (!RevisionSnapshotService.isValidSiteKey(siteKey)) {
             throw new ConfigurationException(PROP_SITE_KEY,
                     "'" + siteKey + "' is not a valid site key");
         }
         SiteCaptureSettings settings = new SiteCaptureSettings(
                 siteKey,
                 bool(properties, PROP_ENABLED, SiteCaptureSettings.DEFAULTS.isCaptureEnabled()),
-                positiveInt(properties, PROP_MAX_SNAPSHOTS,
-                        SiteCaptureSettings.DEFAULTS.getMaxSnapshots()),
+                retention(properties),
                 string(properties, PROP_USER),
                 CaptureIdentity.authorizationFrom(
                         string(properties, PROP_USER),
@@ -178,11 +196,41 @@ public class SiteSettingsRegistry implements ManagedServiceFactory {
         String previous = siteByPid.put(pid, siteKey);
         if (previous != null && !previous.equals(siteKey) && !siteByPid.containsValue(previous)) {
             bySite.remove(previous);
+            fileBySite.remove(previous);
             logger.info("Configuration {} now names site {}; {} falls back to the module defaults.",
                     pid, siteKey, previous);
         }
         bySite.put(siteKey, settings);
+        rememberDeliveringFile(siteKey, string(properties, PROP_FILEINSTALL_FILENAME));
         logger.info("Applied per-site revision capture settings: {}", settings);
+    }
+
+    /**
+     * Records which file configures a site, so a later {@link #save} rewrites that file rather than
+     * creating a second one under the conventional name. Only a {@code .cfg} FileInstall itself
+     * named is remembered; anything else leaves the site on the conventional name.
+     */
+    private void rememberDeliveringFile(String siteKey, String fileInstallName) {
+        Path delivered = fileInstallPath(fileInstallName);
+        if (delivered == null) {
+            fileBySite.remove(siteKey);
+            return;
+        }
+        fileBySite.put(siteKey, delivered);
+    }
+
+    /** @return the path named by a FileInstall filename property (a file: URI or a plain path), or null */
+    static Path fileInstallPath(String fileInstallName) {
+        if (fileInstallName == null || !fileInstallName.endsWith(".cfg")) {
+            return null;
+        }
+        try {
+            return fileInstallName.startsWith("file:")
+                    ? Paths.get(URI.create(fileInstallName)) : Paths.get(fileInstallName);
+        } catch (RuntimeException unusable) {
+            logger.debug("Ignoring unusable {} value {}", PROP_FILEINSTALL_FILENAME, fileInstallName, unusable);
+            return null;
+        }
     }
 
     @Override
@@ -190,6 +238,7 @@ public class SiteSettingsRegistry implements ManagedServiceFactory {
         String siteKey = siteByPid.remove(pid);
         if (siteKey != null) {
             bySite.remove(siteKey);
+            fileBySite.remove(siteKey);
             logger.info("Removed per-site revision capture settings for {}; it falls back to the"
                     + " module defaults.", siteKey);
         }
@@ -312,6 +361,12 @@ public class SiteSettingsRegistry implements ManagedServiceFactory {
             // the nesting is shallow enough that the guard-clause form bought nothing here.
             for (String line : Files.readAllLines(target, StandardCharsets.ISO_8859_1)) {
                 String trimmed = line.trim();
+                if (trimmed.equals(PRESERVED_BANNER)) {
+                    // Our own banner from the previous save. Re-reading it as an operator comment
+                    // re-emitted it under a fresh banner, so the file grew by one line per save
+                    // (issue #31).
+                    continue;
+                }
                 if (trimmed.startsWith("#") || trimmed.startsWith("!")) {
                     pendingComments.add(line);
                 } else if (!trimmed.isEmpty()) {
@@ -405,7 +460,7 @@ public class SiteSettingsRegistry implements ManagedServiceFactory {
             body.append(PROP_BASE_URL).append(" = ").append(baseUrl).append('\n');
         }
         if (!preserved.isEmpty()) {
-            body.append("\n# Kept from the previous file: settings this module does not manage.\n");
+            body.append('\n').append(PRESERVED_BANNER).append('\n');
             for (String line : preserved) {
                 body.append(line).append('\n');
             }
@@ -443,19 +498,28 @@ public class SiteSettingsRegistry implements ManagedServiceFactory {
         if (Files.deleteIfExists(target)) {
             logger.info("Deleted per-site revision capture settings for {}", siteKey);
         }
+        // Cleared now, for the same reason save() applies its write now: FileInstall will call
+        // deleted(pid) when it notices, but until then the panel's refetch still showed the deleted
+        // settings and the "own settings" banner, and a publication landing in that window was
+        // captured under values the administrator had just removed (issue #28).
+        bySite.remove(siteKey);
+        fileBySite.remove(siteKey);
+        siteByPid.values().removeIf(siteKey::equals);
     }
 
     /**
-     * The file one site's configuration lives in.
+     * The file one site's configuration lives in: the one FileInstall delivered it from when that
+     * is known, else the conventional name.
      *
      * <p>The site key is validated before it reaches the file name. A key carrying a separator or a
      * {@code ..} would otherwise let a caller name a path outside the configuration directory.
      */
     Path configFile(String siteKey) {
-        if (siteKey == null || !SAFE_SITE_KEY.matcher(siteKey).matches()) {
+        if (!RevisionSnapshotService.isValidSiteKey(siteKey)) {
             throw new IllegalArgumentException("Not a valid site key: " + siteKey);
         }
-        return etcDirectory().resolve(FACTORY_PID + '-' + siteKey + ".cfg");
+        Path delivered = fileBySite.get(siteKey);
+        return delivered != null ? delivered : etcDirectory().resolve(FACTORY_PID + '-' + siteKey + ".cfg");
     }
 
     private static Path etcDirectory() {
@@ -485,6 +549,24 @@ public class SiteSettingsRegistry implements ManagedServiceFactory {
     private static boolean bool(Dictionary<String, ?> properties, String key, boolean fallback) {
         String value = string(properties, key);
         return value == null ? fallback : Boolean.parseBoolean(value);
+    }
+
+    /**
+     * The retention cap from the file, floored at {@link #MIN_MAX_SNAPSHOTS}.
+     *
+     * <p>One minimum, applied everywhere: the file, {@link #save}, the mutation and the panel. The
+     * file used to accept 1 while save() refused it, so a site hand-configured with 1 could not be
+     * edited in the panel until an unrelated field was raised first (issue #32). 1 cannot be
+     * honoured anyway -- prune never deletes the newest snapshot -- so the floor is the honest value.
+     */
+    private static int retention(Dictionary<String, ?> properties) {
+        int configured = positiveInt(properties, PROP_MAX_SNAPSHOTS, SiteCaptureSettings.DEFAULTS.getMaxSnapshots());
+        if (configured < MIN_MAX_SNAPSHOTS) {
+            logger.warn("{} = {} is below the floor retention can deliver; using {}", PROP_MAX_SNAPSHOTS,
+                    configured, MIN_MAX_SNAPSHOTS);
+            return MIN_MAX_SNAPSHOTS;
+        }
+        return configured;
     }
 
     /**

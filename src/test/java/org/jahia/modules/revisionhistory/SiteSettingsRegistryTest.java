@@ -170,9 +170,23 @@ class SiteSettingsRegistryTest {
     @DisplayName("a site with no settings falls back to the global capture principal")
     void globalPrincipalAppliesWhenSiteHasNone() {
         // This is what keeps an upgrade from changing what gets captured: every site that has no
-        // per-site file keeps using the module-wide account exactly as before.
-        registry.deactivate();
+        // per-site file keeps using the module-wide account exactly as before. Asserted positively:
+        // the previous version asserted null, which only proved that no test before it had left a
+        // global credential behind -- and one did, whenever CaptureIdentityTest ran first (#35).
+        CaptureIdentity global = new CaptureIdentity();
+        try {
+            java.util.Map<String, Object> config = new java.util.HashMap<>();
+            config.put(CaptureIdentity.PROP_USER, "crh-global");
+            config.put(CaptureIdentity.PROP_SECRET, "s3cr3t");
+            global.configure(config);
+            registry.deactivate();
 
+            assertEquals(CaptureIdentity.authorization(), GuestMarkdownFetcher.authorizationFor("academy"),
+                    "a site with no file of its own captures as the module-wide account");
+            assertNotNull(GuestMarkdownFetcher.authorizationFor("academy"));
+        } finally {
+            global.configure(null);
+        }
         assertNull(GuestMarkdownFetcher.authorizationFor("academy"),
                 "with no global configuration either, capture stays anonymous");
     }
@@ -463,9 +477,130 @@ class SiteSettingsRegistryTest {
     @Test
     @DisplayName("a carriage return is refused too, not just a newline")
     void carriageReturnIsRefused(@TempDir Path etc) throws Exception {
-        withEtc(etc, () -> assertThrows(IllegalArgumentException.class,
-                () -> registry.save(SiteCaptureSettings.DEFAULTS
-                        .withChanges("academy", true, 10, null, "http://h\rsiteKey = other"))));
+        // Injected through capture.user with NO baseUrl. The previous version put the \r in a
+        // non-loopback baseUrl, so the exception it caught came from the SSRF guard that runs
+        // first in save(), and the \r check itself was never exercised (#34).
+        withEtc(etc, () -> {
+            IllegalArgumentException refused = assertThrows(IllegalArgumentException.class,
+                    () -> registry.save(SiteCaptureSettings.DEFAULTS
+                            .withChanges("academy", true, 10, "x\rcapture.secretFile = /etc/shadow", null)));
+            assertTrue(refused.getMessage().contains("line break"), refused.getMessage());
+            assertFalse(Files.exists(registry.configFile("academy")));
+        });
+    }
+
+    @Test
+    @DisplayName("a backslash is refused: it is the properties escape character")
+    void backslashInAValueIsRefused(@TempDir Path etc) throws Exception {
+        withEtc(etc, () -> {
+            IllegalArgumentException refused = assertThrows(IllegalArgumentException.class,
+                    () -> registry.save(SiteCaptureSettings.DEFAULTS
+                            .withChanges("academy", true, 10, "DOMAIN\\svc_capture", null)));
+            assertTrue(refused.getMessage().contains("backslash"), refused.getMessage());
+            assertFalse(Files.exists(registry.configFile("academy")));
+        });
+    }
+
+    // ------------------------------------------------------------------ review-pass fixes
+
+    @Test
+    @DisplayName("#21: save writes back to the file that delivered the site, not to a second file")
+    void saveWritesBackToTheDeliveringFile(@TempDir Path etc) throws Exception {
+        withEtc(etc, () -> {
+            // An operator-named file, with a hand-added secret the module does not manage.
+            Path prod = etc.resolve(SiteSettingsRegistry.FACTORY_PID + "-corp-prod.cfg");
+            Files.write(prod, java.util.Arrays.asList(
+                    "siteKey = corp", "capture.user = svc", "capture.secret = hunter2"));
+            registry.updated("pid-prod", props(
+                    SiteSettingsRegistry.PROP_SITE_KEY, "corp",
+                    SiteSettingsRegistry.PROP_USER, "svc",
+                    SiteSettingsRegistry.PROP_SECRET, "hunter2",
+                    SiteSettingsRegistry.PROP_FILEINSTALL_FILENAME, prod.toUri().toString()));
+
+            registry.save(registry.forSite("corp").withChanges("corp", false, 10, "svc", null));
+
+            Path canonical = etc.resolve(SiteSettingsRegistry.FACTORY_PID + "-corp.cfg");
+            assertFalse(Files.exists(canonical), "a second file would compete with the first across restarts");
+            String rewritten = new String(Files.readAllBytes(prod), java.nio.charset.StandardCharsets.ISO_8859_1);
+            assertTrue(rewritten.contains("capture.enabled = false"), rewritten);
+            assertTrue(rewritten.contains("capture.secret = hunter2"), "the secret must be carried: " + rewritten);
+
+            registry.delete("corp");
+            assertFalse(Files.exists(prod), "Use defaults must remove the file that configured the site");
+        });
+    }
+
+    @Test
+    @DisplayName("#21: a fileinstall name that is not a .cfg leaves the site on the conventional name")
+    void unusableDeliveringNameFallsBackToTheConvention(@TempDir Path etc) throws Exception {
+        withEtc(etc, () -> {
+            registry.updated("pid-1", props(
+                    SiteSettingsRegistry.PROP_SITE_KEY, "corp",
+                    SiteSettingsRegistry.PROP_FILEINSTALL_FILENAME, "not a file"));
+
+            assertEquals(etc.resolve(SiteSettingsRegistry.FACTORY_PID + "-corp.cfg"), registry.configFile("corp"));
+            assertNull(SiteSettingsRegistry.fileInstallPath(null));
+            assertNull(SiteSettingsRegistry.fileInstallPath("file:/x/y.properties"));
+        });
+    }
+
+    @Test
+    @DisplayName("#28: delete clears the in-memory settings immediately")
+    void deleteClearsTheInMemorySettings(@TempDir Path etc) throws Exception {
+        withEtc(etc, () -> {
+            registry.save(SiteCaptureSettings.DEFAULTS.withChanges("academy", false, 5, null, null));
+            assertTrue(registry.isConfigured("academy"));
+
+            registry.delete("academy");
+
+            assertFalse(registry.isConfigured("academy"),
+                    "the panel refetches at once and must not see the deleted settings");
+            assertSame(SiteCaptureSettings.DEFAULTS, registry.forSite("academy"));
+        });
+    }
+
+    @Test
+    @DisplayName("#29: a site key with a leading underscore or hyphen is accepted, as capture accepts it")
+    void siteKeysCaptureAcceptsCanBeConfigured(@TempDir Path etc) throws Exception {
+        withEtc(etc, () -> {
+            registry.updated("pid-1", props(SiteSettingsRegistry.PROP_SITE_KEY, "_intranet"));
+            registry.save(registry.forSite("_intranet").withChanges("_intranet", false, 5, null, null));
+            assertTrue(Files.exists(registry.configFile("_intranet")));
+            assertTrue(Files.exists(etc.resolve(SiteSettingsRegistry.FACTORY_PID + "-_intranet.cfg")));
+            registry.save(SiteCaptureSettings.DEFAULTS.withChanges("-legacy", false, 5, null, null));
+            assertTrue(Files.exists(registry.configFile("-legacy")));
+            // Still one safe path segment: no dots, no separators.
+            assertThrows(IllegalArgumentException.class, () -> registry.configFile("a.b"));
+            assertThrows(IllegalArgumentException.class, () -> registry.configFile("a/b"));
+        });
+    }
+
+    @Test
+    @DisplayName("#31: the preserved-lines banner is written once, however many times the file is saved")
+    void bannerIsNotDuplicatedAcrossSaves(@TempDir Path etc) throws Exception {
+        withEtc(etc, () -> {
+            Path file = registry.configFile("academy");
+            Files.write(file, java.util.Arrays.asList("siteKey = academy", "capture.secret = s"));
+            for (int i = 0; i < 4; i++) {
+                registry.save(SiteCaptureSettings.DEFAULTS.withChanges("academy", true, 10 + i, null, null));
+            }
+
+            java.util.List<String> lines = Files.readAllLines(file, java.nio.charset.StandardCharsets.ISO_8859_1);
+            long banners = lines.stream().filter(l -> l.trim().equals(SiteSettingsRegistry.PRESERVED_BANNER)).count();
+            assertEquals(1, banners, String.join("\n", lines));
+            assertEquals(1, lines.stream().filter(l -> l.startsWith("capture.secret")).count());
+        });
+    }
+
+    @Test
+    @DisplayName("#32: a retention below the floor in the file is raised to the floor")
+    void retentionBelowTheFloorIsRaised() throws Exception {
+        registry.updated("pid-1", props(
+                SiteSettingsRegistry.PROP_SITE_KEY, "academy",
+                SiteSettingsRegistry.PROP_MAX_SNAPSHOTS, "1"));
+
+        assertEquals(SiteSettingsRegistry.MIN_MAX_SNAPSHOTS, registry.forSite("academy").getMaxSnapshots(),
+                "1 cannot be honoured: prune never deletes the newest snapshot");
     }
 
     @Test

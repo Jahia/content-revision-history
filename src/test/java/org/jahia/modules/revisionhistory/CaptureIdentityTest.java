@@ -1,5 +1,6 @@
 package org.jahia.modules.revisionhistory;
 
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -24,6 +25,16 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 class CaptureIdentityTest {
 
     private final CaptureIdentity identity = new CaptureIdentity();
+
+    /**
+     * The credential is static state shared by the whole surefire fork. Without this the last test
+     * to run left it set, and SiteSettingsRegistryTest's fallback assertion held only when that class
+     * happened to run first (issue #35).
+     */
+    @AfterEach
+    void resetTheSharedCredential() {
+        identity.configure(null);
+    }
 
     private static Map<String, Object> config(String... pairs) {
         Map<String, Object> map = new HashMap<>();

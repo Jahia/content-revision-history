@@ -69,9 +69,15 @@ public class RevisionHistoryMutation {
                 baseUrl != null ? emptyToNull(baseUrl) : current.getBaseUrl());
         try {
             registry.save(updated);
+        } catch (IllegalArgumentException | IllegalStateException refused) {
+            // The registry's own validation (a line break or backslash in a value, a key it cannot
+            // name a file for, a file it refuses to rewrite unread). These messages are written for
+            // the administrator; a plain RuntimeException made DefaultGraphQLErrorHandler collapse
+            // them to "Internal Server Error(s) while executing query" (issue #30).
+            throw new BaseGqlClientException(refused.getMessage(), refused, ErrorType.ValidationError);
         } catch (IOException couldNotWrite) {
-            throw new RuntimeException("Could not write the settings for site " + siteKey
-                    + ": " + couldNotWrite.getMessage(), couldNotWrite);
+            throw new BaseGqlClientException("Could not write the settings for site " + siteKey
+                    + ": " + couldNotWrite.getMessage(), couldNotWrite, ErrorType.ExecutionAborted);
         }
         return new GqlSiteSettings(siteKey, true, updated);
     }
@@ -94,9 +100,11 @@ public class RevisionHistoryMutation {
         try {
             SiteSettingsAccess.registry().delete(siteKey);
             return true;
+        } catch (IllegalArgumentException refused) {
+            throw new BaseGqlClientException(refused.getMessage(), refused, ErrorType.ValidationError);
         } catch (IOException couldNotDelete) {
-            throw new RuntimeException("Could not remove the settings for site " + siteKey
-                    + ": " + couldNotDelete.getMessage(), couldNotDelete);
+            throw new BaseGqlClientException("Could not remove the settings for site " + siteKey
+                    + ": " + couldNotDelete.getMessage(), couldNotDelete, ErrorType.ExecutionAborted);
         }
     }
 }
