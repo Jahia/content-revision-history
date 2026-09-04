@@ -200,9 +200,15 @@ sends `Accept: text/html, text/plain`, reads raw UTF-8 bytes and never inspects 
 parses markup regardless of the header it arrived under.
 
 Two things follow for anyone editing this module. **Do not "fix" a raw print in a markdown view by
-escaping it** — the spec `12-markdownResponseType` fails if you do, and it should. And **do not
-raise the filter's priority above 99**: `TemplateScriptFilter` is final at 99.0, so a higher number
-means the filter never runs and the response quietly goes back to being HTML.
+escaping it** — the spec `12-markdownResponseType` fails if you do, and it should. And **keep the
+filter's priority below the fragment cache** (`AggregateCacheFilter` 16.0, `CacheFilter` 16.5; it
+runs at 5). The render chain stops at the first filter whose `prepare()` returns something, and on a
+cache hit that is the cache filter — so anything numbered above it runs on the cache *miss* only.
+1.4.7 shipped the filter at 98, reasoning only about `TemplateScriptFilter` at 99: measured
+anonymously on 8.2.3.2, the first request answered `text/plain` with `nosniff` and the second and
+third, served from the cache, answered `text/html` with the unescaped body. The advisory was closed
+for one request per cache lifetime. `MarkdownContentTypeFilterTest` now pins the real bound, and the
+spec asserts the header on a *sequence* of identical requests, not on one.
 
 ## How the editorial and captured halves join
 

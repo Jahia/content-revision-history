@@ -31,13 +31,55 @@ describe('the markdown template type is served as plain text, not HTML', () => {
     const payload = '<img src=x onerror=window.__crhxss=1>';
     const marker = 'MDTYPE-PROBE-4c81';
 
-    /** Anonymous on purpose: the vulnerable URL was reachable with no session at all. */
+    /**
+     * Anonymous on purpose: the vulnerable URL was reachable with no session at all.
+     *
+     * No cache-busting query string, deliberately. For an anonymous request the fragment-cache
+     * key does not include the query string, so `?v=` never varied anything -- and the request a
+     * browser actually sends has no such parameter. The URL must be byte-identical across calls so
+     * the second call really is a cache hit.
+     */
+    const markdownUrl = (path: string) => `/cms/render/live/${language}${path}.markdown`;
+
     const fetchMarkdown = (path: string) =>
-        cy.request<string>({
-            url: `/cms/render/live/${language}${path}.markdown`,
-            qs: {v: `${Date.now()}`},
-            failOnStatusCode: false
+        cy.request<string>({url: markdownUrl(path), failOnStatusCode: false});
+
+    /**
+     * The properties under test, on ONE response. Used for every request in a sequence, because the
+     * regression this file guards is per-request: 1.4.7 passed on the first request (cache miss)
+     * and failed on every one that followed (cache hit).
+     */
+    const expectPlainText = (response: Cypress.Response<string>, which: string) => {
+        expect(response.status, which).to.eq(200);
+        const contentType = String(response.headers['content-type'] ?? '').toLowerCase();
+        expect(contentType, `${which}: served as a document. Actual: ${contentType}`).to.contain(
+            'text/plain'
+        );
+        expect(contentType, `${which}: must not be text/html`).to.not.contain('text/html');
+        expect(
+            String(response.headers['x-content-type-options'] ?? '').toLowerCase(),
+            `${which}: nosniff missing`
+        ).to.eq('nosniff');
+    };
+
+    /** Same URL, N times, strictly sequential, asserting every response, not just the first. */
+    const fetchMarkdownRepeatedly = (path: string, times: number, index = 1): Cypress.Chainable<unknown> =>
+        fetchMarkdown(path).then(response => {
+            expectPlainText(response, `request ${index} of ${times}`);
+            if (index < times) {
+                return fetchMarkdownRepeatedly(path, times, index + 1);
+            }
+
+            return undefined;
         });
+
+    /**
+     * Publication flushes the fragment cache asynchronously (a rule background action), so a request
+     * fired immediately after `publishAndWaitJobEnding` may find the cache emptied between two calls
+     * and every call a miss -- which is how the first version of this spec passed against a filter
+     * that only worked on a miss. Let the flush settle before measuring.
+     */
+    const cacheFlushSettleMs = 3000;
 
     const page = (name: string, path: string, mixins: string[]) => {
         deleteNode(path).then(null, () => undefined);
@@ -120,15 +162,27 @@ describe('the markdown template type is served as plain text, not HTML', () => {
         });
     });
 
+    it('keeps the header on a WARM fragment cache, not only on the first request', () => {
+        // The regression 1.4.7 shipped. Jahia's CacheFilter (priority 16.5) returns the cached body
+        // from prepare() and the render chain stops at the first non-null prepare(), so a filter
+        // numbered above it runs on the cache miss only. Measured on 8.2.3.2 with 1.4.7: request 1
+        // text/plain + nosniff, requests 2 and 3 text/html with no nosniff. The four single fetches
+        // in this file were not positioned to see it -- so this one asserts every response of a
+        // sequence, on a URL identical byte-for-byte to what a browser sends.
+        // There is no observable signal for "the asynchronous flush has run" that an anonymous
+        // client can read, so this is the one wait in the suite that cannot be replaced by a
+        // condition. Without it the test can pass for the wrong reason (every request a miss).
+        // eslint-disable-next-line cypress/no-unnecessary-waiting -- see cacheFlushSettleMs
+        cy.wait(cacheFlushSettleMs);
+        fetchMarkdownRepeatedly(revisionedPagePath, 3);
+    });
+
     it('applies to a page that never opted into revision history', () => {
         // The views are registered for core node types, so the render surface exists site-wide.
         // Scoping the fix to revisioned pages only would leave every other page exposed.
-        fetchMarkdown(plainPagePath).then(response => {
-            expect(response.status).to.eq(200);
-            expect(
-                String(response.headers['content-type'] ?? '').toLowerCase(),
-                'an ordinary page is reachable at .markdown too, and was equally exposed'
-            ).to.contain('text/plain');
-        });
+        // Repeated for the same reason as above: an ordinary page is cached like any other.
+        // eslint-disable-next-line cypress/no-unnecessary-waiting -- see cacheFlushSettleMs
+        cy.wait(cacheFlushSettleMs);
+        fetchMarkdownRepeatedly(plainPagePath, 2);
     });
 });
