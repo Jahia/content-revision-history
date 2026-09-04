@@ -226,17 +226,111 @@ class InlineMarkdownTest {
         assertEquals("see [note 4] and C:\\temp", visible(parsed));
     }
 
-    @Test
-    @DisplayName("a link keeps its literal syntax, so an href change cannot be hidden")
-    void linksStayLiteral() {
-        // Collapsing this to "the policy" would mean an href change -- same words, different
-        // destination -- produced no visible difference at all, in a record that exists to show
-        // what changed.
-        String raw = "see [the policy](https://example.com/v2)";
+    // ------------------------------------------------------------------ links (href-safe)
 
+    private static InlineMarkdown.Piece onlyLink(InlineMarkdown.Parsed parsed) {
+        InlineMarkdown.Piece found = null;
+        for (InlineMarkdown.Piece piece : parsed.getPieces()) {
+            if (piece.isLink()) {
+                assertNull(found, "expected exactly one link piece");
+                found = piece;
+            }
+        }
+        return found;
+    }
+
+    @Test
+    @DisplayName("a link renders as its text and exposes a sanitised href")
+    void linkRendersAsTextWithHref() {
+        // The old contract left links literal so an href change could not hide. The new contract
+        // renders the anchor but keeps that guarantee through span-wide change propagation
+        // (see hrefChangeStillHighlightsTheLink).
+        InlineMarkdown.Parsed parsed =
+                InlineMarkdown.parse("see [the policy](https://example.com/v2)", none());
+
+        assertEquals("see the policy", visible(parsed), "the reader sees the words, not the syntax");
+        InlineMarkdown.Piece link = onlyLink(parsed);
+        assertEquals("the policy", link.getText());
+        assertEquals("https://example.com/v2", link.getHref());
+    }
+
+    @Test
+    @DisplayName("an href-only change still marks the whole link changed")
+    void hrefChangeStillHighlightsTheLink() {
+        // Same words, different destination. The word diff lands on the URL, which is not part of
+        // the visible text; without span-wide propagation the link would show no change at all --
+        // exactly the hole the old literal rendering existed to avoid.
+        String raw = "see [the policy](https://example.com/v2)";
+        //             the changed token is the version at the end of the href
+        InlineMarkdown.Parsed parsed = InlineMarkdown.parse(raw,
+                segments("see [the policy](https://example.com/v", false, "2", true, ")", false));
+
+        InlineMarkdown.Piece link = onlyLink(parsed);
+        assertTrue(link.isChanged(), "a destination change must be visible even when the words are not");
+    }
+
+    @Test
+    @DisplayName("mailto and site-relative hrefs are allowed")
+    void mailtoAndRelativeHrefsAllowed() {
+        assertEquals("mailto:ops@example.com",
+                onlyLink(InlineMarkdown.parse("[email us](mailto:ops@example.com)", none())).getHref());
+        assertEquals("/about",
+                onlyLink(InlineMarkdown.parse("[home](/about)", none())).getHref());
+    }
+
+    @Test
+    @DisplayName("a disallowed scheme is never emitted as an href; the span stays literal")
+    void disallowedSchemeStaysLiteral() {
+        // The normalizer already drops such hrefs, so this is defence in depth: InlineMarkdown must
+        // never put a javascript: URL onto a public page even if one reaches it.
+        String raw = "[x](javascript:alert(1))";
         InlineMarkdown.Parsed parsed = InlineMarkdown.parse(raw, none());
 
+        assertNull(onlyLink(parsed), "not treated as a link");
+        assertEquals(raw, visible(parsed), "left exactly as stored, syntax and all");
+        for (InlineMarkdown.Piece piece : parsed.getPieces()) {
+            assertNull(piece.getHref());
+        }
+    }
+
+    @Test
+    @DisplayName("an image is not turned into a link and stays literal")
+    void imageStaysLiteral() {
+        // Images are out of scope: the '!' guards the '[' so the link parser never fires.
+        String raw = "![alt text](/logo.png)";
+        InlineMarkdown.Parsed parsed = InlineMarkdown.parse(raw, none());
+
+        assertNull(onlyLink(parsed));
         assertEquals(raw, visible(parsed));
+    }
+
+    @Test
+    @DisplayName("escaped brackets inside link text are resolved for display")
+    void escapedBracketsInLinkText() {
+        InlineMarkdown.Parsed parsed = InlineMarkdown.parse("[note \\[4\\]](/n)", none());
+
+        InlineMarkdown.Piece link = onlyLink(parsed);
+        assertEquals("note [4]", link.getText());
+        assertEquals("/n", link.getHref());
+    }
+
+    @Test
+    @DisplayName("a bracket with no link structure stays literal")
+    void bracketWithoutLinkStructure() {
+        InlineMarkdown.Parsed parsed = InlineMarkdown.parse("a [bracketed] word", none());
+
+        assertNull(onlyLink(parsed));
+        assertEquals("a [bracketed] word", visible(parsed));
+    }
+
+    @Test
+    @DisplayName("a link inside bold carries the surrounding emphasis")
+    void linkInsideBold() {
+        InlineMarkdown.Parsed parsed = InlineMarkdown.parse("**[the policy](/p)**", none());
+
+        InlineMarkdown.Piece link = onlyLink(parsed);
+        assertEquals("the policy", link.getText());
+        assertTrue(link.isBold(), "the link sits inside a bold span");
     }
 
     // ------------------------------------------------------------------ the crossing

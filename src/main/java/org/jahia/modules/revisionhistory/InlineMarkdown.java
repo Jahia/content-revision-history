@@ -3,6 +3,10 @@ package org.jahia.modules.revisionhistory;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Locale;
+import java.util.Objects;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * Reads one line of the Markdown <em>this module generates</em>, so a diff row can be shown
@@ -48,6 +52,21 @@ public final class InlineMarkdown {
     /** Two spaces per level, matching {@code MarkdownNormalizer}'s list indent. */
     private static final int SPACES_PER_LIST_LEVEL = 2;
 
+    /**
+     * Link/image schemes that may reach the page as an href. Kept in step with
+     * {@code MarkdownNormalizer.ALLOWED_SCHEMES}: the normaliser already drops the rest at capture,
+     * so this is defence in depth on the read side -- a stored snapshot that somehow carried a
+     * {@code javascript:} target must still never be rendered as one.
+     */
+    private static final java.util.Set<String> ALLOWED_SCHEMES =
+            new java.util.HashSet<>(java.util.Arrays.asList("http", "https", "mailto"));
+
+    /** A URL scheme prefix, e.g. the {@code https} in {@code https://x}. */
+    private static final Pattern LINK_SCHEME = Pattern.compile("^([a-zA-Z][a-zA-Z0-9+.\\-]*):");
+
+    /** Two or more leading slashes or backslashes: a protocol-relative reference, always rejected. */
+    private static final Pattern PROTOCOL_RELATIVE = Pattern.compile("^[/\\\\]{2,}");
+
     private InlineMarkdown() {
         // static utility
     }
@@ -60,14 +79,17 @@ public final class InlineMarkdown {
         private final int rawStart;
         private final int rawEnd;
         private final boolean changed;
+        private final String href;
 
-        Piece(String text, boolean bold, boolean italic, int rawStart, int rawEnd, boolean changed) {
+        Piece(String text, boolean bold, boolean italic, int rawStart, int rawEnd, boolean changed,
+              String href) {
             this.text = text;
             this.bold = bold;
             this.italic = italic;
             this.rawStart = rawStart;
             this.rawEnd = rawEnd;
             this.changed = changed;
+            this.href = href;
         }
 
         /** @return the visible text, with delimiters and escapes already removed */
@@ -81,6 +103,29 @@ public final class InlineMarkdown {
 
         public boolean isItalic() {
             return italic;
+        }
+
+        /**
+         * @return true when this run is a link, so the view wraps it in an anchor
+         *
+         * <p>A link is one atomic piece: its whole {@code [text](href)} span shares a single
+         * changed flag, which is set when ANY character of the span -- the text OR the href --
+         * changed. That is what keeps a destination-only change from hiding, now that the href is
+         * no longer shown literally.
+         */
+        public boolean isLink() {
+            return href != null;
+        }
+
+        /**
+         * @return the sanitised, allow-listed link target, or null when this run is not a link
+         *
+         * <p>Only {@code http}, {@code https}, {@code mailto} and scheme-less (site-relative) URLs
+         * survive; anything else leaves the span rendered as its literal Markdown instead, so a
+         * {@code javascript:} target can never reach the page as an href.
+         */
+        public String getHref() {
+            return href;
         }
 
         /** @return whether the word-level diff marked this run as changed */
@@ -272,44 +317,63 @@ public final class InlineMarkdown {
     /**
      * Walks the body and groups it into runs.
      *
-     * <p>Two passes rather than one, deliberately. Emitting characters and closing runs in a
-     * single loop meant tracking the current run's raw span across delimiters and escapes at the
-     * same time, which was easy to get subtly wrong and impossible to read. The first pass here
-     * only decides what is visible and where each visible character came from; the second only
-     * groups. Neither needs to know about the other.
+     * <p>Two passes rather than one, deliberately. The first pass decides what is visible, where
+     * each visible character came from, and whether it belongs to a link; the second groups
+     * adjacent characters that share every mark. Neither needs to know about the other.
+     *
+     * <p>A link is the one construct emitted as a unit: {@link #emitLinkIfPresent} consumes the
+     * whole {@code [text](href)} span, appends only the text, tags every character with the href,
+     * and -- when any character of the span changed -- forces them all changed, so the second pass
+     * yields a single link run that highlights even when only the destination moved.
      */
     private static List<Piece> run(String raw, int from, boolean[] changedByOffset) {
         StringBuilder visible = new StringBuilder();
         List<int[]> spans = new ArrayList<>();
         List<Boolean> bolds = new ArrayList<>();
         List<Boolean> italics = new ArrayList<>();
+        List<String> hrefs = new ArrayList<>();
 
         boolean bold = false;
         boolean italic = false;
         int i = from;
         while (i < raw.length()) {
-            if (raw.charAt(i) == '\\' && i + 1 < raw.length()) {
+            char c = raw.charAt(i);
+            if (c == '\\' && i + 1 < raw.length()) {
                 // MarkdownNormalizer escapes '\', '*', '[' and ']' on the way in. Showing the
                 // escape is showing its own bookkeeping.
                 visible.append(raw.charAt(i + 1));
                 spans.add(new int[]{i, i + 2});
                 bolds.add(bold);
                 italics.add(italic);
+                hrefs.add(null);
                 i += 2;
-            } else if (raw.startsWith(BOLD, i) && (bold || closesLater(raw, i, BOLD))) {
+                continue;
+            }
+            if (c == '[' && (i == from || raw.charAt(i - 1) != '!')) {
+                // A '[' not preceded by '!' may open a link; '!' guards an image, left literal.
+                int after = emitLinkIfPresent(raw, i, bold, italic, changedByOffset,
+                        visible, spans, bolds, italics, hrefs);
+                if (after > i) {
+                    i = after;
+                    continue;
+                }
+                // Not a well-formed or allow-listed link: fall through and treat '[' as content.
+            }
+            if (raw.startsWith(BOLD, i) && (bold || closesLater(raw, i, BOLD))) {
                 bold = !bold;
                 i += BOLD.length();
-            } else if (raw.charAt(i) == ITALIC && !raw.startsWith(BOLD, i)
+            } else if (c == ITALIC && !raw.startsWith(BOLD, i)
                     && (italic || italicClosesLater(raw, i))) {
                 // A single asterisk only: the first half of an unmatched "**" is content, not an
                 // italic opener, or "2 ** 8" would lose both asterisks to an empty italic span.
                 italic = !italic;
                 i++;
             } else {
-                visible.append(raw.charAt(i));
+                visible.append(c);
                 spans.add(new int[]{i, i + 1});
                 bolds.add(bold);
                 italics.add(italic);
+                hrefs.add(null);
                 i++;
             }
         }
@@ -320,17 +384,120 @@ public final class InlineMarkdown {
             boolean runBold = bolds.get(k);
             boolean runItalic = italics.get(k);
             boolean runChanged = changedAt(changedByOffset, spans.get(k)[0]);
+            String runHref = hrefs.get(k);
             int start = k;
             while (k < visible.length()
                     && bolds.get(k) == runBold
                     && italics.get(k) == runItalic
-                    && changedAt(changedByOffset, spans.get(k)[0]) == runChanged) {
+                    && changedAt(changedByOffset, spans.get(k)[0]) == runChanged
+                    && Objects.equals(hrefs.get(k), runHref)) {
                 k++;
             }
             pieces.add(new Piece(visible.substring(start, k), runBold, runItalic,
-                    spans.get(start)[0], spans.get(k - 1)[1], runChanged));
+                    spans.get(start)[0], spans.get(k - 1)[1], runChanged, runHref));
         }
         return pieces;
+    }
+
+    /**
+     * If a valid, allow-listed link opens at {@code open}, appends its visible text (escapes
+     * resolved, each character tracked back to the raw line and tagged with the href) and returns
+     * the offset just past the closing {@code ')'}. Otherwise appends nothing and returns
+     * {@code open}, so the caller renders the {@code '['} as content.
+     */
+    private static int emitLinkIfPresent(String raw, int open, boolean bold, boolean italic,
+            boolean[] changedByOffset, StringBuilder visible, List<int[]> spans,
+            List<Boolean> bolds, List<Boolean> italics, List<String> hrefs) {
+        int[] span = matchLink(raw, open);
+        if (span == null) {
+            return open;
+        }
+        int close = span[0];
+        int paren = span[1];
+        String href = raw.substring(close + 2, paren);
+        if (!hrefAllowed(href)) {
+            return open;
+        }
+        // One changed flag for the whole span: a destination-only edit lands on the href, which is
+        // not shown, so without this the link would render as unchanged.
+        boolean spanChanged = anyChanged(changedByOffset, open, paren + 1);
+        int t = open + 1;
+        while (t < close) {
+            int rawStart = t;
+            char vis;
+            if (raw.charAt(t) == '\\' && t + 1 < close) {
+                vis = raw.charAt(t + 1);
+                t += 2;
+            } else {
+                vis = raw.charAt(t);
+                t += 1;
+            }
+            if (spanChanged) {
+                changedByOffset[rawStart] = true;
+            }
+            visible.append(vis);
+            spans.add(new int[]{rawStart, t});
+            bolds.add(bold);
+            italics.add(italic);
+            hrefs.add(href);
+        }
+        return paren + 1;
+    }
+
+    /**
+     * @return {@code {closeBracket, closeParen}} for a well-formed {@code [text](href)} opening at
+     * {@code open}, or null. The text must be non-empty and hold no nested {@code '['}; the
+     * {@code ']'} must be immediately followed by {@code '('}; a {@code ')'} must follow. Escapes
+     * inside the text are skipped so a {@code \]} does not close it early.
+     */
+    private static int[] matchLink(String raw, int open) {
+        int close = -1;
+        for (int j = open + 1; j < raw.length(); j++) {
+            char c = raw.charAt(j);
+            if (c == '\\') {
+                j++;
+                continue;
+            }
+            if (c == '[') {
+                return null;
+            }
+            if (c == ']') {
+                close = j;
+                break;
+            }
+        }
+        if (close < 0 || close == open + 1) {
+            return null;
+        }
+        if (close + 1 >= raw.length() || raw.charAt(close + 1) != '(') {
+            return null;
+        }
+        int paren = raw.indexOf(')', close + 2);
+        if (paren < 0) {
+            return null;
+        }
+        return new int[]{close, paren};
+    }
+
+    /** Mirrors {@code MarkdownNormalizer.sanitizeUrl}'s allow-list on the read side. */
+    private static boolean hrefAllowed(String href) {
+        if (href.isEmpty() || PROTOCOL_RELATIVE.matcher(href).find()) {
+            return false;
+        }
+        Matcher m = LINK_SCHEME.matcher(href);
+        if (!m.find()) {
+            return true;
+        }
+        return ALLOWED_SCHEMES.contains(m.group(1).toLowerCase(Locale.ROOT));
+    }
+
+    private static boolean anyChanged(boolean[] changedByOffset, int start, int end) {
+        for (int k = Math.max(0, start); k < end && k < changedByOffset.length; k++) {
+            if (changedByOffset[k]) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static boolean changedAt(boolean[] changedByOffset, int offset) {
