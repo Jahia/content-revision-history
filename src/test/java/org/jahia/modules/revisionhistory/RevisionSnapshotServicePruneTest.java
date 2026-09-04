@@ -65,6 +65,18 @@ class RevisionSnapshotServicePruneTest {
     private Map<String, JCRNodeWrapper> folderOf(JCRNodeWrapper folder, int howMany,
                                                  List<Integer> referenced,
                                                  List<Integer> deletedEntries) throws RepositoryException {
+        return folderOf(folder, howMany, referenced, deletedEntries, false);
+    }
+
+    /**
+     * @param reverseIteration iterate the children newest-first, as a repository may. Every
+     *                         earlier fixture iterated in chronological order, which made the sort
+     *                         in prune() a no-op under test (#33).
+     */
+    private Map<String, JCRNodeWrapper> folderOf(JCRNodeWrapper folder, int howMany,
+                                                 List<Integer> referenced,
+                                                 List<Integer> deletedEntries,
+                                                 boolean reverseIteration) throws RepositoryException {
         Map<String, JCRNodeWrapper> byName = new LinkedHashMap<>();
         List<JCRNodeWrapper> children = new ArrayList<>();
         for (int i = 0; i < howMany; i++) {
@@ -93,6 +105,9 @@ class RevisionSnapshotServicePruneTest {
             }
             byName.put(name(i), snapshot);
             children.add(snapshot);
+        }
+        if (reverseIteration) {
+            Collections.reverse(children);
         }
         JCRNodeIteratorWrapper it = mock(JCRNodeIteratorWrapper.class);
         Iterator<JCRNodeWrapper> cursor = children.iterator();
@@ -236,5 +251,63 @@ class RevisionSnapshotServicePruneTest {
 
         // 5 already pruned, 2 removed now: the protected one must not inflate it.
         verify(folder).setProperty(RevisionHistoryConstants.PROP_PRUNED_COUNT, 7L);
+    }
+
+    // ------------------------------------------------------------------ #33: the cap must bind
+
+    @Test
+    @DisplayName("#33: with many more snapshots than the cap, exactly the excess is removed")
+    void capIsTheBindingConstraint() throws Exception {
+        // Every earlier fixture had excess >= n - 1, so the loop always stopped on "never the
+        // newest" and the cap itself was never what ended it. Miscompute excess, or drop
+        // `pruned < excess` from the guard, and those tests stayed green while prune deleted
+        // everything but the newest snapshot.
+        JCRNodeWrapper folder = mock(JCRNodeWrapper.class);
+        Map<String, JCRNodeWrapper> snapshots = folderOf(folder, 10, Arrays.asList());
+
+        int cap = 5;
+        long remaining = service.prune(folder, cap);
+
+        // 10 - (5 - 1) = 6 go: the six oldest. The four newest stay.
+        for (int i = 0; i < 6; i++) {
+            verify(snapshots.get(name(i)), description("index " + i + " is among the oldest six")).remove();
+        }
+        for (int i = 6; i < 10; i++) {
+            verify(snapshots.get(name(i)), never()).remove();
+        }
+        assertEquals(cap - 1, remaining);
+    }
+
+    @Test
+    @DisplayName("#33: under the cap, nothing is removed")
+    void underTheCapNothingIsPruned() throws Exception {
+        JCRNodeWrapper folder = mock(JCRNodeWrapper.class);
+        Map<String, JCRNodeWrapper> snapshots = folderOf(folder, 3, Arrays.asList());
+
+        long remaining = service.prune(folder, 5);
+
+        for (int i = 0; i < 3; i++) {
+            verify(snapshots.get(name(i)), never()).remove();
+        }
+        assertEquals(3, remaining);
+    }
+
+    @Test
+    @DisplayName("#33: the oldest are chosen by NAME, not by the order the repository lists them")
+    void ordersByNameNotByIteration() throws Exception {
+        // Snapshot names are timestamp-prefixed, so the sort is what makes "oldest first" true.
+        // Iterating newest-first here would, without the sort, delete the newest snapshots.
+        // Cap 3 with 4 snapshots: excess = 4 - (3 - 1) = 2, so exactly the two OLDEST go and the
+        // two newest stay -- a fixture where the cap, not "never the newest", ends the loop.
+        JCRNodeWrapper folder = mock(JCRNodeWrapper.class);
+        Map<String, JCRNodeWrapper> snapshots =
+                folderOf(folder, 4, Arrays.asList(), Arrays.asList(), true);
+
+        service.prune(folder, 3);
+
+        verify(snapshots.get(name(0))).remove();
+        verify(snapshots.get(name(1))).remove();
+        verify(snapshots.get(name(2)), never()).remove();
+        verify(snapshots.get(name(3)), never()).remove();
     }
 }

@@ -62,6 +62,23 @@ Changelog
   resets the shared static credential after each test, and the global-principal fallback is
   asserted positively instead of relying on test order (#35).
 
+### Fixed -- revision summaries
+
+* **Site-relative and fragment links in a revision summary keep their `href`** (#26). The
+  sanitiser resolved every URL against an empty base URI, which fails for a relative link, so
+  jsoup stripped the attribute and "see the <a>policy page</a>" rendered as dead text. Unwrapped
+  block elements (`div`, table cells, headings) are now separated by a space instead of running
+  together as `onetwo`.
+
+### Tests
+
+* Retention: fixtures where the cap is the binding constraint (10 snapshots, cap 5), where nothing
+  is over the cap, and where the repository lists children newest-first -- so the `excess`
+  arithmetic, the loop guard and the sort are each actually exercised (#33).
+* Capture: coordinate validation is tested through the public write path rather than by reflection
+  on the patterns; the snapshot name is built in one place and the collision check is tested
+  against a real session mock, including the unreadable case (#36).
+
 ### Security
 
 * **GHSA-4hvq-2x8x-49w2 -- the 1.4.7 fix held for one request per cache lifetime.**

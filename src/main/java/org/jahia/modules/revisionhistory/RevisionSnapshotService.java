@@ -124,9 +124,7 @@ public class RevisionSnapshotService {
         // write the record of having lost it.
         AtomicReference<String> concurrencyFailure = new AtomicReference<>();
 
-        // Same construction attemptCapture uses, so the two names cannot drift apart.
-        final String snapshotName = NAME_STAMP.format(instant) + '-'
-                + contentHash.substring(0, HASH_SUFFIX_LENGTH);
+        final String snapshotName = snapshotName(instant, contentHash);
 
         CaptureStatus status = JCRTemplate.getInstance().doExecuteWithSystemSessionAsUser(null, WORKSPACE, null, (JCRCallback<CaptureStatus>) session -> withConcurrencyRetry(
                         () -> attemptCapture(session, siteKey, pageUuid, language, payload,
@@ -151,8 +149,7 @@ public class RevisionSnapshotService {
                                          String sourceUrl) throws RepositoryException {
 
         JCRNodeWrapper folder = ensureFolder(session, siteKey, pageUuid, language);
-        String name = NAME_STAMP.format(instant) + '-'
-                + contentHash.substring(0, HASH_SUFFIX_LENGTH);
+        String name = snapshotName(instant, contentHash);
 
         if (contentHash.equals(stringProperty(folder, PROP_LATEST_HASH))
                 || folder.hasNode(name)) {
@@ -282,19 +279,33 @@ public class RevisionSnapshotService {
     }
 
     /**
+     * The deterministic name of one capture's snapshot: publication instant, then the first
+     * characters of the content hash.
+     *
+     * <p>Built in exactly one place. It used to be assembled twice -- once for the write, once for
+     * the collision check that decides whether a lost race was benign -- under a comment saying the
+     * two could not drift. Nothing tested that they had not: let them drift and every benign
+     * {@code ItemExistsException} becomes {@code FAILED}, or a genuine lost write becomes
+     * {@code UNCHANGED}, with the retry tests green (issue #36).
+     */
+    static String snapshotName(Instant instant, String contentHash) {
+        return NAME_STAMP.format(instant) + '-' + contentHash.substring(0, HASH_SUFFIX_LENGTH);
+    }
+
+    /**
      * Absolute path of the deterministically-named snapshot for one capture.
      *
      * <p>Three other places build this same path by concatenation; consolidating them is a
      * reported finding of its own and deliberately not folded into this fix.
      */
-    private static String snapshotPath(String siteKey, String pageUuid, String language,
-                                       String snapshotName) {
+    static String snapshotPath(String siteKey, String pageUuid, String language,
+                               String snapshotName) {
         return "/sites/" + siteKey + "/contents/" + ROOT_FOLDER_NAME
                 + '/' + pageUuid + '/' + language + '/' + snapshotName;
     }
 
     /** @return true only when the winner's snapshot is actually visible to this session */
-    private static boolean storedByTheWinner(JCRSessionWrapper session, String siteKey,
+    static boolean storedByTheWinner(JCRSessionWrapper session, String siteKey,
                                              String pageUuid, String language,
                                              String snapshotName) {
         try {
