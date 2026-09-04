@@ -1249,4 +1249,60 @@ describe('Revision comparison (entry binding + diff viewer)', () => {
                     .to.not.contain('No snapshot of the page was recorded for the previous revision');
             });
     });
+
+    // ---------------------------------------------------------------- rich formatting
+
+    it('renders blockquotes, rules, tables and links formatted, not as raw Markdown', () => {
+        // The panel already renders headings and bold; these are the shapes added in 1.4.10. A new
+        // revision carries a quote, a rule, a link and a table; compared against the plain-text
+        // rev-c they arrive as added lines, which is where the new rendering has to show.
+        const richHtml =
+            '<blockquote><p>A quoted remark about the support policy.</p></blockquote>' +
+            '<hr/>' +
+            '<p>See the <a href="https://example.com/policy">full policy</a> for details.</p>' +
+            '<table><tbody><tr><th>Tier</th><th>Window</th></tr>' +
+            '<tr><td>Standard</td><td>Twelve months</td></tr></tbody></table>';
+        let fourthEntryUuid = '';
+
+        setNodeProperty(textPath, 'text', richHtml, language)
+            .then(() => addEntry('rev-d', '1.3', '<p>Rich formatting: a quote, a rule, a link and a table.</p>'))
+            .then((result: ApolloResult<AddNodeQueryData>) => {
+                expect(result.errors, 'the rich-formatting entry must be creatable').to.be.undefined;
+                fourthEntryUuid = result.data?.jcr.addNode.uuid as string;
+
+                return publishTriggeringCapture();
+            })
+            .then(() =>
+                pollUntil(
+                    bindings,
+                    map => Boolean(map[fourthEntryUuid]),
+                    `expected the rich-formatting entry to bind within ${captureTimeoutMs}ms`
+                )
+            )
+            .then(() => renderLive(comparisonUrl(thirdEntryUuid, fourthEntryUuid)))
+            .then(html => {
+                const rows = /<ol class="crh-diff-rows"[\s\S]*?<\/ol>/.exec(html)?.[0] ?? '';
+                expect(rows, 'the diff rows must render').to.not.be.empty;
+
+                // Each new shape renders formatted rather than as its own syntax.
+                expect(rows, 'a blockquote renders as a quote, not a literal "> "').to.contain('crh-md-quote');
+                expect(rows, 'a horizontal rule renders as a rule, not literal "---"').to.contain('crh-md-rule');
+                expect(rows, 'a table renders as cells, not a line of pipes').to.contain('crh-md-cell');
+                expect(rows, 'the table header/body separator renders as a divider').to.contain('crh-md-tsep');
+                expect(rows, 'a link renders as an anchor').to.contain('<a class="crh-md-link"');
+                expect(rows, 'the anchor points at its sanitised destination').to.contain(
+                    'href="https://example.com/policy"'
+                );
+
+                // ...and the raw syntax is gone from the rendered rows.
+                expect(rows, 'the link syntax must not reach the reader').to.not.contain(
+                    '](https://example.com/policy)'
+                );
+
+                // Line-level shape stays appearance only: no real structural element is spliced into
+                // the host page from a diff row.
+                expect(rows, 'a row must not emit a real <table>').to.not.match(/<table[ >]/);
+                expect(rows, 'a row must not emit a real <blockquote>').to.not.match(/<blockquote[ >]/);
+            });
+    });
 });
