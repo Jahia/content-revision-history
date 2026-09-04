@@ -105,6 +105,58 @@ class DefinitionLabelsTest {
                         + String.join("\n  ", missing));
     }
 
+    /** A single-quoted token, as choicelist values appear in the CND: {@code 'initial'}. */
+    private static final Pattern QUOTED_VALUE = Pattern.compile("'([^']+)'");
+
+    @Test
+    @DisplayName("Every changeType choicelist value has its own label, including the initial-version one")
+    void everyChangeTypeValueIsLabelled() throws IOException {
+        // The generic property check above proves crh_revisionEntry.changeType has a caption; it
+        // says nothing about the individual OPTIONS. A choicelist[resourceBundle] resolves each
+        // value through crh_revisionEntry.changeType.<value>, so an unlabelled value renders as a
+        // raw ???key??? in the picker -- exactly what shipped for the first revision, which had no
+        // value that fit it at all until 'initial' was added.
+        Set<String> keys = bundleKeys();
+        List<String> values = changeTypeValues();
+
+        assertTrue(values.contains("initial"),
+                "the changeType choicelist must offer an 'initial' value for a page's first"
+                        + " revision, which has no earlier version to compare against; found: "
+                        + values);
+
+        List<String> missing = new ArrayList<>();
+        for (String value : values) {
+            String key = "crh_revisionEntry.changeType." + value;
+            if (!keys.contains(key)) {
+                missing.add(key);
+            }
+        }
+        assertTrue(missing.isEmpty(),
+                "these changeType options would render as raw keys in the picker:\n  "
+                        + String.join("\n  ", missing));
+    }
+
+    /** The quoted values listed after {@code <} on the {@code changeType} property line. */
+    private static List<String> changeTypeValues() throws IOException {
+        for (String line : read("/META-INF/definitions.cnd").split("\n")) {
+            String trimmed = line.trim();
+            if (!trimmed.startsWith("- changeType")) {
+                continue;
+            }
+            // Take only the constraint list (after '<'), so the default value before it -- which is
+            // itself one of the options and legitimately quoted -- is not counted twice.
+            int constraint = trimmed.indexOf('<');
+            String list = constraint >= 0 ? trimmed.substring(constraint + 1) : trimmed;
+            List<String> values = new ArrayList<>();
+            Matcher m = QUOTED_VALUE.matcher(list);
+            while (m.find()) {
+                values.add(m.group(1));
+            }
+            return values;
+        }
+        throw new AssertionError("no `- changeType` property found in definitions.cnd");
+    }
+
     @Test
     @DisplayName("The default bundle and its _en copy stay identical, or one locale silently lags")
     void theTwoBundlesAgree() throws IOException {

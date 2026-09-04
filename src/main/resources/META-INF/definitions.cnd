@@ -87,7 +87,13 @@
  - revisionLabel (string) mandatory
  - revisionDate (date) mandatory
  - summary (string, richtext) i18n mandatory
- - changeType (string, choicelist[resourceBundle]) = 'substantive' < 'editorial', 'substantive', 'correction'
+ // 'initial' is first because it is the chronological starting point: the first recorded revision
+ // of a page has no earlier version, so 'editorial' / 'substantive' / 'correction' -- all of which
+ // describe a change RELATIVE to a predecessor -- misdescribe it. Adding a value WIDENS the
+ // choicelist constraint, which Jahia classes as a MINOR definition change (unlike the i18n-flag
+ // change noted below, which is MAJOR and cancels deployment). The default stays 'substantive':
+ // most entries describe a subsequent edit, and the editor picks 'initial' explicitly for the first.
+ - changeType (string, choicelist[resourceBundle]) = 'substantive' < 'initial', 'editorial', 'substantive', 'correction'
  // Optional. Empty means "bind to whatever snapshot is current when this entry is published",
  // which is right for the normal rhythm of one publication producing one entry and one snapshot.
  // Backfill breaks that pairing -- many snapshots already exist and the entries describing them
