@@ -79,6 +79,14 @@ Changelog
   on the patterns; the snapshot name is built in one place and the collision check is tested
   against a real session mock, including the unreadable case (#36).
 
+### Fixed -- page snapshots
+
+* **A page's snapshot no longer includes its sub-pages** (#23). Sub-pages are children of the page
+  node and the page view recursed into them, so revisioning `/home` snapshotted the whole site
+  (a permanent `OVERSIZE`), and under the cap a republish after an unrelated sub-page changed made
+  the comparison show text that never appeared on the page. A sub-page owns its own history when
+  it opts in.
+
 ### Security
 
 * **GHSA-4hvq-2x8x-49w2 -- the 1.4.7 fix held for one request per cache lifetime.**
