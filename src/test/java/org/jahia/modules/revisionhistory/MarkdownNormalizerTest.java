@@ -846,6 +846,69 @@ class MarkdownNormalizerTest {
         assertTrue(md.contains("\\#1 priority"), "'#' without a space is content to the viewer, escaped anyway: " + md);
     }
 
+
+    // --- #47: emphasis spanning a sentence boundary ---------------------------------------------
+
+    @Test
+    @DisplayName("#47: an emphasis span covering two sentences stays whole, delimiters intact")
+    void emphasisSpanningSentencesIsNotShredded() {
+        // Before: <em>First. Second.</em> normalised to "*First.\nSecond\n.\n*" and the viewer,
+        // finding no closing delimiter on a line, showed literal asterisks. Masked like a link now.
+        assertEquals("*First sentence. Second sentence.*\n",
+                MarkdownNormalizer.normalize("<p><em>First sentence. Second sentence.</em></p>"));
+        assertEquals("**Alpha stands. Beta stands.**\n",
+                MarkdownNormalizer.normalize("<p><strong>Alpha stands. Beta stands.</strong></p>"));
+        assertEquals("Intro. *This clause matters. It is binding.* End.\n",
+                MarkdownNormalizer.normalize("<p>Intro. <em>This clause matters. It is binding.</em> End.</p>"));
+    }
+
+    @Test
+    @DisplayName("#47: a masked bold span keeps a link inside it intact")
+    void boldSpanKeepsAnInnerLinkIntact() {
+        assertEquals("**See [the doc](/x). It is binding.**\n", MarkdownNormalizer.normalize(
+                "<p><strong>See <a href=\"/x\">the doc</a>. It is binding.</strong></p>"));
+    }
+
+    @Test
+    @DisplayName("#47: a literal ** (escaped) is not read as a delimiter, so its sentence still splits")
+    void literalAsterisksAreNotMaskedAsEmphasis() {
+        // "2 ** 8" becomes "2 \*\* 8"; the escaped asterisks must not look like a bold span, and the
+        // sentence boundary after it is a real one.
+        assertEquals("Compute 2 \\*\\* 8.\nThen stop.\n",
+                MarkdownNormalizer.normalize("<p>Compute 2 ** 8. Then stop.</p>"));
+    }
+
+    @Test
+    @DisplayName("#47: the round trip is faithful -- the viewer shows what the archive holds")
+    void emphasisRoundTripsThroughTheViewer() {
+        String line = MarkdownNormalizer.normalize(
+                "<p><em>First sentence. Second sentence.</em></p>").trim();
+        InlineMarkdown.Parsed parsed = InlineMarkdown.parse(line, java.util.Collections.emptyList());
+        StringBuilder visible = new StringBuilder();
+        boolean anyItalic = false;
+        for (InlineMarkdown.Piece piece : parsed.getPieces()) {
+            visible.append(piece.getText());
+            anyItalic |= piece.isItalic();
+        }
+        assertEquals("First sentence. Second sentence.", visible.toString(),
+                "no stray asterisk survives to the display");
+        assertTrue(anyItalic, "the whole span is shown italic");
+    }
+
+    @Test
+    @DisplayName("#47: masking emphasis does not backtrack -- a long unmatched-delimiter paragraph is fast")
+    void emphasisMaskingIsLinear() {
+        StringBuilder html = new StringBuilder("<p>");
+        for (int i = 0; i < 20000; i++) {
+            html.append("*a. ");
+        }
+        html.append("</p>");
+        long start = System.nanoTime();
+        MarkdownNormalizer.normalize(html.toString());
+        long ms = (System.nanoTime() - start) / 1_000_000;
+        assertTrue(ms < 4000, "emphasis masking took " + ms + " ms; a ReDoS would be far worse");
+    }
+
     private static int countOf(String haystack, String needle) {
         int count = 0;
         for (int at = haystack.indexOf(needle); at >= 0; at = haystack.indexOf(needle, at + needle.length())) {

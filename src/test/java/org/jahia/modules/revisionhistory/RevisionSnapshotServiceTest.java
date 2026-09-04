@@ -401,4 +401,35 @@ class RevisionSnapshotServiceTest {
                 "11111111-1111-1111-1111-111111111111", "en", "n"),
                 "unable to prove the winner stored it, so UNCHANGED must not be claimed");
     }
+
+    // ------------------------------------------------------------------ #48
+
+    @Test
+    @DisplayName("#48: a language known only as active-live is accepted, so its status can be recorded")
+    void isKnownLanguageUnionsBothSets() {
+        org.jahia.services.content.decorator.JCRSiteNode site =
+                org.mockito.Mockito.mock(org.jahia.services.content.decorator.JCRSiteNode.class);
+        // Configured languages no longer list "de"; it is only active for live -- the state an
+        // async capture can find after a language was dropped. recordStatus reaches this through
+        // ensureFolder; validating against getLanguages() alone lost the durable FAILED record.
+        org.mockito.Mockito.when(site.getLanguages())
+                .thenReturn(new java.util.HashSet<>(java.util.Arrays.asList("en", "fr")));
+        org.mockito.Mockito.when(site.getActiveLiveLanguages())
+                .thenReturn(new java.util.HashSet<>(java.util.Arrays.asList("en", "de")));
+
+        assertTrue(RevisionSnapshotService.isKnownLanguage(site, "de"), "active-live language accepted");
+        assertTrue(RevisionSnapshotService.isKnownLanguage(site, "fr"), "configured language accepted");
+        assertFalse(RevisionSnapshotService.isKnownLanguage(site, "es"), "an unknown language is not");
+    }
+
+    @Test
+    @DisplayName("#48: a site that reports no languages blocks nothing")
+    void isKnownLanguageAllowsAllWhenSiteReportsNone() {
+        org.jahia.services.content.decorator.JCRSiteNode site =
+                org.mockito.Mockito.mock(org.jahia.services.content.decorator.JCRSiteNode.class);
+        org.mockito.Mockito.when(site.getLanguages()).thenReturn(java.util.Collections.emptySet());
+        org.mockito.Mockito.when(site.getActiveLiveLanguages()).thenReturn(null);
+
+        assertTrue(RevisionSnapshotService.isKnownLanguage(site, "en"));
+    }
 }

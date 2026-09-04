@@ -172,7 +172,19 @@ public final class MarkdownNormalizer {
      * would otherwise split an image's {@code !} from its {@code [alt](src)}.
      */
     private static final Pattern MARKDOWN_LINK = Pattern.compile("!?\\[[^\\]]*]\\([^)]*\\)");
-    private static final Pattern LINK_PLACEHOLDER = Pattern.compile("\uE000(\\d+)\uE000");
+
+    /**
+     * Emphasis spans, masked from the sentence splitter alongside links (issue #47). A {@code
+     * <em>}/{@code <strong>} that covers more than one sentence would otherwise have its delimiters
+     * split across lines -- {@code *First. Second.*} became {@code *First.} / {@code Second} / {@code
+     * .} / {@code *} -- and the viewer, finding no closing delimiter on the line, showed literal
+     * asterisks. Bold is matched first so its {@code **} never reaches the single-{@code *} pass;
+     * the negative lookbehind keeps a literal {@code \*} (escaped by {@link #escapeInlineSyntax}
+     * since generator 6) from being read as a delimiter. Both are non-greedy and confined to one
+     * line, so they are linear-time.
+     */
+    private static final Pattern MARKDOWN_BOLD = Pattern.compile("\\*\\*.+?\\*\\*");
+    private static final Pattern MARKDOWN_ITALIC = Pattern.compile("(?<!\\\\)\\*[^*\\n]+?(?<!\\\\)\\*");
 
     private MarkdownNormalizer() {
     }
@@ -687,33 +699,47 @@ public final class MarkdownNormalizer {
             }
             return quoted.toString().trim();
         }
-        List<String> links = new ArrayList<>();
-        String masked = maskLinks(paragraph, links);
+        List<String> spans = new ArrayList<>();
+        String masked = maskProtectedSpans(paragraph, spans);
         String split = splitSentences(masked, locale);
-        return unmaskLinks(split, links);
+        return unmaskProtectedSpans(split, spans);
     }
 
-    private static String maskLinks(String text, List<String> links) {
-        Matcher m = MARKDOWN_LINK.matcher(text);
+    /**
+     * Replaces link and emphasis spans with placeholders so the sentence splitter treats each as
+     * one unbreakable token. Links first, then bold, then italic: an outer span stores the text it
+     * already contains (a link placeholder included), so restoring outermost-first puts everything
+     * back exactly.
+     */
+    private static String maskProtectedSpans(String text, List<String> spans) {
+        String masked = maskWith(text, MARKDOWN_LINK, spans);
+        masked = maskWith(masked, MARKDOWN_BOLD, spans);
+        return maskWith(masked, MARKDOWN_ITALIC, spans);
+    }
+
+    private static String maskWith(String text, Pattern pattern, List<String> spans) {
+        Matcher m = pattern.matcher(text);
         StringBuilder sb = new StringBuilder(text.length());
         int last = 0;
         while (m.find()) {
-            links.add(m.group());
-            sb.append(text, last, m.start()).append("\uE000").append(links.size() - 1).append("\uE000");
+            spans.add(m.group());
+            sb.append(text, last, m.start()).append('\uE000').append(spans.size() - 1).append('\uE000');
             last = m.end();
         }
         return sb.append(text.substring(last)).toString();
     }
 
-    private static String unmaskLinks(String text, List<String> links) {
-        Matcher m = LINK_PLACEHOLDER.matcher(text);
-        StringBuilder sb = new StringBuilder(text.length());
-        int last = 0;
-        while (m.find()) {
-            sb.append(text, last, m.start()).append(links.get(Integer.parseInt(m.group(1))));
-            last = m.end();
+    /**
+     * Restores masked spans, highest index first. A span was masked after everything it contains,
+     * so it has the higher index; restoring it first reveals any inner placeholder, which a later
+     * iteration then restores. A literal replace, so a placeholder's own digits cannot be reparsed.
+     */
+    private static String unmaskProtectedSpans(String text, List<String> spans) {
+        String result = text;
+        for (int i = spans.size() - 1; i >= 0; i--) {
+            result = result.replace("\uE000" + i + "\uE000", spans.get(i));
         }
-        return sb.append(text.substring(last)).toString();
+        return result;
     }
 
     private static String splitSentences(String paragraph, Locale locale) {

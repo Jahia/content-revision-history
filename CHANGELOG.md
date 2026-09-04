@@ -79,7 +79,31 @@ Changelog
   on the patterns; the snapshot name is built in one place and the collision check is tested
   against a real session mock, including the unreadable case (#36).
 
+### Security
+
+* **The `.markdown` endpoint is gated to opted-in pages** (#46). The markdown views are registered
+  on the core `jnt:page`/`jnt:content` types, so installing the module opened an anonymous
+  `.markdown` URL on *every* page of every site, and `crh:textProperties` handed a visitor every
+  text-bearing property of every guest-readable node -- including properties the page's HTML view
+  never displays. Not an ACL bypass, but it crossed "not shown by the template" into "not exposed"
+  and broke the promise to change nothing until a page opts in. A `.markdown` render whose page is
+  not within a `jmix:publiclyRevisioned` node now answers 404 with no body. Capture is unaffected:
+  it only ever fetches `.markdown` for a revisioned page or content node.
+
 ### Fixed -- comparison viewer
+
+* **An emphasis span covering more than one sentence is no longer shredded** (#47). The sentence
+  splitter masks `[...](...)` links but nothing masked `*...*` / `**...**`, so a two-sentence
+  italic had its delimiters split across lines and the viewer showed literal asterisks. Emphasis
+  spans are masked like links now (escaped `\*` from #27 is not mistaken for a delimiter).
+
+### Fixed -- durable status
+
+* **A capture failure can always be recorded** (#48). `recordStatus` reached a language guard that
+  validated against the site's configured languages while capture is triggered for its active-live
+  languages; when they differed the durable FAILED record threw and was swallowed, leaving the gap
+  only in the log. The guard now accepts the union of both sets.
+
 
 * **Content beginning a line with `#`, `- ` or `N. ` is no longer shown as a heading or list item**
   (#44). The normaliser escapes those shapes at the start of content lines (`\#`, `\-`, `2\.`),

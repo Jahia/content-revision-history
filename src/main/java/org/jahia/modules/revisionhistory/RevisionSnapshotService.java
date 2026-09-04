@@ -590,13 +590,35 @@ public class RevisionSnapshotService {
     private void requireKnownLanguage(JCRSessionWrapper session, String siteKey, String language)
             throws RepositoryException {
         JCRNodeWrapper site = session.getNode("/sites/" + siteKey);
-        if (site instanceof JCRSiteNode) {
-            Set<String> languages = ((JCRSiteNode) site).getLanguages();
-            if (languages != null && !languages.isEmpty() && !languages.contains(language)) {
-                throw new IllegalArgumentException(
-                        "Language " + language + " is not active on site " + siteKey);
-            }
+        if (site instanceof JCRSiteNode && !isKnownLanguage((JCRSiteNode) site, language)) {
+            throw new IllegalArgumentException(
+                    "Language " + language + " is not a language of site " + siteKey);
         }
+    }
+
+    /**
+     * @return whether the language is one the site knows -- the union of its configured languages
+     *         and its active live ones
+     *
+     * <p>Both sets, not just {@code getLanguages()} (issue #48). Capture is triggered for a page's
+     * <em>active live</em> languages ({@code PublicationSnapshotListener.fillInMissingLanguages}),
+     * and that set can hold a language {@code getLanguages()} does not at the moment an async
+     * capture runs. Validating against configured languages alone then made {@code ensureFolder}
+     * throw for a language the module had genuinely just tried to capture, and {@code recordStatus}
+     * swallowed it -- so the durable FAILED record this module relies on was lost and the gap
+     * showed only in the log. An empty union (a site that reports neither) blocks nothing, as
+     * before. A language dropped from both sets cannot be recorded, and has nothing left to key a
+     * record against.
+     */
+    static boolean isKnownLanguage(JCRSiteNode site, String language) {
+        Set<String> known = new java.util.HashSet<>();
+        if (site.getLanguages() != null) {
+            known.addAll(site.getLanguages());
+        }
+        if (site.getActiveLiveLanguages() != null) {
+            known.addAll(site.getActiveLiveLanguages());
+        }
+        return known.isEmpty() || known.contains(language);
     }
 
     private JCRNodeWrapper childOrCreate(JCRNodeWrapper parent, String name, boolean isHistoryRoot)

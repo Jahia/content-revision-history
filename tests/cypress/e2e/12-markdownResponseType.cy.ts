@@ -181,12 +181,19 @@ describe('the markdown template type is served as plain text, not HTML', () => {
         fetchMarkdownRepeatedly(revisionedPagePath, 3);
     });
 
-    it('applies to a page that never opted into revision history', () => {
-        // The views are registered for core node types, so the render surface exists site-wide.
-        // Scoping the fix to revisioned pages only would leave every other page exposed.
-        // Repeated for the same reason as above: an ordinary page is cached like any other.
-        // eslint-disable-next-line cypress/no-unnecessary-waiting -- see cacheFlushSettleMs
-        cy.wait(cacheFlushSettleMs);
-        fetchMarkdownRepeatedly(plainPagePath, 2);
+    it('#46: a page that never opted in is not served at all -- 404, no property leak', () => {
+        // The markdown views are registered on the core jnt:page/jnt:content types, so without the
+        // opted-in gate the .markdown URL exists for EVERY page and hands an anonymous visitor every
+        // text-bearing property -- including ones the HTML view never shows. crh-mdtype-plain has the
+        // payload in its title and did NOT opt in, so its .markdown must 404 and its body must carry
+        // nothing. Checked twice: the gate runs before the cache, so a warm request 404s too.
+        fetchMarkdown(plainPagePath).then(first => {
+            expect(first.status, 'a non-opted-in page must not serve .markdown').to.eq(404);
+            expect(first.body ?? '', 'the refusal must not leak the title or its payload')
+                .to.not.contain(marker);
+        });
+        fetchMarkdown(plainPagePath).then(second => {
+            expect(second.status, 'and still 404 on the cached second request').to.eq(404);
+        });
     });
 });
