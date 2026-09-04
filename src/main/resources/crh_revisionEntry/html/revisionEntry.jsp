@@ -53,7 +53,7 @@
              JSTL behaviours make that load-bearing: fmt:message writes its output unescaped, and
              a MISSING key renders as ???the.key???, echoing the key into the page.
 
-             The CND choicelist constrains the value to editorial|substantive|correction and
+             The CND choicelist constrains the value to initial|editorial|substantive|correction and
              Jackrabbit enforces it on setProperty, so this holds today. It is escaped anyway.
              This was the only output in the module whose safety came from a repository
              constraint rather than from escaping where the value is used, and a value constraint
