@@ -152,4 +152,42 @@ class RichTextSanitizerTest {
         String input = "<p>one</p><p>two</p>";
         assertEquals(input, RichTextSanitizer.sanitize(input));
     }
+
+    // ------------------------------------------------------------------ #26
+
+    @Test
+    @DisplayName("#26: a site-relative link keeps its href, as written")
+    void keepsRelativeLinks() {
+        // "Updated the policy page" with a dead <a> around "policy page" is what every summary
+        // linking within the site rendered as: jsoup resolved the href against the empty base URI,
+        // failed, and removed the attribute.
+        String cleaned = RichTextSanitizer.sanitize(
+                "Updated the <a href=\"/sites/mysite/home/policy.html\">policy page</a>.");
+
+        assertTrue(cleaned.contains("href=\"/sites/mysite/home/policy.html\""), cleaned);
+        assertFalse(cleaned.contains("relative-links.invalid"), "the check base must never be emitted");
+    }
+
+    @Test
+    @DisplayName("#26: fragment and file links survive too; javascript: still does not")
+    void keepsFragmentAndFileLinksButNotScripts() {
+        assertTrue(RichTextSanitizer.sanitize("<a href=\"#section-3\">3</a>").contains("href=\"#section-3\""));
+        assertTrue(RichTextSanitizer.sanitize("<a href=\"/files/live/sites/x/a.pdf\">pdf</a>")
+                .contains("href=\"/files/live/sites/x/a.pdf\""));
+        assertTrue(RichTextSanitizer.sanitize("<a href=\"mailto:legal@example.com\">mail</a>")
+                .contains("href=\"mailto:legal@example.com\""));
+        String script = RichTextSanitizer.sanitize("<a href=\"javascript:alert(1)\">x</a>");
+        assertFalse(script.contains("javascript"), script);
+    }
+
+    @Test
+    @DisplayName("#26: unwrapped blocks stay separate words instead of running together")
+    void separatesUnwrappedBlocks() {
+        assertEquals("one two", RichTextSanitizer.sanitize("<div>one</div><div>two</div>"));
+        String table = RichTextSanitizer.sanitize(
+                "<table><tr><td>alpha</td><td>beta</td></tr><tr><td>gamma</td></tr></table>");
+        assertTrue(table.matches("alpha\\s+beta\\s+gamma"), table);
+        // Allowed blocks are untouched, so the no-reformat guarantee above still holds.
+        assertEquals("<p>one</p><p>two</p>", RichTextSanitizer.sanitize("<p>one</p><p>two</p>"));
+    }
 }

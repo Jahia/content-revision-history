@@ -2,7 +2,14 @@ package org.jahia.modules.revisionhistory;
 
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
+import org.jsoup.nodes.Element;
+import org.jsoup.nodes.TextNode;
+import org.jsoup.safety.Cleaner;
 import org.jsoup.safety.Safelist;
+
+import java.util.Arrays;
+import java.util.HashSet;
+import java.util.Set;
 
 /**
  * Turns editor-authored rich text into HTML that is safe to write into a public page.
@@ -51,12 +58,39 @@ public final class RichTextSanitizer {
     private static final Document.OutputSettings OUTPUT =
             new Document.OutputSettings().prettyPrint(false);
 
+    /**
+     * The base URI relative links are checked against, never emitted.
+     *
+     * <p>jsoup's protocol check resolves every URL attribute against the document's base URI and
+     * removes the attribute when that fails, whatever {@code preserveRelativeLinks} says. With the
+     * empty base URI this class used to pass, every relative and fragment {@code href} failed to
+     * resolve and was stripped -- {@code <a href="/sites/x/home/policy.html">} became a dead
+     * {@code <a>}, the opposite of what the comment beside it promised (issue #26). A reserved
+     * {@code .invalid} host makes the check pass for {@code https}; the attribute itself keeps the
+     * value the editor wrote, because the safelist preserves relative links.
+     */
+    private static final String BASE_URI = "https://relative-links.invalid/";
+
+    /**
+     * Block-level elements the safelist unwraps. Unwrapping keeps the text and drops the tag, so
+     * {@code <div>one</div><div>two</div>} became {@code onetwo} and a pasted table's cells ran
+     * together as {@code alphabeta}. A space is put after each before cleaning, so unwrapped blocks
+     * stay separate words.
+     */
+    private static final Set<String> UNWRAPPED_BLOCKS = new HashSet<>(Arrays.asList(
+            "div", "section", "article", "header", "footer", "aside", "main", "nav", "address",
+            "h1", "h2", "h3", "h4", "h5", "h6", "table", "thead", "tbody", "tfoot", "tr", "td", "th",
+            "caption", "dl", "dt", "dd", "figure", "figcaption", "hr", "pre"));
+
     private RichTextSanitizer() {
         // static utility
     }
 
     private static Safelist buildSafelist() {
         return Safelist.basic()
+                // Site-relative and fragment links are legitimate in a revision summary ("see the
+                // policy page"). Kept as written; see BASE_URI for why a base is still needed.
+                .preserveRelativeLinks(true)
                 // basic() already enforces rel=nofollow; noopener/noreferrer additionally stop
                 // a link from reaching back through window.opener or leaking the referrer of a
                 // page whose whole point is to be cited.
@@ -71,8 +105,14 @@ public final class RichTextSanitizer {
         if (html == null || html.isEmpty()) {
             return "";
         }
-        // Empty base URI: relative links stay relative and are never resolved against some
-        // host this code has no business guessing.
-        return Jsoup.clean(html, "", SAFELIST, OUTPUT);
+        Document dirty = Jsoup.parseBodyFragment(html, BASE_URI);
+        for (Element block : dirty.body().getAllElements()) {
+            if (UNWRAPPED_BLOCKS.contains(block.normalName()) && !SAFELIST.isSafeTag(block.normalName())) {
+                block.after(new TextNode(" "));
+            }
+        }
+        Document clean = new Cleaner(SAFELIST).clean(dirty);
+        clean.outputSettings(OUTPUT);
+        return clean.body().html().trim();
     }
 }

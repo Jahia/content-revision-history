@@ -13,6 +13,7 @@ import java.util.List;
 import java.util.regex.Pattern;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -330,5 +331,74 @@ class RevisionSnapshotServiceTest {
             sb.append(c);
         }
         return sb.toString();
+    }
+
+    // ------------------------------------------------------------------ #36
+
+    @Test
+    @DisplayName("#36: the write path validates its coordinates before touching the repository")
+    void captureRefusesBadCoordinatesBeforeAnyRepositoryAccess() {
+        // Through the public entry point, not by reflection on the patterns: these three values are
+        // concatenated into a path handed to addNode() on an unrestricted system session, so what
+        // matters is that the WRITE PATH refuses them -- not that a regex exists somewhere.
+        RevisionSnapshotService service = new RevisionSnapshotService();
+        String uuid = "11111111-1111-1111-1111-111111111111";
+
+        assertThrows(IllegalArgumentException.class, () -> service.captureIfChanged(
+                "../etc", uuid, "en", "# x", java.time.Instant.now(), null, null));
+        assertThrows(IllegalArgumentException.class, () -> service.captureIfChanged(
+                "site", "not-a-uuid", "en", "# x", java.time.Instant.now(), null, null));
+        assertThrows(IllegalArgumentException.class, () -> service.captureIfChanged(
+                "site", uuid, "en/../fr", "# x", java.time.Instant.now(), null, null));
+    }
+
+    @Test
+    @DisplayName("#36: validate() itself, for the shapes each coordinate must and must not have")
+    void validateAcceptsAndRefusesTheRightShapes() {
+        String uuid = "11111111-1111-1111-1111-111111111111";
+        RevisionSnapshotService.validate("digitall", uuid, "en");
+        RevisionSnapshotService.validate("_intranet", uuid, "pt_BR");
+        assertThrows(IllegalArgumentException.class, () -> RevisionSnapshotService.validate("a.b", uuid, "en"));
+        assertThrows(IllegalArgumentException.class, () -> RevisionSnapshotService.validate("site", uuid, "EN"));
+        assertThrows(IllegalArgumentException.class, () -> RevisionSnapshotService.validate("site", uuid, null));
+        assertThrows(IllegalArgumentException.class, () -> RevisionSnapshotService.validate(null, uuid, "en"));
+    }
+
+    @Test
+    @DisplayName("#36: the snapshot name is built once, and the collision check looks for exactly it")
+    void collisionCheckLooksForTheNameThatWasWritten() throws RepositoryException {
+        java.time.Instant instant = java.time.Instant.parse("2026-08-15T12:00:00Z");
+        String hash = MarkdownNormalizer.hash("# page");
+        String name = RevisionSnapshotService.snapshotName(instant, hash);
+        assertTrue(name.endsWith("-" + hash.substring(0, 8)), name);
+
+        org.jahia.services.content.JCRSessionWrapper session =
+                org.mockito.Mockito.mock(org.jahia.services.content.JCRSessionWrapper.class);
+        String expectedPath = "/sites/digitall/contents/revision-history/"
+                + "11111111-1111-1111-1111-111111111111/en/" + name;
+        org.mockito.Mockito.when(session.nodeExists(expectedPath)).thenReturn(true);
+
+        assertTrue(RevisionSnapshotService.storedByTheWinner(session, "digitall",
+                "11111111-1111-1111-1111-111111111111", "en", name));
+        assertEquals(expectedPath, RevisionSnapshotService.snapshotPath("digitall",
+                "11111111-1111-1111-1111-111111111111", "en", name));
+    }
+
+    @Test
+    @DisplayName("#36: when the winner's snapshot cannot be seen or checked, the loss is not called benign")
+    void winnerNotProvenMeansNotBenign() throws RepositoryException {
+        org.jahia.services.content.JCRSessionWrapper session =
+                org.mockito.Mockito.mock(org.jahia.services.content.JCRSessionWrapper.class);
+        org.mockito.Mockito.when(session.nodeExists(org.mockito.ArgumentMatchers.anyString())).thenReturn(false);
+        assertFalse(RevisionSnapshotService.storedByTheWinner(session, "s",
+                "11111111-1111-1111-1111-111111111111", "en", "n"));
+
+        org.jahia.services.content.JCRSessionWrapper broken =
+                org.mockito.Mockito.mock(org.jahia.services.content.JCRSessionWrapper.class);
+        org.mockito.Mockito.when(broken.nodeExists(org.mockito.ArgumentMatchers.anyString()))
+                .thenThrow(new RepositoryException("unreadable"));
+        assertFalse(RevisionSnapshotService.storedByTheWinner(broken, "s",
+                "11111111-1111-1111-1111-111111111111", "en", "n"),
+                "unable to prove the winner stored it, so UNCHANGED must not be claimed");
     }
 }
