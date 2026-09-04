@@ -1,6 +1,17 @@
 Changelog
 =========
 
+## Unreleased
+
+### Added
+
+* **An `Initial version` change type for a page's first revision.** The change-type picker offered
+  only *Editorial*, *Substantive* and *Correction* -- all of which describe a change relative to an
+  earlier version, so none of them fit the first recorded revision, which has no predecessor. The
+  new value is offered first in the list; the default stays *Substantive* for subsequent edits. A
+  regression test now requires every change-type option to carry a resource-bundle label, so a
+  future value cannot ship rendering as a raw key in Content Editor.
+
 ## [1.4.8](https://github.com/Jahia/content-revision-history/compare/1_4_7...1_4_8) (2026-09-04)
 
 **Security release, and it supersedes 1.4.7 -- upgrade even if you already installed 1.4.7.** The
