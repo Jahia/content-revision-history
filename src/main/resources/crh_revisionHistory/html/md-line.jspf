@@ -1,0 +1,24 @@
+<%--
+  Renders ONE InlineMarkdown.Parsed, held in ${mdFormat}, as the formatted content of a diff cell.
+
+  Extracted so the four cells of a diff row (older/newer x unchanged/changed) share one
+  implementation instead of four copies drifting apart. Statically included; the caller sets
+  ${mdFormat} immediately before including this. The <del>/<ins>, the +/- marker and the
+  visually-hidden Added/Removed label stay at the call site -- this owns only the inner rendering.
+
+  LINE-LEVEL SHAPE IS APPEARANCE ONLY. A heading becomes crh-md-h1..h6, a quote crh-md-quote, a
+  table a set of crh-md-cell spans -- never a real <h1>, <blockquote> or <table>. The panel sits
+  inside the host page, so emitting real structure would splice the snapshot's outline/landmarks
+  into the page's own. The row's meaning is already carried by <del>/<ins> and the marker; this is
+  decoration on top, and a row still reads as added or removed with this stylesheet missing.
+--%><c:choose><%--
+  --%><c:when test="${mdFormat.horizontalRule}"><span class="crh-md crh-md-rule" role="separator"></span></c:when><%--
+  A table's header/body separator carries no text: draw a divider, show nothing.
+  --%><c:when test="${mdFormat.tableSeparator}"><span class="crh-md crh-md-tsep" aria-hidden="true"></span></c:when><%--
+  A table row: each cell rendered on its own, so the pipes are gone and the cell content keeps its
+  inline formatting and links. Columns are not aligned across rows -- each diff row is an
+  independent element -- but the pipe soup is.
+  --%><c:when test="${not empty mdFormat.cells}"><span class="crh-md crh-md-table<c:if test="${mdFormat.quoteDepth gt 0}"> crh-md-quote crh-md-quote-${mdFormat.quoteDepth}</c:if>"><c:forEach items="${mdFormat.cells}" var="crhCell"><span class="crh-md-cell"><c:forEach items="${crhCell}" var="piece"><%@ include file="md-piece.jspf" %></c:forEach></span></c:forEach></span></c:when><%--
+  Everything else: heading weight, list marker + indent, quote bar, then the inline runs.
+  --%><c:otherwise><span class="crh-md<c:if test="${mdFormat.headingLevel gt 0}"> crh-md-h${mdFormat.headingLevel}</c:if><c:if test="${not empty mdFormat.listMarker}"> crh-md-item crh-md-depth-${mdFormat.listDepth}</c:if><c:if test="${mdFormat.quoteDepth gt 0}"> crh-md-quote crh-md-quote-${mdFormat.quoteDepth}</c:if>"><c:if test="${not empty mdFormat.listMarker}"><span class="crh-md-marker"><c:out value="${mdFormat.listMarker}"/></span> </c:if><c:forEach items="${mdFormat.pieces}" var="piece"><%@ include file="md-piece.jspf" %></c:forEach></span></c:otherwise><%--
+--%></c:choose>

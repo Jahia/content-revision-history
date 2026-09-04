@@ -317,13 +317,13 @@
                                                     <c:when test="${row.unchanged}">
                                                         <span class="crh-diff-side"><span
                                                             class="crh-visually-hidden"><fmt:message key="crh_diff.olderSide"/></span><%--
-                                                        --%><span class="crh-md<c:if test="${row.left.format.headingLevel gt 0}"> crh-md-h${row.left.format.headingLevel}</c:if><c:if test="${not empty row.left.format.listMarker}"> crh-md-item crh-md-depth-${row.left.format.listDepth}</c:if>"><c:if test="${not empty row.left.format.listMarker}"><span class="crh-md-marker"><c:out value="${row.left.format.listMarker}"/></span> </c:if><c:forEach items="${row.left.format.pieces}" var="piece"><c:if test="${piece.changed}"><mark></c:if><c:if test="${piece.bold}"><strong></c:if><c:if test="${piece.italic}"><em></c:if><c:out value="${piece.text}"/><c:if test="${piece.italic}"></em></c:if><c:if test="${piece.bold}"></strong></c:if><c:if test="${piece.changed}"></mark></c:if></c:forEach></span></span>
+                                                        --%><c:set var="mdFormat" value="${row.left.format}"/><%@ include file="md-line.jspf" %></span>
                                                     </c:when>
                                                     <c:otherwise>
                                                         <span class="crh-diff-side crh-diff-removed"><span
                                                             class="crh-visually-hidden"><fmt:message key="crh_diff.removed"/></span><span
                                                             class="crh-diff-marker" aria-hidden="true">-</span><del><%--
-                                                        --%><span class="crh-md<c:if test="${row.left.format.headingLevel gt 0}"> crh-md-h${row.left.format.headingLevel}</c:if><c:if test="${not empty row.left.format.listMarker}"> crh-md-item crh-md-depth-${row.left.format.listDepth}</c:if>"><c:if test="${not empty row.left.format.listMarker}"><span class="crh-md-marker"><c:out value="${row.left.format.listMarker}"/></span> </c:if><c:forEach items="${row.left.format.pieces}" var="piece"><c:if test="${piece.changed}"><mark></c:if><c:if test="${piece.bold}"><strong></c:if><c:if test="${piece.italic}"><em></c:if><c:out value="${piece.text}"/><c:if test="${piece.italic}"></em></c:if><c:if test="${piece.bold}"></strong></c:if><c:if test="${piece.changed}"></mark></c:if></c:forEach></span><%--
+                                                        --%><c:set var="mdFormat" value="${row.left.format}"/><%@ include file="md-line.jspf" %><%--
                                                         --%></del></span>
                                                     </c:otherwise>
                                                 </c:choose>
@@ -336,13 +336,13 @@
                                                     <c:when test="${row.unchanged}">
                                                         <span class="crh-diff-side"><span
                                                             class="crh-visually-hidden"><fmt:message key="crh_diff.newerSide"/></span><%--
-                                                        --%><span class="crh-md<c:if test="${row.right.format.headingLevel gt 0}"> crh-md-h${row.right.format.headingLevel}</c:if><c:if test="${not empty row.right.format.listMarker}"> crh-md-item crh-md-depth-${row.right.format.listDepth}</c:if>"><c:if test="${not empty row.right.format.listMarker}"><span class="crh-md-marker"><c:out value="${row.right.format.listMarker}"/></span> </c:if><c:forEach items="${row.right.format.pieces}" var="piece"><c:if test="${piece.changed}"><mark></c:if><c:if test="${piece.bold}"><strong></c:if><c:if test="${piece.italic}"><em></c:if><c:out value="${piece.text}"/><c:if test="${piece.italic}"></em></c:if><c:if test="${piece.bold}"></strong></c:if><c:if test="${piece.changed}"></mark></c:if></c:forEach></span></span>
+                                                        --%><c:set var="mdFormat" value="${row.right.format}"/><%@ include file="md-line.jspf" %></span>
                                                     </c:when>
                                                     <c:otherwise>
                                                         <span class="crh-diff-side crh-diff-added"><span
                                                             class="crh-visually-hidden"><fmt:message key="crh_diff.added"/></span><span
                                                             class="crh-diff-marker" aria-hidden="true">+</span><ins><%--
-                                                        --%><span class="crh-md<c:if test="${row.right.format.headingLevel gt 0}"> crh-md-h${row.right.format.headingLevel}</c:if><c:if test="${not empty row.right.format.listMarker}"> crh-md-item crh-md-depth-${row.right.format.listDepth}</c:if>"><c:if test="${not empty row.right.format.listMarker}"><span class="crh-md-marker"><c:out value="${row.right.format.listMarker}"/></span> </c:if><c:forEach items="${row.right.format.pieces}" var="piece"><c:if test="${piece.changed}"><mark></c:if><c:if test="${piece.bold}"><strong></c:if><c:if test="${piece.italic}"><em></c:if><c:out value="${piece.text}"/><c:if test="${piece.italic}"></em></c:if><c:if test="${piece.bold}"></strong></c:if><c:if test="${piece.changed}"></mark></c:if></c:forEach></span><%--
+                                                        --%><c:set var="mdFormat" value="${row.right.format}"/><%@ include file="md-line.jspf" %><%--
                                                         --%></ins></span>
                                                     </c:otherwise>
                                                 </c:choose>
