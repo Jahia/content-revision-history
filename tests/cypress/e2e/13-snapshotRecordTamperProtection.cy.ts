@@ -1,14 +1,5 @@
 import gql from 'graphql-tag';
-import {
-    addNode,
-    createUser,
-    deleteNode,
-    deleteUser,
-    enableModule,
-    grantRoles,
-    publishAndWaitJobEnding,
-    removeMixins
-} from '@jahia/cypress';
+import {addNode, deleteNode, enableModule, publishAndWaitJobEnding, removeMixins} from '@jahia/cypress';
 
 /**
  * GHSA-q67w-prc3-ch5h #2: the public revision record must not be rewritable by its own subjects.
@@ -17,29 +8,23 @@ import {
  * but does NOT refuse a write -- only `protected` does that, and a protected property cannot be
  * written even by the system session that captures it. So the ONLY thing standing between a
  * contributor and the record is the ACL on the history root, and an ACL is exactly the kind of
- * thing a unit test cannot prove: RevisionSnapshotServiceTest asserts that
- * enforceCuratorReadOnly calls setAclInheritanceBreak(true) and grants `reader` to
- * `g:privileged`, which is a statement about two method calls on a mock, not about what a real
- * repository then permits.
+ * thing a unit test cannot prove: RevisionSnapshotServiceTest asserts which methods
+ * enforceCuratorReadOnly calls on a mock, not what a real repository then permits.
  *
- * <p><b>This file is the confirmation of the principal.</b> `g:privileged` is a constant in
- * RevisionSnapshotService, chosen because Jahia's back-office users -- editors, site
- * administrators and server administrators -- are all members of it. If that is wrong, the fix
- * fails in one of two opposite ways and both are silent:
+ * <p><b>This file is why the fix is not what it first was.</b> The obvious implementation grants
+ * `reader` to a curator GROUP, and the first version of the fix named `g:privileged`. It looked
+ * right, the unit test passed, and it was wrong: measured here, the effective ACL of
+ * /sites/digitall/contents grants roles mostly to INDIVIDUAL USERS (u:mathias=editor,
+ * u:jane=contributor, u:irina=reviewer), and the global g:privileged group carries a DENY. So the
+ * grant reached nobody, every editor lost sight of the store, and 07-jcontentUi caught it -- the
+ * 1.3.x failure, reintroduced by a security fix. The fix now COPIES the principals that could
+ * already read instead of naming a group, and these tests pin that.
  *
- * <ul>
- *   <li>too narrow, and no curator can read a snapshot -- which is precisely the 1.3.x failure
- *       that made the feature unusable (it broke inheritance and granted nothing, so only the
- *       {@code root} system user could read the store nobody could then curate);</li>
- *   <li>too broad, or not applied at all, and a contributor can still rewrite what a public
- *       revision claims the page said.</li>
- * </ul>
- *
- * So the structural assertions below are paired with behavioural ones driven as a real,
- * non-root user, and the write test carries a CONTROL write to ordinary site content. Without
- * that control, a refused snapshot write proves nothing: it passes just as well for a user who
- * has no rights anywhere, which is the easiest way for this file to go green while testing
- * nothing.
+ * <p>The behavioural tests are driven as `mathias`, a real digitall editor with write on the site's
+ * content tree, because `root` is the JCR system user and bypasses the access manager entirely --
+ * every assertion here would pass against a tree with no ACL at all. The write test carries a
+ * CONTROL write to ordinary site content: without it, a refused snapshot write proves nothing,
+ * since it passes just as well for a user with no rights anywhere.
  */
 describe('The snapshot record is tamper-protected, and curators can still read it', () => {
     const siteKey = 'digitall';
@@ -49,28 +34,31 @@ describe('The snapshot record is tamper-protected, and curators can still read i
     const pagePath = `${homePath}/crh-e2e-tamper`;
     const areaPath = `${pagePath}/area-main`;
     const textPath = `${areaPath}/policyText`;
-    const historyRoot = `/sites/${siteKey}/contents/revision-history`;
+    const contentsPath = `/sites/${siteKey}/contents`;
+    const historyRoot = `${contentsPath}/revision-history`;
 
     /**
-     * The principal and role RevisionSnapshotService.enforceCuratorReadOnly grants. Written here as
-     * literals rather than imported, deliberately: if someone changes the constant in the module,
-     * this file must FAIL and make them come and justify the new principal, not silently follow it.
+     * The role enforceCuratorReadOnly re-grants, and the only one it may grant.
+     *
+     * NOT 'reader'. Jahia scopes roles to a WORKSPACE and the built-in reader role is
+     * jcr:read_live alone, while this tree is jmix:nolive and exists only in default -- so granting
+     * reader grants read of a workspace the record is never in. That was the second wrong version
+     * of this fix: the ACL looked perfect (GRANT reader USER:mathias, inheritance broken) and the
+     * editor still got PathNotFoundException. 'privileged' is jcr:read_default with no write and no
+     * publish, which is exactly "may look at it in the back office".
      */
-    const CURATOR_PRINCIPAL = 'privileged';
-    const READER_ROLE = 'reader';
+    const CURATOR_ROLE = 'privileged';
 
     /**
-     * Roles that confer write on content. None of these may be granted on the history root, by any
-     * route -- local or inherited. Listing them by name rather than asking "is anything but reader
-     * granted" keeps the assertion readable when Jahia adds a role this module has never heard of.
+     * Roles that confer write. None may be granted on the history root, by any route -- local or
+     * inherited. Named rather than "anything but reader" so the assertion stays readable when
+     * Jahia adds a role this module has never heard of.
      */
-    const WRITE_CONFERRING_ROLES = ['editor', 'editor-in-chief', 'contributor', 'owner', 'reviewer'];
+    const WRITE_CONFERRING_ROLES = ['editor', 'editor-in-chief', 'contributor', 'owner'];
 
-    // A real back-office user, created for this file. Not root: root is the JCR system user and
-    // bypasses the access manager entirely, so every assertion here would pass against a tree with
-    // no ACL at all.
-    const contributor = 'crh-e2e-contributor';
-    const contributorPassword = 'crh-e2e-contributor-pw';
+    // A real back-office editor shipped with digitall, and the same user 07-jcontentUi drives.
+    const editor = 'mathias';
+    const editorPassword = 'password';
 
     const captureTimeoutMs = 60000;
     const pollIntervalMs = 1000;
@@ -113,9 +101,9 @@ describe('The snapshot record is tamper-protected, and curators can still read i
     `;
 
     // Two queries rather than one with a variable: `inclInherited: true` is the form already proven
-    // against this schema in 02-captureFailureModes, and the difference between the two is the
-    // whole point -- local entries say what this module granted, the full set says what the node
-    // effectively carries once inheritance is accounted for.
+    // against this schema in 02-captureFailureModes, and the difference between them is the point --
+    // the local set says what this module granted, the full set says what the node effectively
+    // carries once inheritance is accounted for.
     const localAclQuery = gql`
         query localAcl($path: String!) {
             jcr(workspace: EDIT) {
@@ -158,15 +146,9 @@ describe('The snapshot record is tamper-protected, and curators can still read i
         }
     `;
 
-    const setPropertyMutation = gql`
-        mutation setProp($path: String!, $property: String!, $value: String!) {
-            jcr(workspace: EDIT) {
-                mutateNode(pathOrId: $path) {
-                    mutateProperty(name: $property) { setValue(value: $value) }
-                }
-            }
-        }
-    `;
+    /** Jahia's ACL principal key: what grantRoles takes, and what the fix stores. */
+    const principalKey = (entry: AclEntry): string =>
+        `${entry.principal?.principalType === 'GROUP' ? 'g' : 'u'}:${entry.principal?.name}`;
 
     const getUuid = (path: string): Cypress.Chainable<string> =>
         cy.apollo({query: nodeUuidQuery, variables: {path}})
@@ -194,31 +176,50 @@ describe('The snapshot record is tamper-protected, and curators can still read i
             })
             .then(value => value as T) as Cypress.Chainable<T>;
 
-    const entriesOf = (
-        query: typeof localAclQuery, path: string
-    ): Cypress.Chainable<AclEntry[]> =>
+    const entriesOf = (query: typeof localAclQuery, path: string): Cypress.Chainable<AclEntry[]> =>
         cy.apollo({query, variables: {path}, errorPolicy: 'all'})
             .then((r: ApolloResult<AclData>) => r.data?.jcr?.nodeByPath?.acl?.aclEntries ?? []);
 
-    const readHashAs = (
-        user: string | null, password?: string
-    ): Cypress.Chainable<ApolloResult<HashData>> => {
-        if (user === null) {
-            cy.login();
-        } else {
-            cy.login(user, password);
-        }
+    /**
+     * A GraphQL call made AS a given user.
+     *
+     * <p><b>Not cy.apollo.</b> The harness's apollo client authenticates with its own configured
+     * administrator credentials and ignores the browser session, so every cy.apollo in this file
+     * runs as root no matter what cy.login was called with -- and root is the JCR system user, which
+     * bypasses the access manager entirely. The first version of these tests used cy.apollo after
+     * cy.login(mathias) and therefore asserted nothing: the "editor may still read" test passed
+     * because ROOT could read, and the "editor may not write" test failed because ROOT could write.
+     * A permission test that authenticates as somebody else is not a permission test.
+     *
+     * <p>cy.request carries basic auth of its own. The Origin header is required: Jahia's graphql
+     * scope is auto_apply origin=hosted, so a request without a same-origin header is refused
+     * whatever the credentials.
+     */
+    const graphqlAs = (user: string, password: string, query: string, variables: object) =>
+        cy.request({
+            method: 'POST',
+            url: '/modules/graphql',
+            auth: {user, pass: password},
+            headers: {'Content-Type': 'application/json', Origin: Cypress.config('baseUrl') as string},
+            body: {query, variables},
+            failOnStatusCode: false
+        });
 
-        return cy.apollo({
-            query: snapshotHashQuery, variables: {path: snapshotPath()}, errorPolicy: 'all'
-        }) as unknown as Cypress.Chainable<ApolloResult<HashData>>;
-    };
+    const READ_HASH = `query snapshotHash($path: String!) {
+        jcr(workspace: EDIT) { nodeByPath(path: $path) { hash: property(name: "crh:contentHash") { value } } }
+    }`;
+
+    const WRITE_PLAIN = `mutation setProp($path: String!, $property: String!, $value: String!) {
+        jcr(workspace: EDIT) { mutateNode(pathOrId: $path) { mutateProperty(name: $property) { setValue(value: $value) } } }
+    }`;
+
+    const WRITE_TRANSLATED = `mutation setTranslated($path: String!, $property: String!, $value: String!, $language: String!) {
+        jcr(workspace: EDIT) { mutateNode(pathOrId: $path) { mutateProperty(name: $property) { setValue(value: $value, language: $language) } } }
+    }`;
 
     before(() => {
         cy.login();
         enableModule('content-revision-history', siteKey);
-
-        createUser(contributor, contributorPassword);
 
         addNode({
             parentPathOrId: homePath,
@@ -239,10 +240,6 @@ describe('The snapshot record is tamper-protected, and curators can still read i
                     name: 'policyText',
                     properties: [{name: 'text', value: '<p>The wording of record.</p>', language}]
                 }))
-            // The attacker profile from the advisory, made real: a user who genuinely CAN write in
-            // this site's content tree. Granted on the site so it covers /contents, which is where
-            // the snapshot store lives -- that is the whole reason restoring inheritance was a leak.
-            .then(() => grantRoles(`/sites/${siteKey}`, ['editor'], contributor, 'USER'))
             .then(() => getUuid(pagePath))
             .then(uuid => {
                 pageUuid = uuid;
@@ -267,37 +264,52 @@ describe('The snapshot record is tamper-protected, and curators can still read i
         if (pageUuid) {
             deleteNode(`${historyRoot}/${pageUuid}`).then(null, () => undefined);
         }
-
-        deleteUser(contributor);
     });
 
-    // ---------------------------------------------------------------- the principal, structurally
+    // ---------------------------------------------------------------- the reader set, structurally
 
-    it('grants the curator group READ on the history root -- the principal the fix names', () => {
-        // The direct confirmation that RevisionSnapshotService.CURATOR_PRINCIPAL landed as a real
-        // ACE on a real repository, rather than as two verified calls on a Mockito mock.
-        entriesOf(localAclQuery, historyRoot).then(entries => {
-            const readerGrants = entries.filter(e =>
-                e.aclEntryType === 'GRANT' &&
-                e.role?.name === READER_ROLE &&
-                e.principal?.name === CURATOR_PRINCIPAL);
+    it('re-grants READ to every principal that could already read the site content', () => {
+        // The fix copies the readers rather than naming a group, so this asserts the copy against
+        // the source. Naming a group is what broke it: g:privileged carries a DENY here and the
+        // editors hold their roles as individual users, so a group grant reached nobody at all.
+        entriesOf(effectiveAclQuery, contentsPath).then(parentEntries => {
+            const denied = new Set(parentEntries
+                .filter(e => e.aclEntryType === 'DENY')
+                .map(principalKey));
+            const expectedReaders = new Set(parentEntries
+                .filter(e => e.aclEntryType === 'GRANT')
+                .map(principalKey)
+                .filter(p => !denied.has(p)));
 
-            expect(
-                readerGrants,
-                `the history root must grant '${READER_ROLE}' to '${CURATOR_PRINCIPAL}'. Local ACL was: ` +
-                JSON.stringify(entries)
-            ).to.have.length.greaterThan(0);
+            expect(expectedReaders.size,
+                'the fixture is meaningless unless the site content grants somebody something')
+                .to.be.greaterThan(0);
 
-            expect(readerGrants[0].principal?.principalType, 'it must be granted to a GROUP')
-                .to.equal('GROUP');
+            return entriesOf(localAclQuery, historyRoot).then(rootEntries => {
+                const granted = new Set(rootEntries
+                    .filter(e => e.aclEntryType === 'GRANT' && e.role?.name === CURATOR_ROLE)
+                    .map(principalKey));
+
+                const missing = [...expectedReaders].filter(p => !granted.has(p));
+                expect(
+                    missing,
+                    'every principal that could read the site content must still be able to read ' +
+                    'the record. Missing: ' + JSON.stringify(missing) +
+                    '; history root granted: ' + JSON.stringify([...granted])
+                ).to.have.length(0);
+
+                // A named editor, so the failure reads as "mathias lost the store" rather than as a
+                // set-difference. This is the exact user 07-jcontentUi found locked out.
+                expect(granted, `${editor} must be among them`).to.include(`u:${editor}`);
+            });
         });
     });
 
     it('grants nothing writable on the history root, by any route', () => {
         // Inheritance is broken, so the site's editor/contributor grants must not reach this tree.
-        // Asserted on the EFFECTIVE acl, not the local one: a local set with only `reader` in it
-        // would look identical whether inheritance was broken or not, so the local assertion above
-        // cannot see this failure and this one cannot be satisfied by the fix forgetting to break.
+        // Asserted on the EFFECTIVE acl, not the local one: a local set holding only reader grants
+        // would look identical whether inheritance was broken or not, so the assertion above cannot
+        // see this failure and this one cannot be satisfied by the fix forgetting to break.
         entriesOf(effectiveAclQuery, historyRoot).then(entries => {
             const writable = entries.filter(e =>
                 e.aclEntryType === 'GRANT' &&
@@ -312,77 +324,71 @@ describe('The snapshot record is tamper-protected, and curators can still read i
         });
     });
 
-    // ---------------------------------------------------------------- the principal, behaviourally
+    // -------------------------------------------------------------- the reader set, behaviourally
 
-    it('lets the contributor write ordinary site content -- the control for the test below', () => {
+    it('lets the editor write ordinary site content -- the control for the test below', () => {
         // Without this, the refusal asserted next proves nothing: it would pass identically for a
-        // user with no rights anywhere. This is what makes the refusal attributable to the
-        // snapshot ACL rather than to the fixture.
-        cy.login(contributor, contributorPassword);
-
-        cy.apollo({
-            mutation: setPropertyMutation,
-            variables: {path: textPath, property: 'text', value: '<p>Edited by the contributor.</p>'},
-            errorPolicy: 'all'
-        }).then((result: ApolloResult<unknown>) => {
-            expect(
-                result.errors,
+        // user with no rights anywhere, or for one whose credentials never reached the server. This
+        // is what makes the refusal attributable to the snapshot ACL rather than to the fixture.
+        graphqlAs(editor, editorPassword, WRITE_TRANSLATED, {
+            path: textPath, property: 'text', value: '<p>Edited by the editor.</p>', language
+        }).then(response => {
+            expect(response.body.errors,
                 'the fixture user must genuinely be able to write this site\'s content, or the ' +
-                'refusal below is meaningless: ' + JSON.stringify(result.errors)
-            ).to.be.undefined;
+                'refusal below is meaningless: ' + JSON.stringify(response.body.errors)).to.be.undefined;
         });
     });
 
-    it('refuses a snapshot rewrite by that same contributor', () => {
-        // The vulnerability, driven end to end. crh:contentHash is the honest thing to tamper with:
-        // the advisory notes it cannot constrain an attacker because it is stored on the node it
-        // describes, so rewriting the text and then the hash to match is one edit away -- unless
-        // the repository refuses the write outright.
-        readHashAs(null).then(before => {
-            const original = before.data?.jcr?.nodeByPath?.hash?.value;
-            expect(original, 'the snapshot must carry a content hash to begin with').to.be.a('string').and.not.be.empty;
+    it('refuses a snapshot rewrite by that same editor', () => {
+        // The vulnerability, driven end to end as a real editor. crh:contentHash is the honest thing
+        // to tamper with: the advisory notes it cannot constrain an attacker because it is stored on
+        // the node it describes, so rewriting the text and then the hash to match is one edit away --
+        // unless the repository refuses the write outright.
+        cy.apollo({query: snapshotHashQuery, variables: {path: snapshotPath()}, errorPolicy: 'all'})
+            .then((before: ApolloResult<HashData>) => {
+                const original = before.data?.jcr?.nodeByPath?.hash?.value;
+                expect(original, 'the snapshot must carry a content hash to begin with')
+                    .to.be.a('string').and.not.be.empty;
 
-            cy.login(contributor, contributorPassword);
+                return graphqlAs(editor, editorPassword, WRITE_PLAIN, {
+                    path: snapshotPath(),
+                    property: 'crh:contentHash',
+                    value: 'tampered-by-an-editor'
+                }).then(response => {
+                    expect(response.body.errors,
+                        'an editor must NOT be able to rewrite the public revision record')
+                        .to.not.be.undefined;
+                    expect(JSON.stringify(response.body.errors),
+                        'and it must be refused as an ACCESS decision, not by some incidental error')
+                        .to.contain('AccessDeniedException');
 
-            return cy.apollo({
-                mutation: setPropertyMutation,
-                variables: {path: snapshotPath(), property: 'crh:contentHash', value: 'tampered-by-a-contributor'},
-                errorPolicy: 'all'
-            }).then((attempt: ApolloResult<unknown>) => {
-                expect(
-                    attempt.errors,
-                    'a contributor must NOT be able to rewrite the public revision record'
-                ).to.not.be.undefined;
-
-                // Belt and braces: an accepted-but-ineffective mutation would leave errors
-                // undefined and the value changed, and a refusal that still wrote would be worse
-                // than no refusal at all. Re-read as root, which bypasses the ACL.
-                return readHashAs(null);
-            }).then(after => {
-                expect(
-                    after.data?.jcr?.nodeByPath?.hash?.value,
-                    'the stored hash must be byte-for-byte what capture wrote'
-                ).to.equal(original);
+                    // Belt and braces: a refusal that still wrote would be worse than no refusal at
+                    // all. Re-read with the harness client (root), which bypasses the ACL.
+                    return cy.apollo({
+                        query: snapshotHashQuery, variables: {path: snapshotPath()}, errorPolicy: 'all'
+                    });
+                }).then((after: ApolloResult<HashData>) => {
+                    expect(after.data?.jcr?.nodeByPath?.hash?.value,
+                        'the stored hash must be byte-for-byte what capture wrote').to.equal(original);
+                });
             });
-        });
     });
 
-    it('still lets that contributor READ the snapshot, which 1.3.x did not', () => {
-        // The other half of the principal, and the regression this pairing exists to catch. 1.3.x
-        // broke inheritance and granted nothing: every non-root account was denied, an editor could
-        // not read the snapshot they had to describe, and the picker offered a store nobody could
-        // open. A fix that only stops the write and also stops the read is not a fix, it is the
-        // 1.3.x bug with better commit messages.
-        readHashAs(contributor, contributorPassword).then(result => {
-            expect(
-                result.errors,
-                'a back-office user must still be able to read a snapshot: they have to, to curate it'
-            ).to.be.undefined;
-            expect(
-                result.data?.jcr?.nodeByPath?.hash?.value,
-                `reading returned nothing, so '${CURATOR_PRINCIPAL}' does not in fact deliver ` +
-                `'${READER_ROLE}' to this user -- the principal is wrong`
-            ).to.be.a('string').and.not.be.empty;
+    it('still lets that editor READ the snapshot, which 1.3.x did not', () => {
+        // The other half, and the regression this pairing exists to catch. 1.3.x broke inheritance
+        // and granted nothing: every non-root account was denied, an editor could not read the
+        // snapshot they had to describe, and the picker offered a store nobody could open. A fix
+        // that stops the write and also stops the read is not a fix, it is the 1.3.x bug with better
+        // commit messages -- which is exactly what granting the `reader` role shipped, because
+        // reader is jcr:read_live and this tree is jmix:nolive.
+        graphqlAs(editor, editorPassword, READ_HASH, {path: snapshotPath()}).then(response => {
+            expect(response.body.errors,
+                'a back-office user must still be able to read a snapshot: they have to, to curate it')
+                .to.be.undefined;
+            expect(response.body.data?.jcr?.nodeByPath?.hash?.value,
+                `reading returned nothing, so '${CURATOR_ROLE}' does not in fact deliver read in the ` +
+                'default workspace to ' + editor + ' -- the record is locked away from its curators')
+                .to.be.a('string').and.not.be.empty;
         });
     });
 });

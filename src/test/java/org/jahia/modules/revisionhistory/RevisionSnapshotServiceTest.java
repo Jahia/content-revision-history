@@ -435,41 +435,104 @@ class RevisionSnapshotServiceTest {
 
     // ------------------------------------------------------------ enforceCuratorReadOnly (#2)
 
+    /** The shape {@code getActualAclEntries} returns: principal -> (role -> GRANT|DENY|EXTERNAL). */
+    private static java.util.Map<String, java.util.Map<String, String>> aclOf(String... principalRoleType) {
+        java.util.Map<String, java.util.Map<String, String>> acl = new java.util.LinkedHashMap<>();
+        for (int i = 0; i < principalRoleType.length; i += 3) {
+            acl.computeIfAbsent(principalRoleType[i], k -> new java.util.LinkedHashMap<>())
+                    .put(principalRoleType[i + 1], principalRoleType[i + 2]);
+        }
+        return acl;
+    }
+
     @Test
-    @DisplayName("#2: the history root is locked read-only -- inheritance broken, READER granted, nothing writable")
-    void enforceCuratorReadOnlyLocksTheHistoryRoot() throws RepositoryException {
+    @DisplayName("#2: the history root keeps its readers but loses every writer")
+    void enforceCuratorReadOnlyPreservesReadersAndDropsWriters() throws RepositoryException {
         // The snapshot record is `hidden`, not `protected`, so a contributor with write in the
         // site's content tree could otherwise rewrite what a public revision says the page said
-        // (GHSA-q67w-prc3-ch5h #2). The ACL is the record's only tamper protection: break
-        // inheritance, grant read, grant nothing that confers write.
+        // (GHSA-q67w-prc3-ch5h #2). Inheritance is broken and every principal that could read is
+        // re-granted `reader` -- and nothing else, so the write is gone.
+        //
+        // The readers are COPIED rather than a curator group being named, because on a real site
+        // there is no such group: measured on digitall, editors hold their roles as INDIVIDUAL
+        // USERS (u:mathias=editor) and the global g:privileged group carries a DENY. The first
+        // version of this fix granted reader to g:privileged and locked every editor out of the
+        // store -- the 1.3.x failure -- which is what the fixture below reproduces.
+        org.jahia.services.content.JCRNodeWrapper parent =
+                org.mockito.Mockito.mock(org.jahia.services.content.JCRNodeWrapper.class);
+        org.mockito.Mockito.when(parent.getActualAclEntries()).thenReturn(aclOf(
+                "u:mathias", "editor", "GRANT",
+                "g:site-administrators", "site-administrator", "GRANT",
+                "u:irina", "reviewer/currentSite-access", "EXTERNAL",
+                "u:irina", "reviewer", "GRANT",
+                "g:privileged", "privileged", "DENY"));
+
         org.jahia.services.content.JCRNodeWrapper root =
                 org.mockito.Mockito.mock(org.jahia.services.content.JCRNodeWrapper.class);
         org.mockito.Mockito.when(root.getAclInheritanceBreak()).thenReturn(false);
         org.mockito.Mockito.when(root.getPath()).thenReturn("/sites/x/contents/revision-history");
 
-        new RevisionSnapshotService().enforceCuratorReadOnly(root);
+        new RevisionSnapshotService().enforceCuratorReadOnly(parent, root);
 
         org.mockito.Mockito.verify(root).setAclInheritanceBreak(true);
-        // The ONLY grant is reader: an exact-set match, so any write-conferring role would fail it.
-        org.mockito.Mockito.verify(root).grantRoles("g:privileged",
-                java.util.Collections.singleton("reader"));
-        org.mockito.Mockito.verify(root, org.mockito.Mockito.never()).setAclInheritanceBreak(false);
+        // Every reader is re-granted, and the ONLY role granted is reader: an exact-set match, so
+        // any write-conferring role would fail this.
+        // The role, not "reader": Jahia's reader role is jcr:read_live only, and this tree is
+        // jmix:nolive, so granting it grants read of a workspace the record is not in. Measured:
+        // every editor was locked out. privileged is jcr:read_default with no write and no publish.
+        java.util.Set<String> readOnlyRole = java.util.Collections.singleton("privileged");
+        org.mockito.Mockito.verify(root).grantRoles("u:mathias", readOnlyRole);
+        org.mockito.Mockito.verify(root).grantRoles("g:site-administrators", readOnlyRole);
+        org.mockito.Mockito.verify(root).grantRoles("u:irina", readOnlyRole);
+        // A principal that was being kept OUT must not be let in by the repair.
+        org.mockito.Mockito.verify(root, org.mockito.Mockito.never())
+                .grantRoles(org.mockito.ArgumentMatchers.eq("g:privileged"),
+                        org.mockito.ArgumentMatchers.anySet());
     }
 
     @Test
-    @DisplayName("#2: an already-locked root is not re-broken, so repair is idempotent")
+    @DisplayName("#2: an already-broken root is not re-broken, so repair is idempotent")
     void enforceCuratorReadOnlyIsIdempotent() throws RepositoryException {
-        // Called on every capture; a root carrying the lock already must not be disturbed. grantRoles
-        // is idempotent in Jahia (it returns false when the grant is already present), so re-issuing
-        // it is safe and keeps the method a single settling point.
+        // Called on every capture. The readers are read from the PARENT, not from the root, so a
+        // root a previous version already broke is repaired rather than frozen holding whatever it
+        // was left with -- which is how an instance that ran the g:privileged version recovers.
+        org.jahia.services.content.JCRNodeWrapper parent =
+                org.mockito.Mockito.mock(org.jahia.services.content.JCRNodeWrapper.class);
+        org.mockito.Mockito.when(parent.getActualAclEntries())
+                .thenReturn(aclOf("u:mathias", "editor", "GRANT"));
+
         org.jahia.services.content.JCRNodeWrapper root =
                 org.mockito.Mockito.mock(org.jahia.services.content.JCRNodeWrapper.class);
         org.mockito.Mockito.when(root.getAclInheritanceBreak()).thenReturn(true);
 
-        new RevisionSnapshotService().enforceCuratorReadOnly(root);
+        new RevisionSnapshotService().enforceCuratorReadOnly(parent, root);
 
         org.mockito.Mockito.verify(root, org.mockito.Mockito.never()).setAclInheritanceBreak(true);
-        org.mockito.Mockito.verify(root).grantRoles("g:privileged",
-                java.util.Collections.singleton("reader"));
+        org.mockito.Mockito.verify(root).grantRoles("u:mathias", java.util.Collections.singleton("privileged"));
+    }
+
+    @Test
+    @DisplayName("#2: with no reader to preserve it fails OPEN rather than lock the record away")
+    void enforceCuratorReadOnlyFailsOpenWhenNoReaderIsKnown() throws RepositoryException {
+        // The 1.3.x outage is the worse outcome: a record only the system session can read is a
+        // record nobody can curate, and an editor has to read a snapshot to describe it. An empty
+        // answer here means the site's ACL could not be read, not that it grants nothing, so the
+        // break is skipped and logged rather than applied against a fact not in evidence.
+        org.jahia.services.content.JCRNodeWrapper parent =
+                org.mockito.Mockito.mock(org.jahia.services.content.JCRNodeWrapper.class);
+        org.mockito.Mockito.when(parent.getActualAclEntries())
+                .thenReturn(java.util.Collections.emptyMap());
+        org.mockito.Mockito.when(parent.getPath()).thenReturn("/sites/x/contents");
+
+        org.jahia.services.content.JCRNodeWrapper root =
+                org.mockito.Mockito.mock(org.jahia.services.content.JCRNodeWrapper.class);
+        org.mockito.Mockito.when(root.getPath()).thenReturn("/sites/x/contents/revision-history");
+
+        new RevisionSnapshotService().enforceCuratorReadOnly(parent, root);
+
+        org.mockito.Mockito.verify(root, org.mockito.Mockito.never()).setAclInheritanceBreak(true);
+        org.mockito.Mockito.verify(root, org.mockito.Mockito.never())
+                .grantRoles(org.mockito.ArgumentMatchers.anyString(),
+                        org.mockito.ArgumentMatchers.anySet());
     }
 }

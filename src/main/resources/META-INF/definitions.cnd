@@ -217,8 +217,11 @@
 // even by the system session that captures it.
 // `hidden` suppresses the edit FORM but does not refuse a write, so it is NOT what protects the
 // record from tampering. That is done by the ACL: RevisionSnapshotService.enforceCuratorReadOnly
-// breaks inheritance on the history root and grants g:privileged the `reader` role and nothing
-// writable, so a contributor can read a snapshot but not rewrite it (GHSA-q67w-prc3-ch5h #2).
+// breaks inheritance on the history root and re-grants the `privileged` role -- read in the default
+// workspace, no write, no publish -- to every principal that could already read the site's content,
+// so a contributor can still read a snapshot but can no longer rewrite it (GHSA-q67w-prc3-ch5h #2).
+// NOT the `reader` role: that is jcr:read_live only, and this tree is jmix:nolive, so it grants read
+// of a workspace these nodes are never in.
 //
 // Nothing is lost by hiding them. Views read properties directly, so the snapshot preview still
 // shows the metadata and the Markdown as preformatted text -- that is what it exists for.

@@ -223,10 +223,10 @@ public class RevisionDiffService {
      * directly", which is no longer true and was dangerous left standing: a reviewer weighing
      * whether a configured capture principal is safe for a site would read it as a guarantee that
      * snapshots are unreadable to contributors, and enable privileged capture on that basis.
-     * {@code RevisionSnapshotService.enforceCuratorReadOnly} grants {@code reader} to
-     * {@code g:privileged} on the history root, so any back-office user -- every contributor
-     * included -- can open a snapshot in jContent and read it. It is write, not read, that the ACL
-     * withholds from them.
+     * {@code RevisionSnapshotService.enforceCuratorReadOnly} re-grants {@code privileged} on the
+     * history root to every principal that could already read the site's content, so any such user
+     * -- every contributor included -- can open a snapshot in jContent and read it. It is write,
+     * not read, that the ACL withholds from them.
      *
      * <p>The gate was self-evidently safe while captures rendered as {@code guest}: a snapshot
      * could not contain anything the anonymous public was not already entitled to see, so who was
