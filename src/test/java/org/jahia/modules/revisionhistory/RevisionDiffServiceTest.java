@@ -38,6 +38,17 @@ class RevisionDiffServiceTest {
     }
 
     @Test
+    @DisplayName("The per-entry gate denies too, so list membership is not the access check")
+    void theEntryGateFailsClosed() {
+        // The reason resolve() re-reads each chosen entry as the viewer: an entry can sit in a
+        // history's list (built on a system session) while its own ACL is tighter than the
+        // history's. Containment proves membership, not readability. Asserted on the gate directly,
+        // as theGateFailsClosed is, and for the same reason -- through compare() it proves nothing.
+        assertFalse(service.viewerMayReadEntry(ONE, "live"),
+                "an entry the current user cannot read must not have its label or date returned");
+    }
+
+    @Test
     @DisplayName("compare() always returns a view and never throws, whatever the environment")
     void compareNeverThrows() {
         // This does NOT prove the gate works -- see theGateFailsClosed for that. It pins the

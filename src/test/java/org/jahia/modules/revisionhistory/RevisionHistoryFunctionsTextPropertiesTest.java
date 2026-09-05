@@ -257,6 +257,52 @@ class RevisionHistoryFunctionsTextPropertiesTest {
         assertTrue(RevisionHistoryFunctions.textProperties(node).isEmpty());
     }
 
+    // ------------------------------------------------------------------ #3: per-site exclusion list
+
+    @Test
+    @DisplayName("#3: a property named in the site's exclusion list is kept out of the output")
+    void excludedPropertyIsOmitted() throws Exception {
+        // The opt-out list closes the anonymous over-publishing (GHSA-q67w-prc3-ch5h #3): a property
+        // a site keeps out of its templates still reached an anonymous visitor at the .markdown URL.
+        // Named in capture.excludedProperties, it is dropped from both the archive and the response.
+        JCRNodeWrapper node = nodeWith(Arrays.asList(
+                prop("internalNote", PropertyType.STRING, "not for the public record", false),
+                prop("body", PropertyType.STRING, "Published prose.", false)), false);
+        org.jahia.services.content.decorator.JCRSiteNode site =
+                mock(org.jahia.services.content.decorator.JCRSiteNode.class);
+        when(site.getSiteKey()).thenReturn("x");
+        when(node.getResolveSite()).thenReturn(site);
+
+        SiteSettingsRegistry registry = new SiteSettingsRegistry();
+        registry.activate();
+        try {
+            java.util.Hashtable<String, Object> config = new java.util.Hashtable<>();
+            config.put(SiteSettingsRegistry.PROP_SITE_KEY, "x");
+            config.put(SiteSettingsRegistry.PROP_EXCLUDED_PROPERTIES, "internalNote");
+            registry.updated("pid-x", config);
+
+            assertEquals(Collections.singletonList("Published prose."),
+                    RevisionHistoryFunctions.textProperties(node),
+                    "the excluded property must not appear; the rest of the record is unchanged");
+        } finally {
+            registry.deactivate();
+        }
+    }
+
+    @Test
+    @DisplayName("#3: with no exclusion configured, every property is published as before")
+    void nothingExcludedByDefault() throws Exception {
+        // The default is unchanged: an unresolved or unconfigured site excludes nothing, so the
+        // record stays complete. getResolveSite() is left unstubbed (null) on purpose.
+        JCRNodeWrapper node = nodeWith(Arrays.asList(
+                prop("internalNote", PropertyType.STRING, "still published by default", false),
+                prop("body", PropertyType.STRING, "Prose.", false)), false);
+
+        assertEquals(Arrays.asList("Prose.", "still published by default"),
+                RevisionHistoryFunctions.textProperties(node),
+                "ordered by name: body then internalNote");
+    }
+
     // ------------------------------------------------------------------ #18: plain strings are text
 
     @Test

@@ -30,15 +30,29 @@ public final class SiteCaptureSettings {
     private final String captureUser;
     private final String authorization;
     private final String baseUrl;
+    private final java.util.Set<String> excludedProperties;
 
     SiteCaptureSettings(String siteKey, boolean captureEnabled, int maxSnapshots,
                         String captureUser, String authorization, String baseUrl) {
+        this(siteKey, captureEnabled, maxSnapshots, captureUser, authorization, baseUrl,
+                java.util.Collections.emptySet());
+    }
+
+    SiteCaptureSettings(String siteKey, boolean captureEnabled, int maxSnapshots,
+                        String captureUser, String authorization, String baseUrl,
+                        java.util.Set<String> excludedProperties) {
         this.siteKey = siteKey;
         this.captureEnabled = captureEnabled;
         this.maxSnapshots = maxSnapshots;
         this.captureUser = captureUser;
         this.authorization = authorization;
         this.baseUrl = baseUrl;
+        // Copied and made unmodifiable: an immutable settings object cannot hand out a set a caller
+        // could mutate. Insertion order is kept only so logs and toString read predictably.
+        this.excludedProperties = excludedProperties == null || excludedProperties.isEmpty()
+                ? java.util.Collections.emptySet()
+                : java.util.Collections.unmodifiableSet(
+                        new java.util.LinkedHashSet<>(excludedProperties));
     }
 
     /**
@@ -78,6 +92,22 @@ public final class SiteCaptureSettings {
     /** @return the Authorization header for capture renders, or {@code null} to render anonymously */
     String getAuthorization() {
         return authorization;
+    }
+
+    /**
+     * @return the names of string properties this site keeps OUT of the {@code .markdown} output,
+     *         never null; empty for a site that excludes nothing (the default)
+     *
+     * <p>The markdown fallback emits every text-bearing string property so nothing is silently lost
+     * from the record, and the same output is served at the anonymous {@code .markdown} URL of an
+     * opted-in page -- so a property a site keeps out of its templates still reaches an anonymous
+     * visitor (GHSA-q67w-prc3-ch5h #3). This opt-out list lets a site trim named properties from
+     * both the archive and the response. It is a file-only advanced setting
+     * ({@code capture.excludedProperties}), like the capture credential -- preserved verbatim
+     * across panel saves, with no GraphQL or panel surface.
+     */
+    public java.util.Set<String> getExcludedProperties() {
+        return excludedProperties;
     }
 
     /**
@@ -135,8 +165,10 @@ public final class SiteCaptureSettings {
         // the truth; FileInstall delivers the real answer moments later.
         String carried = java.util.Objects.equals(this.captureUser, captureUser)
                 ? authorization : null;
+        // excludedProperties is not a panel field; carry it across so the object stays truthful
+        // until FileInstall re-delivers the (preserved) capture.excludedProperties line.
         return new SiteCaptureSettings(siteKey, captureEnabled, maxSnapshots, captureUser,
-                carried, baseUrl);
+                carried, baseUrl, excludedProperties);
     }
 
     @Override
@@ -146,6 +178,7 @@ public final class SiteCaptureSettings {
                 + ", captureEnabled=" + captureEnabled
                 + ", maxSnapshots=" + maxSnapshots
                 + ", captureUser=" + (captureUser == null ? "(anonymous)" : captureUser)
-                + ", baseUrl=" + (baseUrl == null ? "(node default)" : baseUrl) + ']';
+                + ", baseUrl=" + (baseUrl == null ? "(node default)" : baseUrl)
+                + ", excludedProperties=" + excludedProperties + ']';
     }
 }

@@ -91,6 +91,13 @@ public class SiteSettingsRegistry implements ManagedServiceFactory {
     static final String PROP_SECRET = "capture.secret";
     static final String PROP_SECRET_FILE = "capture.secretFile";
     static final String PROP_BASE_URL = "capture.baseUrl";
+    /**
+     * Names of string properties this site keeps out of the {@code .markdown} output, comma- or
+     * whitespace-separated. Deliberately NOT a {@link #MANAGED_KEYS} member: like
+     * {@code capture.secret} it is a hand-edited advanced setting, so a panel save preserves it
+     * verbatim rather than dropping it (GHSA-q67w-prc3-ch5h #3).
+     */
+    static final String PROP_EXCLUDED_PROPERTIES = "capture.excludedProperties";
 
     /**
      * The property Felix FileInstall adds to every configuration it delivers: the URI of the file
@@ -187,7 +194,8 @@ public class SiteSettingsRegistry implements ManagedServiceFactory {
                         string(properties, PROP_USER),
                         string(properties, PROP_SECRET_FILE),
                         string(properties, PROP_SECRET)),
-                endpoint(string(properties, PROP_BASE_URL), siteKey));
+                endpoint(string(properties, PROP_BASE_URL), siteKey),
+                excludedProperties(properties));
         // A file keeps its pid when it is edited, so changing the siteKey INSIDE it re-points the
         // same pid at another site. Without this, the site it used to name kept the old settings
         // for the life of the process: deleted() only ever clears what siteByPid currently maps,
@@ -435,11 +443,12 @@ public class SiteSettingsRegistry implements ManagedServiceFactory {
         // privilege this would grant.
         if (settings.getBaseUrl() != null
                 && !GuestMarkdownFetcher.reachesJahiaDirectly(settings.getBaseUrl())) {
-            throw new IllegalArgumentException(PROP_BASE_URL + " must address this node's own"
+            throw new IllegalArgumentException(PROP_BASE_URL + " must equal this node's own"
                     + " loopback connector, not " + settings.getBaseUrl() + ". Capture fetches"
-                    + " /cms/render/... from this node itself; a value pointing anywhere else would"
-                    + " store another host's response as this site's revision history. Use"
-                    + " http://127.0.0.1:<port>, or clear the field to let the port be detected.");
+                    + " /cms/render/... from this node itself; a different port, a path, a query or"
+                    + " a fragment would send the capture credential elsewhere or store another"
+                    + " response as this site's revision history. Use exactly http://127.0.0.1:<port>"
+                    + " with no trailing path, or clear the field to let the connector be detected.");
         }
         Path target = configFile(siteKey);
         String captureUser = singleLine(PROP_USER, settings.getCaptureUser());
@@ -559,6 +568,27 @@ public class SiteSettingsRegistry implements ManagedServiceFactory {
      * edited in the panel until an unrelated field was raised first (issue #32). 1 cannot be
      * honoured anyway -- prune never deletes the newest snapshot -- so the floor is the honest value.
      */
+    /**
+     * The property names this site excludes from the {@code .markdown} output, split from a comma-
+     * or whitespace-separated list. Empty when unset, so the default publishes everything the
+     * markdown fallback would (GHSA-q67w-prc3-ch5h #3). Order is preserved only so it reads back the
+     * way it was written; duplicates and blanks are dropped.
+     */
+    private static Set<String> excludedProperties(Dictionary<String, ?> properties) {
+        String raw = string(properties, PROP_EXCLUDED_PROPERTIES);
+        if (raw == null) {
+            return java.util.Collections.emptySet();
+        }
+        Set<String> names = new java.util.LinkedHashSet<>();
+        for (String name : raw.split("[,\\s]+")) {
+            String trimmed = name.trim();
+            if (!trimmed.isEmpty()) {
+                names.add(trimmed);
+            }
+        }
+        return names;
+    }
+
     private static int retention(Dictionary<String, ?> properties) {
         int configured = positiveInt(properties, PROP_MAX_SNAPSHOTS, SiteCaptureSettings.DEFAULTS.getMaxSnapshots());
         if (configured < MIN_MAX_SNAPSHOTS) {

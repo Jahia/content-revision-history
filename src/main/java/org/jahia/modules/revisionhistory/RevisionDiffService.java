@@ -155,8 +155,11 @@ public class RevisionDiffService {
         List<JCRNodeWrapper> entries = RevisionEntryOrder.newestFirst(history);
         int newerIndex = indexOf(entries, oneIdentifier);
         int olderIndex = indexOf(entries, otherIdentifier);
-        // Containment IS the access control: an identifier that is not an entry of THIS history
-        // never reaches a repository read.
+        // Containment BOUNDS the lookup -- an identifier that is not an entry of THIS history never
+        // reaches a repository read -- but it is NOT the access control. `entries` is built on a
+        // system session, so it holds entries whose own ACL is tighter than the history's, and
+        // membership of that list says nothing about whether THIS viewer may read them. The access
+        // check is the per-entry viewer read below.
         if (newerIndex < 0 || olderIndex < 0) {
             return RevisionDiffView.unavailable(REASON_NOT_FOUND, null);
         }
@@ -167,6 +170,19 @@ public class RevisionDiffService {
         }
         JCRNodeWrapper newer = entries.get(newerIndex);
         JCRNodeWrapper older = entries.get(olderIndex);
+
+        // Re-read each chosen entry through the viewer's OWN session before returning its label or
+        // date, in the workspace the page is rendered from. An entry with a tighter ACL than its
+        // history -- an editor keeping one revision private on an otherwise public changelog --
+        // otherwise had its label and date returned to a caller the repository would have refused,
+        // because everything above this point runs on a system session that bypasses ACLs. Same
+        // indistinguishable answer as a bad identifier, so the panel cannot be used to confirm
+        // which revisions exist.
+        String renderingWorkspace = entrySession.getWorkspace().getName();
+        if (!viewerMayReadEntry(newer.getIdentifier(), renderingWorkspace)
+                || !viewerMayReadEntry(older.getIdentifier(), renderingWorkspace)) {
+            return RevisionDiffView.unavailable(REASON_NOT_FOUND, null);
+        }
 
         String newerLabel = stringOrNull(newer, PROP_REVISION_LABEL);
         String olderLabel = stringOrNull(older, PROP_REVISION_LABEL);
@@ -207,9 +223,10 @@ public class RevisionDiffService {
      * directly", which is no longer true and was dangerous left standing: a reviewer weighing
      * whether a configured capture principal is safe for a site would read it as a guarantee that
      * snapshots are unreadable to contributors, and enable privileged capture on that basis.
-     * {@code RevisionSnapshotService.restoreInheritance} repairs the pre-1.4 lockdown on every
-     * capture, so any contributor with read on {@code /sites/<site>/contents} can open a snapshot
-     * in jContent and read it.
+     * {@code RevisionSnapshotService.enforceCuratorReadOnly} re-grants {@code privileged} on the
+     * history root to every principal that could already read the site's content, so any such user
+     * -- every contributor included -- can open a snapshot in jContent and read it. It is write,
+     * not read, that the ACL withholds from them.
      *
      * <p>The gate was self-evidently safe while captures rendered as {@code guest}: a snapshot
      * could not contain anything the anonymous public was not already entitled to see, so who was
@@ -235,6 +252,25 @@ public class RevisionDiffService {
      */
     boolean viewerMayReadHistory(String historyIdentifier, String workspace) {
         return viewerMayRead(historyIdentifier, workspace);
+    }
+
+    /**
+     * Does the <em>current</em> user have read access to this one revision entry, in their own
+     * session, in the workspace being rendered?
+     *
+     * <p>The second question the gate asks, and the reason list-containment is not the access
+     * control. The entry list {@code resolve} pairs from is built on a system session, so it can
+     * contain an entry whose ACL is tighter than the history's -- an editor who breaks inheritance
+     * on a single revision to keep it private on an otherwise public changelog. Containment proves
+     * such an entry belongs to this history; only re-reading it as the viewer proves the viewer may
+     * see it. Fails closed on the same terms as {@link #viewerMayReadHistory}.
+     *
+     * <p>Package-private so a test can assert that verdict directly, exactly as
+     * {@code viewerMayReadHistory} is: asserting it through {@link #compare} proves nothing, because
+     * with no repository compare denies for several reasons at once and passes with the check gone.
+     */
+    boolean viewerMayReadEntry(String entryIdentifier, String workspace) {
+        return viewerMayRead(entryIdentifier, workspace);
     }
 
     /**

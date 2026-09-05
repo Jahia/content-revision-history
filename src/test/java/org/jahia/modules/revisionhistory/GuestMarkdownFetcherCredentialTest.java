@@ -88,7 +88,12 @@ class GuestMarkdownFetcherCredentialTest {
         // Arrange
         AtomicReference<String> seen = serverOn("127.0.0.1");
         configureCredential();
-        GuestMarkdownFetcher fetcher = new GuestMarkdownFetcher(baseUrl("127.0.0.1"));
+        // The stub server IS the node under test, so its ephemeral loopback address is what counts
+        // as this node's own connector here -- the detected 8080 cannot be listened on in a unit
+        // test. The guard now pins the PORT as well as the host (GHSA-q67w-prc3-ch5h #1), so the
+        // fetcher has to be told which loopback address is the connector rather than accepting any.
+        GuestMarkdownFetcher fetcher =
+                new GuestMarkdownFetcher(baseUrl("127.0.0.1"), baseUrl("127.0.0.1"));
 
         // Act
         GuestMarkdownFetcher.Fetched fetched = fetcher.fetch(PAGE, "en", 1L, null);
@@ -118,6 +123,26 @@ class GuestMarkdownFetcherCredentialTest {
         assertEquals(RevisionHistoryConstants.CAPTURE_PRINCIPAL, fetched.principal,
                 "no credential went out, so the record must say the render was anonymous rather"
                 + " than naming an account that did not authenticate it");
+    }
+
+    @Test
+    @DisplayName("The credential is NOT sent to a different PORT on loopback, even 127.0.0.1")
+    void withholdsCredentialFromAWrongLoopbackPort() throws Exception {
+        // GHSA-q67w-prc3-ch5h #1 Path A at the wire: a site administrator setting capture.baseUrl to
+        // http://127.0.0.1:<any other port> collected the operator's capture secret at a listener
+        // they chose. Same loopback HOST, wrong PORT -- which the old host-only guard accepted. The
+        // stub here stands in for that listener; this node's real connector is a different port.
+        AtomicReference<String> seen = serverOn("127.0.0.1");
+        configureCredential();
+        String differentPort = "http://127.0.0.1:" + (server.getAddress().getPort() + 1);
+        GuestMarkdownFetcher fetcher = new GuestMarkdownFetcher(baseUrl("127.0.0.1"), differentPort);
+
+        // Act -- the fetch still reaches the stub (its real port), but with no Authorization header.
+        fetcher.fetch(PAGE, "en", 1L, null);
+
+        // Assert
+        assertNull(seen.get(), "same loopback host but a different port is not this node's own"
+                + " connector; the capture secret must not reach it");
     }
 
     @Test

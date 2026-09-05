@@ -378,14 +378,57 @@ class GuestMarkdownFetcherTest {
     // fetcher asks for. It reports FAILED and says nothing about why, which cost a real
     // investigation several rounds on the backfill script before the address was questioned.
 
+    // The rule is now pinned through addressesEndpoint against a FIXED expected connector, not
+    // through reachesJahiaDirectly: the latter compares against DetectedEndpoint.VALUE, a one-shot
+    // JMX sweep that has no deterministic value in a unit-test JVM. The old test asserted the loose
+    // behaviour -- any port, any path -- as correct (GHSA-q67w-prc3-ch5h #1), so a regex-only fix
+    // would have left it green while the hole stayed open.
+    private static final String CONNECTOR = "http://127.0.0.1:8080";
+
     @Test
-    @DisplayName("a loopback capture base URL is accepted without complaint")
-    void loopbackBaseUrlsAreFine() {
-        assertTrue(GuestMarkdownFetcher.reachesJahiaDirectly("http://127.0.0.1:8080"));
-        assertTrue(GuestMarkdownFetcher.reachesJahiaDirectly("http://localhost:8080"));
-        assertTrue(GuestMarkdownFetcher.reachesJahiaDirectly("https://127.0.0.1:8443"));
-        assertTrue(GuestMarkdownFetcher.reachesJahiaDirectly("http://127.0.0.1:8080/context"));
-        assertTrue(GuestMarkdownFetcher.reachesJahiaDirectly("http://[::1]:8080"));
+    @DisplayName("the exact connector is accepted, whatever loopback spelling or scheme it uses")
+    void addressesTheConnectorItNames() {
+        // A loopback host spelled any of its three ways addresses this node, so a difference between
+        // the configured value and the detected one is fine; the port and (absent) path are what
+        // must match.
+        for (String accepted : new String[]{
+                "http://127.0.0.1:8080", "http://localhost:8080", "http://[::1]:8080",
+                "https://127.0.0.1:8080", "http://127.0.0.1:8080/"}) {
+            assertTrue(GuestMarkdownFetcher.addressesEndpoint(accepted, CONNECTOR), accepted);
+        }
+    }
+
+    @Test
+    @DisplayName("a different port, any path, a query, a fragment or userinfo is refused")
+    void refusesAnythingButTheConnector() {
+        for (String refused : new String[]{
+                // The credential-theft vector: any other port on loopback collected the operator's
+                // capture secret at an attacker-chosen listener.
+                "http://127.0.0.1:31337", "http://127.0.0.1",
+                // The request-line forgery vectors: a path/query/fragment reshapes the appended
+                // page path -- a trailing '#' turns the whole path into a dropped fragment (GET /).
+                "http://127.0.0.1:8080/cms/render", "http://127.0.0.1:8080/#",
+                "http://127.0.0.1:8080#", "http://127.0.0.1:8080/?x=", "http://127.0.0.1:8080?x=",
+                // Host confusion and lookalikes: the host is evil.example / a public name, not loopback.
+                "http://user@127.0.0.1:8080", "http://127.0.0.1@evil.example:8080",
+                "http://127.0.0.1.evil.example:8080", "https://www.example.com:8080",
+                // Non-HTTP scheme.
+                "ftp://127.0.0.1:8080"}) {
+            assertFalse(GuestMarkdownFetcher.addressesEndpoint(refused, CONNECTOR), refused);
+        }
+    }
+
+    @Test
+    @DisplayName("when the connector has a context path, the value must carry exactly that path")
+    void addressesTheConnectorIncludingContextPath() {
+        String withContext = "http://127.0.0.1:8080/jahia";
+        assertTrue(GuestMarkdownFetcher.addressesEndpoint("http://127.0.0.1:8080/jahia", withContext));
+        assertTrue(GuestMarkdownFetcher.addressesEndpoint("http://localhost:8080/jahia/", withContext),
+                "a single trailing slash is the same path");
+        assertFalse(GuestMarkdownFetcher.addressesEndpoint("http://127.0.0.1:8080", withContext),
+                "missing the context path does not address the connector");
+        assertFalse(GuestMarkdownFetcher.addressesEndpoint("http://127.0.0.1:8080/other", withContext),
+                "a different path is a request-line forgery vector");
     }
 
     @Test
