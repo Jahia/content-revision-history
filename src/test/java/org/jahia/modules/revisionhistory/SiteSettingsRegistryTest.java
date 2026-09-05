@@ -365,6 +365,51 @@ class SiteSettingsRegistryTest {
         }
     }
 
+    // ------------------------------------------------------------------ #3: excluded properties
+
+    @Test
+    @DisplayName("#3: capture.excludedProperties parses into a set, split on commas and whitespace")
+    void excludedPropertiesAreParsed() throws Exception {
+        registry.updated("pid-1", props(
+                SiteSettingsRegistry.PROP_SITE_KEY, "academy",
+                SiteSettingsRegistry.PROP_EXCLUDED_PROPERTIES, "internalNote, secret  note"));
+
+        assertEquals(
+                new java.util.HashSet<>(java.util.Arrays.asList("internalNote", "secret", "note")),
+                new java.util.HashSet<>(registry.forSite("academy").getExcludedProperties()));
+        assertTrue(registry.forSite("digitall").getExcludedProperties().isEmpty(),
+                "a site with no list of its own excludes nothing -- the default publishes everything");
+    }
+
+    @Test
+    @DisplayName("#3: a hand-added capture.excludedProperties survives a panel save, like capture.secret")
+    void excludedPropertiesArePreservedAcrossSave(@TempDir Path etc) throws Exception {
+        String previousEtc = System.getProperty("karaf.etc");
+        System.setProperty("karaf.etc", etc.toString());
+        try {
+            // An administrator hand-adds the advanced setting to the site's file.
+            Path file = registry.configFile("academy");
+            Files.write(file, ("siteKey = academy\ncapture.enabled = true\n"
+                    + "capture.excludedProperties = internalNote\n")
+                    .getBytes(java.nio.charset.StandardCharsets.ISO_8859_1));
+
+            // A panel save edits an unrelated field. Because the key is NOT managed, it must survive
+            // -- the same guarantee capture.secret has, and for the same reason (GHSA-q67w-prc3-ch5h #3).
+            registry.save(SiteCaptureSettings.DEFAULTS.withChanges("academy", false, 9, null, null));
+
+            String body = new String(Files.readAllBytes(file),
+                    java.nio.charset.StandardCharsets.ISO_8859_1);
+            assertTrue(body.contains("capture.excludedProperties = internalNote"),
+                    "the advanced setting must be preserved verbatim across a save, not dropped: " + body);
+        } finally {
+            if (previousEtc == null) {
+                System.clearProperty("karaf.etc");
+            } else {
+                System.setProperty("karaf.etc", previousEtc);
+            }
+        }
+    }
+
     // ------------------------------------------------------------------ component lifecycle
 
     @Test
