@@ -42,10 +42,13 @@ public class RevisionHistoryMutation {
         // the field instead of an "Internal Server Error(s) while executing query".
         if (isPresent(baseUrl) && !SiteSettingsRegistry.addressesThisNode(baseUrl)) {
             throw new BaseGqlClientException(
-                    "baseUrl must address this node's own loopback connector, not " + baseUrl
-                    + ". Capture fetches the page from this node itself, so any other host's"
-                    + " response would be stored as this site's revision history. Use"
-                    + " http://127.0.0.1:<port>, or send an empty value to clear the setting.",
+                    "baseUrl must equal this node's own loopback connector, not " + baseUrl
+                    + ". Capture fetches the page from this node itself, so any other address --"
+                    + " a different port, a path, a query or a fragment -- would send the capture"
+                    + " credential elsewhere or store another response as this site's revision"
+                    + " history. It must be exactly http://127.0.0.1:<this node's port> with no"
+                    + " trailing path, or send an empty value to clear the setting and let the"
+                    + " connector be detected.",
                     ErrorType.ValidationError);
         }
         SiteSettingsRegistry registry = SiteSettingsAccess.registry();

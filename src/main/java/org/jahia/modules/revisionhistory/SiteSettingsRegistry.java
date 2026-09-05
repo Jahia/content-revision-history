@@ -435,11 +435,12 @@ public class SiteSettingsRegistry implements ManagedServiceFactory {
         // privilege this would grant.
         if (settings.getBaseUrl() != null
                 && !GuestMarkdownFetcher.reachesJahiaDirectly(settings.getBaseUrl())) {
-            throw new IllegalArgumentException(PROP_BASE_URL + " must address this node's own"
+            throw new IllegalArgumentException(PROP_BASE_URL + " must equal this node's own"
                     + " loopback connector, not " + settings.getBaseUrl() + ". Capture fetches"
-                    + " /cms/render/... from this node itself; a value pointing anywhere else would"
-                    + " store another host's response as this site's revision history. Use"
-                    + " http://127.0.0.1:<port>, or clear the field to let the port be detected.");
+                    + " /cms/render/... from this node itself; a different port, a path, a query or"
+                    + " a fragment would send the capture credential elsewhere or store another"
+                    + " response as this site's revision history. Use exactly http://127.0.0.1:<port>"
+                    + " with no trailing path, or clear the field to let the connector be detected.");
         }
         Path target = configFile(siteKey);
         String captureUser = singleLine(PROP_USER, settings.getCaptureUser());
