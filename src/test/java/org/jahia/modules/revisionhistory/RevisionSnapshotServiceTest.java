@@ -432,4 +432,44 @@ class RevisionSnapshotServiceTest {
 
         assertTrue(RevisionSnapshotService.isKnownLanguage(site, "en"));
     }
+
+    // ------------------------------------------------------------ enforceCuratorReadOnly (#2)
+
+    @Test
+    @DisplayName("#2: the history root is locked read-only -- inheritance broken, READER granted, nothing writable")
+    void enforceCuratorReadOnlyLocksTheHistoryRoot() throws RepositoryException {
+        // The snapshot record is `hidden`, not `protected`, so a contributor with write in the
+        // site's content tree could otherwise rewrite what a public revision says the page said
+        // (GHSA-q67w-prc3-ch5h #2). The ACL is the record's only tamper protection: break
+        // inheritance, grant read, grant nothing that confers write.
+        org.jahia.services.content.JCRNodeWrapper root =
+                org.mockito.Mockito.mock(org.jahia.services.content.JCRNodeWrapper.class);
+        org.mockito.Mockito.when(root.getAclInheritanceBreak()).thenReturn(false);
+        org.mockito.Mockito.when(root.getPath()).thenReturn("/sites/x/contents/revision-history");
+
+        new RevisionSnapshotService().enforceCuratorReadOnly(root);
+
+        org.mockito.Mockito.verify(root).setAclInheritanceBreak(true);
+        // The ONLY grant is reader: an exact-set match, so any write-conferring role would fail it.
+        org.mockito.Mockito.verify(root).grantRoles("g:privileged",
+                java.util.Collections.singleton("reader"));
+        org.mockito.Mockito.verify(root, org.mockito.Mockito.never()).setAclInheritanceBreak(false);
+    }
+
+    @Test
+    @DisplayName("#2: an already-locked root is not re-broken, so repair is idempotent")
+    void enforceCuratorReadOnlyIsIdempotent() throws RepositoryException {
+        // Called on every capture; a root carrying the lock already must not be disturbed. grantRoles
+        // is idempotent in Jahia (it returns false when the grant is already present), so re-issuing
+        // it is safe and keeps the method a single settling point.
+        org.jahia.services.content.JCRNodeWrapper root =
+                org.mockito.Mockito.mock(org.jahia.services.content.JCRNodeWrapper.class);
+        org.mockito.Mockito.when(root.getAclInheritanceBreak()).thenReturn(true);
+
+        new RevisionSnapshotService().enforceCuratorReadOnly(root);
+
+        org.mockito.Mockito.verify(root, org.mockito.Mockito.never()).setAclInheritanceBreak(true);
+        org.mockito.Mockito.verify(root).grantRoles("g:privileged",
+                java.util.Collections.singleton("reader"));
+    }
 }

@@ -213,7 +213,12 @@
 // document that may be a megabyte, sitting next to an editable crh:contentHash. An editor could
 // retype the record and its own hash. `hidden` is the platform's own answer for a property that
 // code sets and users must not (j:published, j:workInProgress use it); `protected` is NOT used
-// here, because that would refuse this module's own writes.
+// here, because that would refuse this module's own writes -- a protected property cannot be set
+// even by the system session that captures it.
+// `hidden` suppresses the edit FORM but does not refuse a write, so it is NOT what protects the
+// record from tampering. That is done by the ACL: RevisionSnapshotService.enforceCuratorReadOnly
+// breaks inheritance on the history root and grants g:privileged the `reader` role and nothing
+// writable, so a contributor can read a snapshot but not rewrite it (GHSA-q67w-prc3-ch5h #2).
 //
 // Nothing is lost by hiding them. Views read properties directly, so the snapshot preview still
 // shows the metadata and the Markdown as preformatted text -- that is what it exists for.
