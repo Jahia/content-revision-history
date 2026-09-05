@@ -1,7 +1,7 @@
 Changelog
 =========
 
-## Unreleased
+## [1.4.10](https://github.com/Jahia/content-revision-history/compare/1_4_9...1_4_10) (2026-09-05)
 
 ### Added
 
