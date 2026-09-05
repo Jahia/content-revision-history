@@ -18,9 +18,13 @@ Four issues from an independent blind review of 1.4.10
 * **The snapshot record is now protected by an ACL, not only hidden from the edit form.** Snapshot
   properties are `hidden`, which suppresses them from the form but does not refuse a write, so a
   contributor with write in the site's content tree could rewrite what a public revision claimed the
-  page said. The history root now breaks ACL inheritance and grants `g:privileged` the `reader` role
-  and nothing writable: curators keep the read the picker and preview need, no contributor can write,
-  and the capture's own system session still writes.
+  page said. The history root now breaks ACL inheritance and re-grants the `privileged` role -- read
+  in the default workspace, no write, no publish -- to every principal that could already read the
+  site's content: curators keep the read the picker and preview need, no contributor can write, and
+  the capture's own system session still writes. The readers are copied rather than a group being
+  named because there is no one "curator" group -- on a real site editors hold their roles as
+  individual users -- and the role is `privileged` rather than `reader` because Jahia's `reader` is
+  `jcr:read_live` only, while this tree is `jmix:nolive` and exists solely in `default`.
 * **A per-site opt-out trims what `.markdown` publishes.** An opted-in page served every text-bearing
   string property beneath it -- including ones its template never displays -- to anonymous visitors at
   its `.markdown` URL. A new `capture.excludedProperties` setting drops named properties from both the
