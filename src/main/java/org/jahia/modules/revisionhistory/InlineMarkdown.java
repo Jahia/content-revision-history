@@ -76,6 +76,15 @@ public final class InlineMarkdown {
      */
     private static final Pattern URL_CONTROL_CHARS = Pattern.compile("[\\x00-\\x1F\\x7F]");
 
+    /**
+     * Longest href {@link #matchLink} will scan for a closing {@code ')'}. Bounds the paren-balance
+     * search so a line full of anchors with an unbalanced {@code (} in the href cannot make link
+     * parsing O(n^2) on the public render path -- without a cap, each failed {@code [} re-scans to
+     * the end of the line. A URL longer than this is left as literal text (rare, and far cheaper
+     * than the DoS it prevents).
+     */
+    private static final int MAX_HREF_SCAN = 8192;
+
     private InlineMarkdown() {
         // static utility
     }
@@ -118,9 +127,12 @@ public final class InlineMarkdown {
          * @return true when this run is a link, so the view wraps it in an anchor
          *
          * <p>A link is one atomic piece: its whole {@code [text](href)} span shares a single
-         * changed flag, which is set when ANY character of the span -- the text OR the href --
-         * changed. That is what keeps a destination-only change from hiding, now that the href is
-         * no longer shown literally.
+         * changed flag, set when ANY character of the span -- the text OR the href -- changed, so a
+         * destination-only change still highlights the link rather than hiding behind unchanged
+         * words. This depends on the line pair carrying word-level segments; when the diff produces
+         * none (an unpairable change, or a change too broad for the ratio guard in
+         * {@code MarkdownDiff}) nothing on the line is highlighted, and the row's own {@code <del>}/
+         * {@code <ins>} and marker carry the fact that it changed.
          */
         public boolean isLink() {
             return href != null;
@@ -293,6 +305,12 @@ public final class InlineMarkdown {
         // Horizontal rule: the normalizer emits exactly "---" for <hr>. Require the remainder to be
         // those three dashes and nothing else, so a table separator row ("--- | ---") -- which has
         // pipes -- is left to the table path rather than swallowed here.
+        //
+        // KNOWN LIMITATION: the stored form cannot tell an <hr> from authored text that is literally
+        // "---" (the normalizer escapes '\' and '*', not a bare "---"), so a paragraph or cell whose
+        // content is exactly "---" renders as a rule. Same class as the single-column-separator and
+        // literal-pipe ambiguities: only the writer (the normalizer) can resolve it, by escaping
+        // authored "---" at capture -- a generator-format change, out of scope for the read side.
         if (raw.length() - i == 3 && raw.charAt(i) == '-' && raw.charAt(i + 1) == '-'
                 && raw.charAt(i + 2) == '-') {
             return new Parsed(0, quoteDepth, true, false, null, 0, new ArrayList<Piece>(), null);
@@ -584,10 +602,13 @@ public final class InlineMarkdown {
         }
         // Balance the parentheses rather than taking the first ')': an href may contain its own,
         // e.g. https://en.wikipedia.org/wiki/Foo_(bar). The normalizer stores these unescaped, so
-        // the first ')' is often inside the URL, not the one that closes the link.
+        // the first ')' is often inside the URL, not the one that closes the link. The scan is
+        // capped at MAX_HREF_SCAN so an unbalanced '(' cannot turn this into an end-of-line scan
+        // repeated for every '[' on the line (O(n^2)).
         int depth = 1;
         int paren = -1;
-        for (int j = close + 2; j < end; j++) {
+        int scanEnd = Math.min(end, close + 2 + MAX_HREF_SCAN);
+        for (int j = close + 2; j < scanEnd; j++) {
             char c = raw.charAt(j);
             if (c == '(') {
                 depth++;
@@ -649,7 +670,7 @@ public final class InlineMarkdown {
      */
     private static boolean closesLater(String raw, int at, int end, String delimiter) {
         int next = raw.indexOf(delimiter, at + delimiter.length());
-        while (next > 0 && next + delimiter.length() <= end && raw.charAt(next - 1) == '\\') {
+        while (next > 0 && next + delimiter.length() <= end && isEscaped(raw, next)) {
             next = raw.indexOf(delimiter, next + delimiter.length());
         }
         return next >= 0 && next + delimiter.length() <= end;
@@ -661,13 +682,29 @@ public final class InlineMarkdown {
             if (raw.charAt(k) != ITALIC) {
                 continue;
             }
-            boolean escaped = raw.charAt(k - 1) == '\\';
             boolean pairedBefore = raw.charAt(k - 1) == ITALIC;
             boolean pairedAfter = k + 1 < end && raw.charAt(k + 1) == ITALIC;
-            if (!escaped && !pairedBefore && !pairedAfter) {
+            if (!isEscaped(raw, k) && !pairedBefore && !pairedAfter) {
                 return true;
             }
         }
         return false;
+    }
+
+    /**
+     * Whether the character at {@code pos} is escaped -- preceded by an ODD run of backslashes.
+     *
+     * <p>Parity, not the single preceding character: {@code MarkdownNormalizer} self-escapes a
+     * literal backslash as {@code \\}, so a genuine unescaped {@code **}/{@code *} can directly
+     * follow an even run of backslashes. Reading only {@code raw.charAt(pos-1)} misjudged such a
+     * delimiter as escaped and dropped an entire bold/italic span whose text ends in a backslash
+     * (e.g. a bolded {@code C:\temp\}).
+     */
+    private static boolean isEscaped(String raw, int pos) {
+        int backslashes = 0;
+        for (int k = pos - 1; k >= 0 && raw.charAt(k) == '\\'; k--) {
+            backslashes++;
+        }
+        return (backslashes & 1) == 1;
     }
 }

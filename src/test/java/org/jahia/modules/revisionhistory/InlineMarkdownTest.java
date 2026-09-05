@@ -310,6 +310,23 @@ class InlineMarkdownTest {
     }
 
     @Test
+    @DisplayName("a protocol-relative href is rejected on the read side too")
+    void protocolRelativeHrefRejected() {
+        assertNull(onlyLink(InlineMarkdown.parse("[x](//evil.test/p)", none())), "// is rejected");
+        assertNull(onlyLink(InlineMarkdown.parse("[x](\\\\evil.test/p)", none())), "\\\\ is rejected");
+    }
+
+    @Test
+    @DisplayName("an accepted link's emitted href has control characters stripped")
+    void acceptedHrefIsControlCharCleaned() {
+        // The check and the emitted attribute must agree on which characters count: the returned
+        // href is the cleaned one, not the raw string with the tab still in it.
+        InlineMarkdown.Piece link = onlyLink(InlineMarkdown.parse("[x](http://e/a\tb)", none()));
+
+        assertEquals("http://e/ab", link.getHref(), "the tab must be stripped from the emitted href");
+    }
+
+    @Test
     @DisplayName("an image is not turned into a link and stays literal")
     void imageStaysLiteral() {
         // Images are out of scope: the '!' guards the '[' so the link parser never fires.
@@ -571,6 +588,58 @@ class InlineMarkdownTest {
         InlineMarkdown.Parsed parsed = InlineMarkdown.parse("Rated 4* overall", none());
 
         assertEquals("Rated 4* overall", visible(parsed));
+    }
+
+    @Test
+    @DisplayName("bold whose text ends in a literal backslash keeps its emphasis (backslash parity)")
+    void boldEndingInBackslash() {
+        // The stored form of a bold "a\" is **a\\** -- the normalizer self-escapes the backslash.
+        // The closing ** abuts an ESCAPED backslash (an even run), not an escaping one; a check
+        // that reads only the single char before the delimiter drops the whole span.
+        InlineMarkdown.Parsed parsed = InlineMarkdown.parse("**a\\\\**b", none());
+
+        assertEquals("a\\b", visible(parsed));
+        List<String> bolds = new ArrayList<>();
+        for (InlineMarkdown.Piece piece : parsed.getPieces()) {
+            if (piece.isBold()) {
+                bolds.add(piece.getText());
+            }
+        }
+        assertEquals(Arrays.asList("a\\"), bolds, "the bold span ending in a backslash must survive");
+    }
+
+    @Test
+    @DisplayName("italic whose text ends in a literal backslash keeps its emphasis")
+    void italicEndingInBackslash() {
+        InlineMarkdown.Parsed parsed = InlineMarkdown.parse("*a\\\\*b", none());
+
+        assertEquals("a\\b", visible(parsed));
+        List<String> italics = new ArrayList<>();
+        for (InlineMarkdown.Piece piece : parsed.getPieces()) {
+            if (piece.isItalic()) {
+                italics.add(piece.getText());
+            }
+        }
+        assertEquals(Arrays.asList("a\\"), italics);
+    }
+
+    @Test
+    @DisplayName("an href longer than the scan window is left literal, bounding the paren scan")
+    void overlongHrefIsNotALink() {
+        // Guards against O(n^2): matchLink balances parens up to a fixed window instead of scanning
+        // to end of line for every '['. A pathological or oversized href is left as literal text.
+        String longHref = "http://e/" + repeat("a", 9000);
+        InlineMarkdown.Parsed parsed = InlineMarkdown.parse("[x](" + longHref + ")", none());
+
+        assertNull(onlyLink(parsed), "an href past the scan window is not treated as a link");
+    }
+
+    private static String repeat(String s, int n) {
+        StringBuilder sb = new StringBuilder(s.length() * n);
+        for (int i = 0; i < n; i++) {
+            sb.append(s);
+        }
+        return sb.toString();
     }
 
     @Test

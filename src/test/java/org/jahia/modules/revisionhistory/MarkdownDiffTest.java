@@ -422,6 +422,34 @@ class MarkdownDiffTest {
     }
 
     @Test
+    @DisplayName("a single-column table has no cross-row separator, so it falls back to a rule + text")
+    void singleColumnTableFallsBackToRule() {
+        // Documented ambiguity: a one-column separator is just "---", indistinguishable from a rule.
+        // isSeparatorRow requires >=2 cells, so no table block forms and the header stays plain text.
+        String old = "Name\n---\nAlpha\nSee notes\n";
+        String changed = "Name\n---\nBravo\nSee notes\n";
+
+        MarkdownDiff.Result result = MarkdownDiff.compare(old, changed);
+
+        assertNull(lineWithText(result, "Name").getFormat().getCells(), "no table: header stays text");
+        assertTrue(lineWithText(result, "---").getFormat().isHorizontalRule(), "the '---' is a rule");
+    }
+
+    @Test
+    @DisplayName("an unchanged row stays a table when only the OLD revision had the table shape")
+    void unchangedRowIsTableFromOldSide() {
+        // Mirror of unchangedRowIsTableFromEitherSide: the table existed before and its body was
+        // replaced by prose, so the unchanged header must still render as cells from the OLD flag.
+        String old = "Header | Status\n--- | ---\nRow1 | Active\n";
+        String changed = "Header | Status\nJust prose now.\n";
+
+        MarkdownDiff.Result result = MarkdownDiff.compare(old, changed);
+
+        assertNotNull(lineWithText(result, "Header | Status").getFormat().getCells(),
+                "an unchanged header whose table was removed must still render as cells");
+    }
+
+    @Test
     @DisplayName("a changed cell is highlighted in its own cell only")
     void changedCellHighlightsPerCell() {
         String old = TABLE_OLD;

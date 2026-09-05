@@ -10,4 +10,10 @@
   Order matters: the changed <mark> is outermost so the highlight covers the whole run including a
   link; bold/italic sit inside it; the anchor (or bare text) is innermost. rel="nofollow noopener"
   because these targets come from captured page content, not from us.
+
+  KNOWN LIMITATION (WCAG 2.4.9, AAA): the anchor's accessible name is only its own text, so a
+  reader navigating link-by-link does not hear whether it sits on the older or newer side. The
+  added/removed context is present in reading order (the visually-hidden "Added line:"/"Removed
+  line:" label and the <del>/<ins> precede it) but not in the link's name -- carrying it into the
+  name would need the row's side threaded into this shared fragment; left as a documented gap.
 --%><c:if test="${piece.changed}"><mark></c:if><c:if test="${piece.bold}"><strong></c:if><c:if test="${piece.italic}"><em></c:if><c:choose><c:when test="${piece.link}"><a class="crh-md-link" rel="nofollow noopener" href="${fn:escapeXml(piece.href)}"><c:out value="${piece.text}"/></a></c:when><c:otherwise><c:out value="${piece.text}"/></c:otherwise></c:choose><c:if test="${piece.italic}"></em></c:if><c:if test="${piece.bold}"></strong></c:if><c:if test="${piece.changed}"></mark></c:if>

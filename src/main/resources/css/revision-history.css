@@ -613,6 +613,15 @@
     text-underline-offset: 0.15em;
 }
 
+/* A link inside a diff row must show a focus ring of its own; every other control in this module
+   does, and the UA default is not guaranteed to meet SC 2.4.13 against the row tints. Matches the
+   module's focus treatment (see .crh-compare-form select:focus-visible). */
+.crh-md-link:focus-visible {
+    outline: 3px solid var(--crh-accent);
+    outline-offset: 2px;
+    border-radius: 2px;
+}
+
 /*
  * Blockquote. A left bar rather than a real <blockquote>, for the same reason headings are classes:
  * the panel must not splice block structure into the host page. inline-block so the bar hugs the
@@ -637,15 +646,18 @@
     display: block;
     height: 0;
     border: 0;
-    border-top: 1px solid currentColor;
-    opacity: 0.5;
+    /* A solid token colour, not a faded currentColor: var(--crh-rule) clears the 3:1 non-text
+       contrast floor (SC 1.4.11) against every row background here (white and the added/removed
+       tints), where currentColor at 0.5/0.35 opacity fell to ~2.1-2.8:1 and was imperceptible. */
+    border-top: 1px solid var(--crh-rule);
     margin: 0.35rem 0;
 }
 
 .crh-md-tsep {
-    /* Slighter than a full rule: it only marks the header/body boundary inside one table. */
+    /* Slighter than a full rule -- it only marks the header/body boundary inside one table -- but
+       kept at full contrast; dashed rather than faded is what distinguishes it from a rule. */
     margin: 0.15rem 0;
-    opacity: 0.35;
+    border-top-style: dashed;
 }
 
 /*

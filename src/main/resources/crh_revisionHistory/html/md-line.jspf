@@ -16,9 +16,13 @@
   A table's header/body separator carries no text: draw a divider, show nothing.
   --%><c:when test="${mdFormat.tableSeparator}"><span class="crh-md crh-md-tsep" aria-hidden="true"></span></c:when><%--
   A table row: each cell rendered on its own, so the pipes are gone and the cell content keeps its
-  inline formatting and links. Columns are not aligned across rows -- each diff row is an
-  independent element -- but the pipe soup is.
-  --%><c:when test="${not empty mdFormat.cells}"><span class="crh-md crh-md-table<c:if test="${mdFormat.quoteDepth gt 0}"> crh-md-quote crh-md-quote-${mdFormat.quoteDepth}</c:if>"><c:forEach items="${mdFormat.cells}" var="crhCell"><span class="crh-md-cell"><c:forEach items="${crhCell}" var="piece"><%@ include file="md-piece.jspf" %></c:forEach></span></c:forEach></span></c:when><%--
+  inline formatting and links. Two deliberate LIMITATIONS: columns are not aligned across rows (each
+  diff row is an independent element in the side-by-side grid), and these are visually-separated
+  cells, NOT a semantic ARIA table -- a captured table spans several diff rows, so there is no valid
+  single parent to carry role="table"/"row" and orphan roles would be worse than none. To stop a
+  screen reader running adjacent cells together ("StandardTwelve months"), a visually-hidden comma
+  separates them; full column-header semantics for assistive tech remain a known gap.
+  --%><c:when test="${not empty mdFormat.cells}"><span class="crh-md crh-md-table<c:if test="${mdFormat.quoteDepth gt 0}"> crh-md-quote crh-md-quote-${mdFormat.quoteDepth}</c:if>"><c:forEach items="${mdFormat.cells}" var="crhCell" varStatus="crhCellStatus"><span class="crh-md-cell"><c:if test="${not crhCellStatus.first}"><span class="crh-visually-hidden">, </span></c:if><c:forEach items="${crhCell}" var="piece"><%@ include file="md-piece.jspf" %></c:forEach></span></c:forEach></span></c:when><%--
   Everything else: heading weight, list marker + indent, quote bar, then the inline runs.
   --%><c:otherwise><span class="crh-md<c:if test="${mdFormat.headingLevel gt 0}"> crh-md-h${mdFormat.headingLevel}</c:if><c:if test="${not empty mdFormat.listMarker}"> crh-md-item crh-md-depth-${mdFormat.listDepth}</c:if><c:if test="${mdFormat.quoteDepth gt 0}"> crh-md-quote crh-md-quote-${mdFormat.quoteDepth}</c:if>"><c:if test="${not empty mdFormat.listMarker}"><span class="crh-md-marker"><c:out value="${mdFormat.listMarker}"/></span> </c:if><c:forEach items="${mdFormat.pieces}" var="piece"><%@ include file="md-piece.jspf" %></c:forEach></span></c:otherwise><%--
 --%></c:choose>
