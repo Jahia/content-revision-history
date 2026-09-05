@@ -602,6 +602,87 @@
 .crh-md-depth-2 { padding-left: 2rem; }
 .crh-md-depth-3 { padding-left: 3rem; }
 
+/*
+ * Links. Underlined, never colour alone (SC 1.4.1): the underline is what marks it a link, and the
+ * colour is inherited from the row so a link inside a <del>/<ins> stays the deletion/insertion
+ * colour rather than fighting it. The target is allow-listed and escaped in the view.
+ */
+.crh-md-link {
+    color: inherit;
+    text-decoration: underline;
+    text-underline-offset: 0.15em;
+}
+
+/* A link inside a diff row must show a focus ring of its own; every other control in this module
+   does, and the UA default is not guaranteed to meet SC 2.4.13 against the row tints. Matches the
+   module's focus treatment (see .crh-compare-form select:focus-visible). */
+.crh-md-link:focus-visible {
+    outline: 3px solid var(--crh-accent);
+    outline-offset: 2px;
+    border-radius: 2px;
+}
+
+/*
+ * Blockquote. A left bar rather than a real <blockquote>, for the same reason headings are classes:
+ * the panel must not splice block structure into the host page. inline-block so the bar hugs the
+ * one line; deeper nesting just indents further.
+ */
+.crh-md-quote {
+    display: inline-block;
+    border-left: 3px solid var(--crh-text-muted);
+    padding-left: 0.5rem;
+}
+
+.crh-md-quote-2 { padding-left: 1rem; }
+.crh-md-quote-3 { padding-left: 1.5rem; }
+
+/*
+ * Horizontal rule and table separator. Both are structure with no text: a thin line drawn with a
+ * border on an empty, block-level span. aria-hidden / role=separator is set in the view. They
+ * inherit the row colour like everything else here, so they read as added or removed too.
+ */
+.crh-md-rule,
+.crh-md-tsep {
+    display: block;
+    height: 0;
+    border: 0;
+    /* A solid token colour, not a faded currentColor: var(--crh-rule) clears the 3:1 non-text
+       contrast floor (SC 1.4.11) against every row background here (white and the added/removed
+       tints), where currentColor at 0.5/0.35 opacity fell to ~2.1-2.8:1 and was imperceptible. */
+    border-top: 1px solid var(--crh-rule);
+    margin: 0.35rem 0;
+}
+
+.crh-md-tsep {
+    /* Slighter than a full rule -- it only marks the header/body boundary inside one table -- but
+       kept at full contrast; dashed rather than faded is what distinguishes it from a rule. */
+    margin: 0.15rem 0;
+    border-top-style: dashed;
+}
+
+/*
+ * Table row. Each cell is rendered on its own with a divider, so the row reads as cells instead of
+ * a line of pipes. Columns are NOT aligned across rows: every diff row is an independent element in
+ * the side-by-side grid, and sharing column widths across them is not possible without measuring
+ * every row. The gain here is removing the pipe soup and grouping each row's cells, not a full
+ * aligned grid.
+ */
+.crh-md-table {
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+}
+
+.crh-md-cell {
+    padding: 0 0.5rem;
+    border-left: 1px solid var(--crh-rule);
+}
+
+.crh-md-cell:first-child {
+    padding-left: 0;
+    border-left: 0;
+}
+
 .crh-diff-heads {
     display: grid;
     grid-template-columns: 1fr 1fr;

@@ -10,6 +10,7 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -106,6 +107,88 @@ class InlineMarkdownTest {
         assertEquals("-30% capacity", visible(parsed));
     }
 
+    // ------------------------------------------------------------------ blockquote
+
+    @Test
+    @DisplayName("a quoted line reports its depth and drops the '> ' prefix")
+    void blockquotePrefix() {
+        InlineMarkdown.Parsed parsed = InlineMarkdown.parse("> Quoted advice", none());
+
+        assertEquals(1, parsed.getQuoteDepth());
+        assertEquals("Quoted advice", visible(parsed));
+        assertEquals(0, parsed.getHeadingLevel());
+    }
+
+    @Test
+    @DisplayName("nested quotes count each '> ' as a level")
+    void nestedBlockquote() {
+        // MarkdownNormalizer re-applies '> ' per level, so a quote inside a quote is "> > ".
+        InlineMarkdown.Parsed parsed = InlineMarkdown.parse("> > Deeply quoted", none());
+
+        assertEquals(2, parsed.getQuoteDepth());
+        assertEquals("Deeply quoted", visible(parsed));
+    }
+
+    @Test
+    @DisplayName("a heading inside a quote keeps both its depth and its level")
+    void headingInsideBlockquote() {
+        // renderBlockquote prefixes every produced line, so a quoted heading is "> ## Title".
+        InlineMarkdown.Parsed parsed = InlineMarkdown.parse("> ## Quoted heading", none());
+
+        assertEquals(1, parsed.getQuoteDepth());
+        assertEquals(2, parsed.getHeadingLevel());
+        assertEquals("Quoted heading", visible(parsed));
+    }
+
+    @Test
+    @DisplayName("a '>' not followed by a space is content, not a quote")
+    void angleWithoutSpaceIsContent() {
+        // The prefix the normalizer writes is exactly "> "; a bare '>' is arithmetic or a chevron.
+        InlineMarkdown.Parsed parsed = InlineMarkdown.parse(">3 items remain", none());
+
+        assertEquals(0, parsed.getQuoteDepth());
+        assertEquals(">3 items remain", visible(parsed));
+    }
+
+    @Test
+    @DisplayName("a changed word in a quote is still highlighted after the prefix is removed")
+    void changedWordSurvivesQuotePrefix() {
+        InlineMarkdown.Parsed parsed = InlineMarkdown.parse("> Quoted policy",
+                segments("> Quoted ", false, "policy", true));
+
+        assertEquals("Quoted policy", visible(parsed));
+        assertEquals("policy", changedText(parsed), "the highlight must land past the '> '");
+    }
+
+    // ------------------------------------------------------------------ horizontal rule
+
+    @Test
+    @DisplayName("a line that is exactly '---' is a horizontal rule with no content")
+    void horizontalRule() {
+        InlineMarkdown.Parsed parsed = InlineMarkdown.parse("---", none());
+
+        assertTrue(parsed.isHorizontalRule());
+        assertEquals("", visible(parsed), "a rule carries no text");
+    }
+
+    @Test
+    @DisplayName("a table separator row is not mistaken for a horizontal rule")
+    void tableSeparatorIsNotARule() {
+        // "--- | --- | ---" contains dashes but is a table separator, handled elsewhere.
+        InlineMarkdown.Parsed parsed = InlineMarkdown.parse("--- | --- | ---", none());
+
+        assertFalse(parsed.isHorizontalRule(), "the pipes make this a separator row, not a rule");
+    }
+
+    @Test
+    @DisplayName("dashes with trailing text are content, not a rule")
+    void dashesWithTextAreContent() {
+        InlineMarkdown.Parsed parsed = InlineMarkdown.parse("---ish, roughly", none());
+
+        assertFalse(parsed.isHorizontalRule());
+        assertEquals("---ish, roughly", visible(parsed));
+    }
+
     // ------------------------------------------------------------------ inline marks
 
     @Test
@@ -144,17 +227,241 @@ class InlineMarkdownTest {
         assertEquals("see [note 4] and C:\\temp", visible(parsed));
     }
 
-    @Test
-    @DisplayName("a link keeps its literal syntax, so an href change cannot be hidden")
-    void linksStayLiteral() {
-        // Collapsing this to "the policy" would mean an href change -- same words, different
-        // destination -- produced no visible difference at all, in a record that exists to show
-        // what changed.
-        String raw = "see [the policy](https://example.com/v2)";
+    // ------------------------------------------------------------------ links (href-safe)
 
+    private static InlineMarkdown.Piece onlyLink(InlineMarkdown.Parsed parsed) {
+        InlineMarkdown.Piece found = null;
+        for (InlineMarkdown.Piece piece : parsed.getPieces()) {
+            if (piece.isLink()) {
+                assertNull(found, "expected exactly one link piece");
+                found = piece;
+            }
+        }
+        return found;
+    }
+
+    @Test
+    @DisplayName("a link renders as its text and exposes a sanitised href")
+    void linkRendersAsTextWithHref() {
+        // The old contract left links literal so an href change could not hide. The new contract
+        // renders the anchor but keeps that guarantee through span-wide change propagation
+        // (see hrefChangeStillHighlightsTheLink).
+        InlineMarkdown.Parsed parsed =
+                InlineMarkdown.parse("see [the policy](https://example.com/v2)", none());
+
+        assertEquals("see the policy", visible(parsed), "the reader sees the words, not the syntax");
+        InlineMarkdown.Piece link = onlyLink(parsed);
+        assertEquals("the policy", link.getText());
+        assertEquals("https://example.com/v2", link.getHref());
+    }
+
+    @Test
+    @DisplayName("an href-only change still marks the whole link changed")
+    void hrefChangeStillHighlightsTheLink() {
+        // Same words, different destination. The word diff lands on the URL, which is not part of
+        // the visible text; without span-wide propagation the link would show no change at all --
+        // exactly the hole the old literal rendering existed to avoid.
+        String raw = "see [the policy](https://example.com/v2)";
+        //             the changed token is the version at the end of the href
+        InlineMarkdown.Parsed parsed = InlineMarkdown.parse(raw,
+                segments("see [the policy](https://example.com/v", false, "2", true, ")", false));
+
+        InlineMarkdown.Piece link = onlyLink(parsed);
+        assertTrue(link.isChanged(), "a destination change must be visible even when the words are not");
+    }
+
+    @Test
+    @DisplayName("mailto and site-relative hrefs are allowed")
+    void mailtoAndRelativeHrefsAllowed() {
+        assertEquals("mailto:ops@example.com",
+                onlyLink(InlineMarkdown.parse("[email us](mailto:ops@example.com)", none())).getHref());
+        assertEquals("/about",
+                onlyLink(InlineMarkdown.parse("[home](/about)", none())).getHref());
+    }
+
+    @Test
+    @DisplayName("a disallowed scheme is never emitted as an href; the span stays literal")
+    void disallowedSchemeStaysLiteral() {
+        // The normalizer already drops such hrefs, so this is defence in depth: InlineMarkdown must
+        // never put a javascript: URL onto a public page even if one reaches it.
+        String raw = "[x](javascript:alert(1))";
         InlineMarkdown.Parsed parsed = InlineMarkdown.parse(raw, none());
 
+        assertNull(onlyLink(parsed), "not treated as a link");
+        assertEquals(raw, visible(parsed), "left exactly as stored, syntax and all");
+        for (InlineMarkdown.Piece piece : parsed.getPieces()) {
+            assertNull(piece.getHref());
+        }
+    }
+
+    @Test
+    @DisplayName("a control-char-obfuscated scheme is stripped and rejected, not read as relative")
+    void controlCharSchemeRejected() {
+        // "java\tscript:" -- the tab breaks the scheme regex, so without stripping control chars
+        // first the guard would fall through to "no scheme -> relative -> allowed". Browsers strip
+        // the tab and resolve it to javascript:, so it must be rejected the way the normalizer does.
+        String raw = "[click](java	script:alert(1))";
+        InlineMarkdown.Parsed parsed = InlineMarkdown.parse(raw, none());
+
+        assertNull(onlyLink(parsed), "must not become a link");
+        for (InlineMarkdown.Piece piece : parsed.getPieces()) {
+            assertNull(piece.getHref(), "no href reaches the page");
+        }
+    }
+
+    @Test
+    @DisplayName("a protocol-relative href is rejected on the read side too")
+    void protocolRelativeHrefRejected() {
+        assertNull(onlyLink(InlineMarkdown.parse("[x](//evil.test/p)", none())), "// is rejected");
+        assertNull(onlyLink(InlineMarkdown.parse("[x](\\\\evil.test/p)", none())), "\\\\ is rejected");
+    }
+
+    @Test
+    @DisplayName("an accepted link's emitted href has control characters stripped")
+    void acceptedHrefIsControlCharCleaned() {
+        // The check and the emitted attribute must agree on which characters count: the returned
+        // href is the cleaned one, not the raw string with the tab still in it.
+        InlineMarkdown.Piece link = onlyLink(InlineMarkdown.parse("[x](http://e/a\tb)", none()));
+
+        assertEquals("http://e/ab", link.getHref(), "the tab must be stripped from the emitted href");
+    }
+
+    @Test
+    @DisplayName("an image is not turned into a link and stays literal")
+    void imageStaysLiteral() {
+        // Images are out of scope: the '!' guards the '[' so the link parser never fires.
+        String raw = "![alt text](/logo.png)";
+        InlineMarkdown.Parsed parsed = InlineMarkdown.parse(raw, none());
+
+        assertNull(onlyLink(parsed));
         assertEquals(raw, visible(parsed));
+    }
+
+    @Test
+    @DisplayName("escaped brackets inside link text are resolved for display")
+    void escapedBracketsInLinkText() {
+        InlineMarkdown.Parsed parsed = InlineMarkdown.parse("[note \\[4\\]](/n)", none());
+
+        InlineMarkdown.Piece link = onlyLink(parsed);
+        assertEquals("note [4]", link.getText());
+        assertEquals("/n", link.getHref());
+    }
+
+    @Test
+    @DisplayName("a bracket with no link structure stays literal")
+    void bracketWithoutLinkStructure() {
+        InlineMarkdown.Parsed parsed = InlineMarkdown.parse("a [bracketed] word", none());
+
+        assertNull(onlyLink(parsed));
+        assertEquals("a [bracketed] word", visible(parsed));
+    }
+
+    @Test
+    @DisplayName("a link href may contain balanced parentheses")
+    void linkHrefWithBalancedParens() {
+        // Wikipedia-style URLs: the href's own ')' must not be read as the link's closing paren.
+        // The normalizer stores these unescaped, so this is real generator output, not a fixture.
+        String raw = "[wiki](https://en.wikipedia.org/wiki/Foo_(bar))";
+        InlineMarkdown.Parsed parsed = InlineMarkdown.parse(raw, none());
+
+        InlineMarkdown.Piece link = onlyLink(parsed);
+        assertEquals("wiki", link.getText());
+        assertEquals("https://en.wikipedia.org/wiki/Foo_(bar)", link.getHref());
+        assertEquals("wiki", visible(parsed), "no stray ')' may leak out after the link");
+    }
+
+    @Test
+    @DisplayName("a quoted table row keeps its quote depth and still splits into cells")
+    void quotedTableRowSplitsIntoCells() {
+        // A table nested in a blockquote: the normalizer prefixes '> ' to every row. InlineMarkdown
+        // strips the prefix first, so the remainder is still read as table cells.
+        InlineMarkdown.Parsed parsed = InlineMarkdown.parse("> Name | Status", none(), true);
+
+        assertEquals(1, parsed.getQuoteDepth());
+        assertNotNull(parsed.getCells());
+        assertEquals(2, parsed.getCells().size());
+        assertEquals("Name", cellVisible(parsed, 0));
+        assertEquals("Status", cellVisible(parsed, 1));
+    }
+
+    @Test
+    @DisplayName("a link inside bold carries the surrounding emphasis")
+    void linkInsideBold() {
+        InlineMarkdown.Parsed parsed = InlineMarkdown.parse("**[the policy](/p)**", none());
+
+        InlineMarkdown.Piece link = onlyLink(parsed);
+        assertEquals("the policy", link.getText());
+        assertTrue(link.isBold(), "the link sits inside a bold span");
+    }
+
+    // ------------------------------------------------------------------ tables
+
+    private static String cellVisible(InlineMarkdown.Parsed parsed, int index) {
+        StringBuilder out = new StringBuilder();
+        for (InlineMarkdown.Piece piece : parsed.getCells().get(index)) {
+            out.append(piece.getText());
+        }
+        return out.toString();
+    }
+
+    @Test
+    @DisplayName("in a table block, a '--- | ---' row is the separator, not content")
+    void tableSeparatorRow() {
+        InlineMarkdown.Parsed parsed = InlineMarkdown.parse("--- | --- | ---", none(), true);
+
+        assertTrue(parsed.isTableSeparator());
+        assertFalse(parsed.isHorizontalRule(), "a separator is table structure, not a rule");
+    }
+
+    @Test
+    @DisplayName("in a table block, a row splits into cells at ' | '")
+    void tableRowSplitsIntoCells() {
+        InlineMarkdown.Parsed parsed = InlineMarkdown.parse("Name | Status | Owner", none(), true);
+
+        assertFalse(parsed.isTableSeparator());
+        assertEquals(3, parsed.getCells().size());
+        assertEquals("Name", cellVisible(parsed, 0));
+        assertEquals("Status", cellVisible(parsed, 1));
+        assertEquals("Owner", cellVisible(parsed, 2));
+    }
+
+    @Test
+    @DisplayName("cells carry their own inline formatting and links")
+    void tableCellsAreInlineParsed() {
+        InlineMarkdown.Parsed parsed =
+                InlineMarkdown.parse("**Name** | [site](/s)", none(), true);
+
+        assertEquals(2, parsed.getCells().size());
+        assertEquals("Name", cellVisible(parsed, 0));
+        assertTrue(parsed.getCells().get(0).get(0).isBold(), "first cell is bold");
+
+        InlineMarkdown.Piece linkCell = parsed.getCells().get(1).get(0);
+        assertTrue(linkCell.isLink());
+        assertEquals("site", linkCell.getText());
+        assertEquals("/s", linkCell.getHref());
+    }
+
+    @Test
+    @DisplayName("a changed word is highlighted in its own cell only")
+    void tableCellHighlightCrossing() {
+        // The crossing again, now per cell: segments are positions in the whole raw row.
+        InlineMarkdown.Parsed parsed = InlineMarkdown.parse("Draft | Status",
+                segments("Draft", true, " | Status", false), true);
+
+        assertTrue(parsed.getCells().get(0).get(0).isChanged(), "first cell changed");
+        for (InlineMarkdown.Piece piece : parsed.getCells().get(1)) {
+            assertFalse(piece.isChanged(), "second cell unchanged");
+        }
+    }
+
+    @Test
+    @DisplayName("outside a table block, a pipe line stays literal (the safe default)")
+    void pipeLineOutsideTableStaysLiteral() {
+        // 2-arg parse is table-unaware: a bare pipe in prose must not be read as a cell boundary.
+        InlineMarkdown.Parsed parsed = InlineMarkdown.parse("Name | Status", none());
+
+        assertNull(parsed.getCells());
+        assertEquals("Name | Status", visible(parsed));
     }
 
     // ------------------------------------------------------------------ the crossing
@@ -281,6 +588,58 @@ class InlineMarkdownTest {
         InlineMarkdown.Parsed parsed = InlineMarkdown.parse("Rated 4* overall", none());
 
         assertEquals("Rated 4* overall", visible(parsed));
+    }
+
+    @Test
+    @DisplayName("bold whose text ends in a literal backslash keeps its emphasis (backslash parity)")
+    void boldEndingInBackslash() {
+        // The stored form of a bold "a\" is **a\\** -- the normalizer self-escapes the backslash.
+        // The closing ** abuts an ESCAPED backslash (an even run), not an escaping one; a check
+        // that reads only the single char before the delimiter drops the whole span.
+        InlineMarkdown.Parsed parsed = InlineMarkdown.parse("**a\\\\**b", none());
+
+        assertEquals("a\\b", visible(parsed));
+        List<String> bolds = new ArrayList<>();
+        for (InlineMarkdown.Piece piece : parsed.getPieces()) {
+            if (piece.isBold()) {
+                bolds.add(piece.getText());
+            }
+        }
+        assertEquals(Arrays.asList("a\\"), bolds, "the bold span ending in a backslash must survive");
+    }
+
+    @Test
+    @DisplayName("italic whose text ends in a literal backslash keeps its emphasis")
+    void italicEndingInBackslash() {
+        InlineMarkdown.Parsed parsed = InlineMarkdown.parse("*a\\\\*b", none());
+
+        assertEquals("a\\b", visible(parsed));
+        List<String> italics = new ArrayList<>();
+        for (InlineMarkdown.Piece piece : parsed.getPieces()) {
+            if (piece.isItalic()) {
+                italics.add(piece.getText());
+            }
+        }
+        assertEquals(Arrays.asList("a\\"), italics);
+    }
+
+    @Test
+    @DisplayName("an href longer than the scan window is left literal, bounding the paren scan")
+    void overlongHrefIsNotALink() {
+        // Guards against O(n^2): matchLink balances parens up to a fixed window instead of scanning
+        // to end of line for every '['. A pathological or oversized href is left as literal text.
+        String longHref = "http://e/" + repeat("a", 9000);
+        InlineMarkdown.Parsed parsed = InlineMarkdown.parse("[x](" + longHref + ")", none());
+
+        assertNull(onlyLink(parsed), "an href past the scan window is not treated as a link");
+    }
+
+    private static String repeat(String s, int n) {
+        StringBuilder sb = new StringBuilder(s.length() * n);
+        for (int i = 0; i < n; i++) {
+            sb.append(s);
+        }
+        return sb.toString();
     }
 
     @Test
