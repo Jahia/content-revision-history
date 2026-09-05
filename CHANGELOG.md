@@ -1,6 +1,36 @@
 Changelog
 =========
 
+## Unreleased
+
+### Security
+
+Four issues from an independent blind review of 1.4.10
+([GHSA-q67w-prc3-ch5h](https://github.com/Jahia/content-revision-history/security/advisories/GHSA-q67w-prc3-ch5h)):
+
+* **The capture guard now pins this node's own connector, not any loopback address.** A site
+  administrator could set `capture.baseUrl` to `http://127.0.0.1:<any port>` and receive the
+  operator's capture credential at a listener they chose, or end the value with `#` or `/?x=` to
+  store the server root as the page's public history. The value is now compared against the detected
+  connector in full -- host, port and context path -- and any port mismatch, path, query, fragment or
+  userinfo is refused when a site administrator saves it and the credential is withheld at fetch time.
+  The server-administrator file escape hatch is unchanged.
+* **The snapshot record is now protected by an ACL, not only hidden from the edit form.** Snapshot
+  properties are `hidden`, which suppresses them from the form but does not refuse a write, so a
+  contributor with write in the site's content tree could rewrite what a public revision claimed the
+  page said. The history root now breaks ACL inheritance and grants `g:privileged` the `reader` role
+  and nothing writable: curators keep the read the picker and preview need, no contributor can write,
+  and the capture's own system session still writes.
+* **A per-site opt-out trims what `.markdown` publishes.** An opted-in page served every text-bearing
+  string property beneath it -- including ones its template never displays -- to anonymous visitors at
+  its `.markdown` URL. A new `capture.excludedProperties` setting drops named properties from both the
+  archive and the response. The default is unchanged (everything is published, so the record stays
+  complete); the mixin opt-in now states this effect.
+* **The comparison re-reads each chosen revision entry as the viewer.** The diff gated only the
+  history node against the caller, then read both entries on a system session, so an entry with a
+  tighter ACL than its history could leak its label and date. Each entry is now re-read through the
+  caller's own session before anything about it is returned.
+
 ## [1.4.10](https://github.com/Jahia/content-revision-history/compare/1_4_9...1_4_10) (2026-09-05)
 
 ### Added
