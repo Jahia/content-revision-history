@@ -1293,6 +1293,9 @@ describe('Revision comparison (entry binding + diff viewer)', () => {
                 expect(rows, 'the anchor points at its sanitised destination').to.contain(
                     'href="https://example.com/policy"'
                 );
+                expect(rows, 'the anchor is marked nofollow noopener for captured content').to.contain(
+                    'rel="nofollow noopener"'
+                );
 
                 // ...and the raw syntax is gone from the rendered rows.
                 expect(rows, 'the link syntax must not reach the reader').to.not.contain(
