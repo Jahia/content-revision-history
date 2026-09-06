@@ -1,7 +1,19 @@
 Changelog
 =========
 
-## Unreleased
+## [1.4.11](https://github.com/Jahia/content-revision-history/compare/1_4_10...1_4_11) (2026-09-06)
+
+**Security release.** Four issues found by an independent blind review of the released 1.4.10 jar,
+none of them the previously fixed markdown XSS. No migration and no content change: existing
+snapshots are untouched and the Markdown generator version is unchanged, so a comparison spanning
+the upgrade reads exactly as before.
+
+One operational note. The first capture after upgrading re-permissions the snapshot store
+(`/sites/<site>/contents/revision-history`): ACL inheritance is broken there and every principal that
+could already read the site's content is re-granted read, so curators keep the access the picker and
+preview need while nobody can write the record. This is automatic and needs no manual step. If your
+site grants content access in an unusual way, confirm after upgrading that an editor can still open a
+snapshot in jContent -- that is the case the e2e suite covers, and the one worth checking.
 
 ### Security
 
