@@ -11,11 +11,12 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.lang.management.ManagementFactory;
 import java.net.HttpURLConnection;
+import java.net.URI;
+import java.net.URISyntaxException;
 import java.net.URL;
 import java.net.URLEncoder;
 import java.util.Locale;
 import java.util.Objects;
-import java.util.regex.Pattern;
 import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashSet;
 import java.util.Set;
@@ -126,12 +127,25 @@ final class GuestMarkdownFetcher {
      */
     private final ThreadLocal<String> siteKeyForFetch = new ThreadLocal<>();
 
+    /**
+     * This node's own connector, the one address the capture credential may be sent to. Defaults to
+     * the detected connector in production; injected only by a test, which cannot listen on the
+     * detected port and so must tell the fetcher which loopback address counts as "this node".
+     */
+    private final String nodeEndpoint;
+
     GuestMarkdownFetcher() {
-        this.pinnedBaseUrl = null;
+        this(null, DetectedEndpoint.VALUE);
     }
 
     GuestMarkdownFetcher(String baseUrl) {
+        this(baseUrl, DetectedEndpoint.VALUE);
+    }
+
+    /** Test seam: pins both where the fetch goes and which address counts as this node's connector. */
+    GuestMarkdownFetcher(String baseUrl, String nodeEndpoint) {
         this.pinnedBaseUrl = baseUrl;
+        this.nodeEndpoint = nodeEndpoint;
     }
 
     /**
@@ -189,7 +203,7 @@ final class GuestMarkdownFetcher {
             // Withholding the header here closes that whichever way baseUrl was set, and because
             // the principal is derived below from what is actually sent, the record stays truthful:
             // the snapshot is marked guest, which is what the render will really have been.
-            if (authorization != null && !reachesJahiaDirectly(getBaseUrl())) {
+            if (authorization != null && !addressesEndpoint(getBaseUrl(), nodeEndpoint)) {
                 warnCredentialWithheld(getBaseUrl());
                 authorization = null;
                 credentialWithheld = true;
@@ -390,17 +404,24 @@ final class GuestMarkdownFetcher {
     }
 
     /**
-     * Does this base URL address Jahia directly, rather than through whatever serves the public site?
-     *
-     * <p>Only a loopback host does. A public hostname reaches the site through SEO URL rewriting
-     * (and usually a reverse proxy), which rewrites or refuses {@code /cms/render/...} — so every
-     * capture gets a flat 404 and reports {@code FAILED}, with nothing pointing at the address.
+     * Does this base URL address <em>this node's own connector</em>, rather than whatever serves
+     * the public site or some other listener on loopback?
      *
      * <p>A blank value is accepted: {@code resolveBaseUrl} only consults this when an override is
-     * set, and the derived default is always loopback, so a null must not warn on every start.
+     * set, and the derived default is always the detected connector, so a null must not warn on
+     * every start.
      *
-     * <p>Matched on the host alone, and anchored. {@code localhost.example.com} resolves wherever
-     * its DNS says, which is not this machine, so a prefix match would be wrong.
+     * <p>Otherwise the value is compared against {@link DetectedEndpoint#VALUE} in full -- host,
+     * port AND context path -- by {@link #addressesEndpoint}. Matching the host alone was not
+     * enough on two counts, both closed here. The credential (see {@code reachesJahiaDirectly}'s
+     * one caller withholding it) was sent to <em>any</em> port on loopback, so
+     * {@code http://127.0.0.1:31337} collected the operator's capture secret at an attacker-chosen
+     * listener; and the value is concatenated in front of the validated page path in
+     * {@link #buildUrl}, so a trailing {@code #} turned the whole path into a fragment
+     * {@code HttpURLConnection} never sends ({@code GET /}), and {@code /?x=} pushed it into a query
+     * -- either way storing the server root as the page's public history and reporting success.
+     * Pinning the port defeats the first; rejecting any path, query, fragment or userinfo defeats
+     * the second.
      *
      * <p>Package-private so the rule is pinned by a test rather than left to whoever edits it next.
      */
@@ -408,12 +429,82 @@ final class GuestMarkdownFetcher {
         if (baseUrl == null || baseUrl.trim().isEmpty()) {
             return true;
         }
-        return LOOPBACK_BASE_URL.matcher(baseUrl.trim()).matches();
+        return addressesEndpoint(baseUrl.trim(), DetectedEndpoint.VALUE);
     }
 
-    /** Host must be exactly a loopback literal; a port and a context path may follow. */
-    private static final Pattern LOOPBACK_BASE_URL = Pattern.compile(
-            "(?i)https?://(127\\.0\\.0\\.1|localhost|\\[::1])(:\\d+)?(/.*)?");
+    /**
+     * @return whether {@code baseUrl} names exactly the connector {@code expectedEndpoint} names:
+     *         same loopback host <em>class</em>, same port, same context path, and nothing else.
+     *
+     * <p>The host is compared by loopback-equivalence, not literally: {@code localhost},
+     * {@code 127.0.0.1} and {@code [::1]} all address this node, so a spelling difference between
+     * the configured value and the detected one is fine. Everything else must match or be absent.
+     * Userinfo, a query and a fragment are each refused outright -- none has a legitimate place in a
+     * connector address, and each is a route to the two attacks above.
+     *
+     * <p>Package-private and taking the expected endpoint as an argument precisely so a test can
+     * pin the rule against a fixed connector: {@link DetectedEndpoint#VALUE} is a one-shot JMX
+     * sweep a unit test cannot steer.
+     */
+    static boolean addressesEndpoint(String baseUrl, String expectedEndpoint) {
+        URI candidate = parseUri(baseUrl);
+        URI expected = parseUri(expectedEndpoint);
+        if (candidate == null || expected == null) {
+            return false;
+        }
+        String scheme = candidate.getScheme() == null
+                ? null : candidate.getScheme().toLowerCase(Locale.ROOT);
+        if (!"http".equals(scheme) && !"https".equals(scheme)) {
+            return false;
+        }
+        // No userinfo, query or fragment. A fragment ('#') drops the appended page path entirely;
+        // a query ('?x=') swallows it; userinfo ('127.0.0.1@evil') is a classic host confusion.
+        if (candidate.getRawUserInfo() != null || candidate.getRawQuery() != null
+                || candidate.getRawFragment() != null) {
+            return false;
+        }
+        if (!isLoopbackHost(candidate.getHost()) || !isLoopbackHost(expected.getHost())) {
+            return false;
+        }
+        // Port must be this node's own. An absent port (-1) is ambiguous and does not address it:
+        // the detected endpoint always carries an explicit port, and capture builds explicit URLs.
+        if (candidate.getPort() != expected.getPort()) {
+            return false;
+        }
+        // Path must be exactly the connector's context path (empty for a root deployment). Any
+        // extra segment is the request-line forgery vector.
+        return normalisedPath(candidate.getRawPath()).equals(normalisedPath(expected.getRawPath()));
+    }
+
+    /** @return the parsed URI, or null when the value is blank or not a valid URI */
+    private static URI parseUri(String value) {
+        if (value == null || value.trim().isEmpty()) {
+            return null;
+        }
+        try {
+            return new URI(value.trim());
+        } catch (URISyntaxException notAUri) {
+            return null;
+        }
+    }
+
+    /** A loopback literal, however spelled. {@code localhost.example.com} is not one -- it resolves
+     * wherever its DNS says -- so this is an exact, case-insensitive match, never a prefix. */
+    private static boolean isLoopbackHost(String host) {
+        if (host == null) {
+            return false;
+        }
+        String h = host.toLowerCase(Locale.ROOT);
+        return "127.0.0.1".equals(h) || "localhost".equals(h) || "[::1]".equals(h) || "::1".equals(h);
+    }
+
+    /** A path with a single optional trailing slash removed; null and "/" both mean "root", "". */
+    private static String normalisedPath(String rawPath) {
+        if (rawPath == null || rawPath.isEmpty() || "/".equals(rawPath)) {
+            return "";
+        }
+        return rawPath.endsWith("/") ? rawPath.substring(0, rawPath.length() - 1) : rawPath;
+    }
 
     private static String safeContextPath() {
         try {

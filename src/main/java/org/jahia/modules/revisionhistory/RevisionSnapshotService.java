@@ -623,55 +623,166 @@ public class RevisionSnapshotService {
 
     private JCRNodeWrapper childOrCreate(JCRNodeWrapper parent, String name, boolean isHistoryRoot)
             throws RepositoryException {
+        JCRNodeWrapper node;
         try {
-            JCRNodeWrapper adopted = parent.getNode(name);
-            if (isHistoryRoot) {
-                restoreInheritance(adopted);
-            }
-            return adopted;
+            node = parent.getNode(name);
         } catch (PathNotFoundException notThereYet) {
-            return parent.addNode(name, FOLDER_TYPE);
+            node = parent.addNode(name, FOLDER_TYPE);
+        }
+        if (isHistoryRoot) {
+            // On BOTH branches: a freshly created root must be locked from its first capture, not
+            // only an adopted one, or it inherits contributor write until the next capture adopts it.
+            enforceCuratorReadOnly(parent, node);
+        }
+        return node;
+    }
+
+    /**
+     * The role re-granted to every preserved reader: {@code privileged}.
+     *
+     * <p><b>Not {@code reader}, and that is the whole subtlety.</b> Jahia's roles are scoped to a
+     * WORKSPACE, and the built-in {@code reader} role carries {@code jcr:read_live} alone. This tree
+     * is {@code jmix:nolive} -- it exists only in {@code default} and never reaches {@code live} --
+     * so granting {@code reader} on it grants read of a workspace the node is not in, which is to
+     * say nothing at all. Measured on 8.2.3.2: with inheritance broken and {@code reader} granted to
+     * {@code u:mathias}, that editor still got {@code PathNotFoundException} on the history root and
+     * jContent showed him an empty Content section.
+     *
+     * <p>{@code privileged} is {@code jcr:read_default} + {@code jcr:readAccessControl_*} +
+     * {@code useComponent}: read in the workspace the record actually lives in, and no write and no
+     * publish. Measured on the same instance: the editor reads the store, and a write to a snapshot
+     * property is refused with {@code AccessDeniedException: not allowed to add or modify item}.
+     * {@code reviewer} also carries {@code jcr:read_default} but drags {@code publish} and the
+     * workflow permissions along with it, so it grants more than being able to look.
+     */
+    private static final String CURATOR_ROLE = "privileged";
+
+    /** Values {@code getActualAclEntries} uses for the three kinds of entry it reports. */
+    private static final String GRANT = "GRANT";
+    private static final String DENY = "DENY";
+
+    /**
+     * Makes the snapshot history root readable by exactly whoever could already read it, and
+     * writable by no one but this module's own system session.
+     *
+     * <p><b>Why this is the record's only tamper protection.</b> Every {@code crh:revisionSnapshot}
+     * property is {@code hidden}, which suppresses it from the edit form but does not refuse a write
+     * -- only {@code protected} does that, and a protected property cannot be written even by the
+     * system session that captures it. So without an ACL, a contributor with write under
+     * {@code /sites/<site>/contents} could rewrite what a public revision claims the page said
+     * (GHSA-q67w-prc3-ch5h #2). An evidentiary record its own subjects can rewrite is not one.
+     *
+     * <p><b>Why the readers are copied rather than named.</b> The obvious implementation grants
+     * {@code reader} to a curator GROUP and is wrong on a real site, which is worth recording
+     * because it looks right and fails silently. Measured on 8.2.3.2 against {@code digitall}: the
+     * effective ACL of {@code /sites/<site>/contents} grants roles mostly to INDIVIDUAL USERS --
+     * {@code u:mathias=editor}, {@code u:jane=contributor}, {@code u:irina=reviewer} -- beside a few
+     * group grants, and the global {@code g:privileged} group carries a {@code DENY}. Granting
+     * {@code reader} to {@code g:privileged} therefore let no editor read the store at all: jContent
+     * showed them an empty Content section, which is precisely the 1.3.x failure below. There is no
+     * one group that means "curator", so this asks the tree what it already permits instead of
+     * guessing, and is correct on a site whose roles are wired any way at all.
+     *
+     * <p><b>Why break inheritance AND grant, not one or the other.</b> Up to 1.3.x this tree broke
+     * inheritance and granted nothing, on sound reasoning but a broken implementation: it claimed to
+     * leave access to administrators "who bypass ACLs", which is untrue -- in Jahia an administrator
+     * is a ROLE delivered through ACL entries, exactly what breaking inheritance removes. Measured on
+     * 8.2.x, every non-{@code root} account was denied, so a store only {@code root} could read was a
+     * store nobody could curate: an editor has to read a snapshot to write the revision entry that
+     * describes it, and the picker offers exactly those snapshots. 1.4.x then over-corrected by
+     * restoring inheritance outright, which handed write back to every contributor.
+     *
+     * <p>What still holds either way: this tree never reaches the live workspace ({@code jmix:nolive}),
+     * and a comparison served to a visitor still checks the current user's own JCR rights before any
+     * snapshot is read -- see {@code RevisionDiffService}.
+     *
+     * <p>The reader set is read from the PARENT, not from this node: the parent always states what
+     * this tree would inherit, so an instance whose root a previous version already broke is
+     * repaired rather than frozen holding whatever it was left with. Idempotent and called on every
+     * capture; {@code grantRoles} reports whether it actually changed anything, so the settled case
+     * writes nothing and logs nothing.
+     *
+     * <p><b>Fails open, deliberately.</b> If the parent names no reader at all, the break is skipped
+     * and an error is logged rather than applied: a security fix that leaves the record unreadable
+     * reproduces the 1.3.x outage, and an unreadable evidentiary record is a worse outcome than one
+     * a contributor could edit. That case means the site's ACL could not be read, not that it is
+     * empty, so it is a fault to investigate rather than a state to enforce against.
+     *
+     * <p>Package-private so a test can assert it against a mock; the behaviour itself only proves
+     * out against a real repository, which 13-snapshotRecordTamperProtection.cy.ts covers.
+     */
+    void enforceCuratorReadOnly(JCRNodeWrapper parent, JCRNodeWrapper root) throws RepositoryException {
+        Set<String> readers = readersOf(parent);
+        if (readers.isEmpty()) {
+            logger.error("Not locking snapshot history root {}: no principal could be read from the"
+                    + " permissions of {}. Breaking inheritance now would leave the record readable"
+                    + " only by the system session, which is the 1.3.x failure that made revision"
+                    + " history unusable. The record stays writable by whoever may write the site's"
+                    + " content until this is resolved.", root.getPath(), safePath(parent));
+            return;
+        }
+
+        boolean changed = false;
+        if (!root.getAclInheritanceBreak()) {
+            root.setAclInheritanceBreak(true);
+            changed = true;
+        }
+        for (String principal : readers) {
+            if (root.grantRoles(principal, Collections.singleton(CURATOR_ROLE))) {
+                changed = true;
+            }
+        }
+
+        if (changed) {
+            logger.info("Locked snapshot history root {} to read-only, granting {} to {}: the record"
+                    + " is hidden, not protected, so without this a contributor with write under"
+                    + " the site's content tree could rewrite what a public revision says the page"
+                    + " said. Everyone who could read it still can; only the capture's system"
+                    + " session writes.", root.getPath(), CURATOR_ROLE, readers);
         }
     }
 
     /**
-     * Puts the history root back on the site's own permissions, if an earlier version took it off.
+     * @return the principals that may READ the given node, in the {@code u:name} / {@code g:name}
+     *         form {@code grantRoles} takes; never null
      *
-     * <p>Up to 1.3.x this tree had its ACL inheritance broken with nothing granted, on the reasoning
-     * that an evidentiary record its own subjects can rewrite is not one. The reasoning was sound;
-     * the implementation was not. It claimed to leave access to "server administrators, who bypass
-     * ACLs", and that is simply untrue: in Jahia a server administrator is a ROLE, and a role is
-     * delivered through ACL entries, which is exactly what breaking inheritance removes. Measured on
-     * 8.2.x, every non-{@code root} account was denied -- editors, site administrators and server
-     * administrators alike. Only {@code root} could read a snapshot, because {@code root} is the JCR
-     * system user and bypasses the access manager itself rather than holding any role.
-     *
-     * <p>That made the feature unusable. An editor has to read a snapshot to write the revision
-     * entry describing it, and the snapshot picker offers exactly those snapshots, so a store only
-     * {@code root} can read is a store nobody can curate.
-     *
-     * <p>The tree now simply inherits from {@code /sites/<site>/contents}, so whoever may read and
-     * write the site's content may read and write its snapshots too. The trade is deliberate and
-     * worth stating plainly: a contributor who can delete content under {@code /contents} can now
-     * delete a snapshot. What still holds is that this tree never reaches the live workspace
-     * ({@code jmix:nolive}), and that a comparison served to a visitor still checks the CURRENT
-     * user's own JCR rights before any snapshot is read -- see
-     * {@code RevisionDiffService#viewerMayReadHistory}.
-     *
-     * <p>Called on every capture rather than only at creation, so an instance that already carries
-     * the old lockdown is repaired by its next capture instead of needing a manual fix. It reads one
-     * property and writes nothing in the normal case.
+     * <p>Every content role Jahia ships confers read, so any principal holding a GRANT here is a
+     * reader, and re-granting it {@link #CURATOR_ROLE} alone preserves the read while dropping the
+     * write.
+     * A principal carrying a DENY is skipped rather than converted: it was being kept out, and
+     * turning that into a grant would hand it access breaking inheritance was supposed to remove.
+     * {@code EXTERNAL} entries (Jahia's {@code <role>/currentSite-access} bookkeeping) are neither.
      */
-    private void restoreInheritance(JCRNodeWrapper root) throws RepositoryException {
-        if (!root.getAclInheritanceBreak()) {
-            return;
+    private static Set<String> readersOf(JCRNodeWrapper node) {
+        Set<String> readers = new java.util.LinkedHashSet<>();
+        java.util.Map<String, java.util.Map<String, String>> acl;
+        try {
+            acl = node.getActualAclEntries();
+        } catch (RuntimeException unreadable) {
+            logger.warn("Could not read the permissions of {}", safePath(node), unreadable);
+            return readers;
         }
-        root.setAclInheritanceBreak(false);
-        logger.info("Restored inherited permissions on {}. Versions up to 1.3.x broke inheritance and"
-                + " granted nothing, which left snapshots readable only by the system session and by"
-                + " root -- not by administrators, whose privileges are themselves delivered through"
-                + " ACL entries. Snapshots now follow the permissions of the site's content folder.",
-                root.getPath());
+        if (acl == null) {
+            return readers;
+        }
+        for (java.util.Map.Entry<String, java.util.Map<String, String>> entry : acl.entrySet()) {
+            java.util.Collection<String> types = entry.getValue() == null
+                    ? Collections.emptyList() : entry.getValue().values();
+            boolean granted = types.stream().anyMatch(GRANT::equalsIgnoreCase);
+            boolean denied = types.stream().anyMatch(DENY::equalsIgnoreCase);
+            if (granted && !denied) {
+                readers.add(entry.getKey());
+            }
+        }
+        return readers;
+    }
+
+    private static String safePath(JCRNodeWrapper node) {
+        try {
+            return node == null ? "(none)" : node.getPath();
+        } catch (RuntimeException unavailable) {
+            return "(path unavailable)";
+        }
     }
 
     private static String stringProperty(JCRNodeWrapper node, String name) throws RepositoryException {

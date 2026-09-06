@@ -493,7 +493,7 @@ a version bump to take effect.
 
 ## Per-site configuration
 
-Three settings can differ per site. Each site that needs its own gets one file in
+A handful of settings can differ per site. Each site that needs its own gets one file in
 `karaf/etc`, and a site with no file behaves exactly as the module did before per-site settings
 existed — an upgrade must not change what gets captured.
 
@@ -506,6 +506,7 @@ retention.maxSnapshots  = 500          # per page and language, oldest pruned fi
 capture.user            = crh-academy  # optional; the account capture renders as
 capture.secretFile      = /etc/jahia/crh-academy.secret
 capture.baseUrl         =              # rarely needed; see below
+capture.excludedProperties =           # optional opt-out list; see below
 ```
 
 Changes apply without a restart: Felix FileInstall delivers the file to the module in a few
@@ -537,13 +538,43 @@ An absolute URL *does* appear in a snapshot when an editor authored one. That is
 faithful, and the capture endpoint has no bearing on it.
 
 **Critical security note:** A capture credential (`capture.user`/`capture.secretFile`), if configured,
-is sent **only** to loopback addresses (127.0.0.1, localhost, [::1]). If `capture.baseUrl` points
-elsewhere, the credential is withheld and capture renders anonymously instead. This prevents a site
-administrator from receiving the operator's capture password. The rendered snapshot is recorded as
-guest, which is what the unauthenticated render will actually have been.
+is sent **only** to this node's **own connector** — the exact loopback host, port and context path the
+node detected. A value that names any other port, or carries a path, query or fragment, is refused
+when a site administrator saves it through the panel, and the credential is withheld at fetch time as
+well if such a value ever reaches capture. This prevents a site administrator from pointing
+`capture.baseUrl` at a listener they control (`http://127.0.0.1:<their port>`) and receiving the
+operator's capture password there. When the credential is withheld the render is anonymous and the
+snapshot is recorded as guest, which is what it will actually have been.
 
-A non-loopback value is accepted — an unusual deployment may genuinely need one — and logged as a
-warning naming the site.
+A non-loopback value set **in the file by a server administrator** is still accepted — an unusual
+deployment may genuinely need one — and logged as a warning naming the site; the panel and GraphQL,
+reachable by a site administrator, refuse it.
+
+### `capture.excludedProperties`, to trim what the snapshot and the `.markdown` URL publish
+
+The generic Markdown fallback deliberately emits **every** text-bearing string property of a node,
+because a per-type view list can never be complete and emitting nothing loses the record silently
+(see [the `.markdown` section](#the-markdown-url-is-served-as-plain-text-deliberately)). The same
+generated Markdown is what an opted-in page serves at its anonymous `.markdown` URL — so a string
+property a site keeps out of its templates still reaches an anonymous visitor there.
+
+`capture.excludedProperties` is an opt-out list of property names, separated by commas or
+whitespace, that are dropped from the output:
+
+```properties
+capture.excludedProperties = internalReviewerNote, seoScore
+```
+
+Two things to know before using it:
+
+- **It changes the archive, not just the response.** An excluded property is left out of the stored
+  snapshot too, from the moment the setting takes effect. Existing snapshots are untouched; a future
+  capture whose only change is an excluded property will read as `UNCHANGED`.
+- **It is a hand-edited advanced setting**, with no panel or GraphQL field. Like `capture.secret`, it
+  is preserved verbatim when the settings panel writes the file, never dropped.
+
+The default excludes nothing, which keeps the record complete — the safe direction for a legal
+archive. Reach for this only when a specific property must not appear publicly.
 
 ### Not per-site at all
 

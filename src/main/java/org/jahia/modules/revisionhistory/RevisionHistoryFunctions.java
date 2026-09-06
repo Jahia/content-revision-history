@@ -123,10 +123,14 @@ public final class RevisionHistoryFunctions {
         if (node == null) {
             return values;
         }
+        // The site's opt-out list, resolved once per node (GHSA-q67w-prc3-ch5h #3). Everything is
+        // published by default; a site trims named properties from both the archive and the
+        // anonymous .markdown response through capture.excludedProperties.
+        java.util.Set<String> excluded = excludedFor(node);
         // Ordered by property name: JCR does not guarantee iteration order, and a snapshot is
         // diffed against its neighbours, so a stable order matters more than a natural one.
         java.util.SortedMap<String, java.util.List<String>> byName = new java.util.TreeMap<>();
-        if (!collectInto(node, byName)) {
+        if (!collectInto(node, byName, excluded)) {
             return values;
         }
         byName.values().forEach(values::addAll);
@@ -135,15 +139,35 @@ public final class RevisionHistoryFunctions {
     }
 
     /**
+     * @return the property names this node's site keeps out of the markdown output, never null
+     *
+     * <p>An unresolvable site excludes nothing: the default already publishes everything, so failing
+     * open to "publish everything" creates no exposure the default did not, and it keeps the record
+     * complete rather than silently dropping content -- the failure this class exists to prevent.
+     */
+    private static java.util.Set<String> excludedFor(org.jahia.services.content.JCRNodeWrapper node) {
+        try {
+            org.jahia.services.content.decorator.JCRSiteNode site = node.getResolveSite();
+            String siteKey = site == null ? null : site.getSiteKey();
+            return SiteSettingsRegistry.settingsFor(siteKey).getExcludedProperties();
+        } catch (RepositoryException | RuntimeException cannotResolve) {
+            LOGGER.debug("Could not resolve the site for {} to read its excluded properties;"
+                    + " excluding none", safePath(node), cannotResolve);
+            return java.util.Collections.emptySet();
+        }
+    }
+
+    /**
      * @return false when the node's properties could not be listed at all, so the caller can stop
      *         rather than report an empty node as a fall-through
      */
     private static boolean collectInto(org.jahia.services.content.JCRNodeWrapper node,
-                                       java.util.Map<String, java.util.List<String>> byName) {
+                                       java.util.Map<String, java.util.List<String>> byName,
+                                       java.util.Set<String> excluded) {
         try {
             javax.jcr.PropertyIterator properties = node.getProperties();
             while (properties.hasNext()) {
-                collectOne(node, properties.nextProperty(), byName);
+                collectOne(node, properties.nextProperty(), byName, excluded);
             }
             return true;
         } catch (RepositoryException cannotList) {
@@ -155,7 +179,8 @@ public final class RevisionHistoryFunctions {
 
     private static void collectOne(org.jahia.services.content.JCRNodeWrapper node,
                                    javax.jcr.Property property,
-                                   java.util.Map<String, java.util.List<String>> byName) {
+                                   java.util.Map<String, java.util.List<String>> byName,
+                                   java.util.Set<String> excluded) {
         String name = "(unnamed)";
         try {
             name = property.getName();
@@ -164,6 +189,11 @@ public final class RevisionHistoryFunctions {
             // here would double every title in every snapshot.
             if (name.startsWith("jcr:") || name.startsWith("j:")
                     || property.getType() != javax.jcr.PropertyType.STRING) {
+                return;
+            }
+            // The site's opt-out list (GHSA-q67w-prc3-ch5h #3): a property named here is kept out of
+            // both the archive and the anonymous .markdown response.
+            if (excluded.contains(name)) {
                 return;
             }
             java.util.List<String> text = textOf(property);

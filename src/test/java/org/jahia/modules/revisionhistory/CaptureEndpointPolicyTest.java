@@ -73,13 +73,31 @@ class CaptureEndpointPolicyTest {
     }
 
     @Test
-    @DisplayName("A loopback endpoint is accepted whichever literal spelling it uses")
-    void acceptsEveryLoopbackSpelling() {
+    @DisplayName("The connector is accepted whichever loopback spelling it uses; a wrong port or a path is not")
+    void acceptsTheConnectorItNames() {
+        // Acceptance is pinned against a FIXED connector, because addressesThisNode compares against
+        // the JMX-detected one, which has no deterministic value in a unit-test JVM. The former test
+        // asserted any port and any path as accepted -- the loose behaviour GHSA-q67w-prc3-ch5h #1
+        // was filed for.
+        String connector = "http://127.0.0.1:8080";
         for (String accepted : new String[]{
                 "http://127.0.0.1:8080", "http://localhost:8080", "http://[::1]:8080",
-                "https://127.0.0.1:8443", "http://127.0.0.1:8080/jahia"}) {
-            assertTrue(SiteSettingsRegistry.addressesThisNode(accepted), accepted);
+                "https://127.0.0.1:8080", "http://127.0.0.1:8080/"}) {
+            assertTrue(GuestMarkdownFetcher.addressesEndpoint(accepted, connector), accepted);
         }
+        for (String refused : new String[]{
+                // Any OTHER loopback port sent the credential to an attacker-chosen listener; any
+                // path/query/fragment reshaped the appended page path.
+                "http://127.0.0.1:31337", "http://127.0.0.1:8080/jahia", "http://127.0.0.1:8080/#"}) {
+            assertFalse(GuestMarkdownFetcher.addressesEndpoint(refused, connector), refused);
+        }
+    }
+
+    @Test
+    @DisplayName("addressesThisNode refuses a non-loopback host whatever the detected port is")
+    void refusesNonLoopbackHosts() {
+        // These refuse on the HOST alone, so they are deterministic through addressesThisNode even
+        // though the detected port is not: the guard the settings panel calls rejects them.
         for (String refused : new String[]{
                 "http://169.254.169.254", "https://www.example.com",
                 // Resolves wherever its DNS says, which is not this machine.
