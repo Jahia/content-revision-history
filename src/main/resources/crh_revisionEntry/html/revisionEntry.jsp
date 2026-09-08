@@ -69,8 +69,23 @@
             <c:otherwise><fmt:message key="crh_revisionEntry.changeType.substantive"/></c:otherwise>
         </c:choose></dd>
 
-        <dt><fmt:message key="crh_revisionEntry.summary"/></dt>
-        <%-- Sanitised HTML, deliberately unescaped -- see the security note above. --%>
-        <dd>${crh:sanitize(currentNode.properties.summary.string)}</dd>
+        <%-- 'initial' is the one change type with nothing to describe: the first recorded
+             revision has no predecessor, so "What changed" has no answer, and a row that asks the
+             question anyway invites an editor to invent one ("initial publication") or to leave a
+             visitor reading a description of a change that never happened.
+
+             The whole pair is dropped rather than the value alone: a <dt> with no <dd> is invalid
+             in a <dl>, and an empty <dd> would still spend a grid row on a label answered by
+             nothing. `summary` stays mandatory and stays stored -- whatever the editor wrote
+             remains on the node and in the export, it is simply not part of the PUBLIC record for
+             this change type. See crh_revisionEntry.summary.description, which tells the editor so.
+
+             Compared with `ne`, so the row survives every other value including an unset one --
+             matching the changeType fallback above, which reads an empty value as substantive. --%>
+        <c:if test="${changeTypeCode ne 'initial'}">
+            <dt><fmt:message key="crh_revisionEntry.summary"/></dt>
+            <%-- Sanitised HTML, deliberately unescaped -- see the security note above. --%>
+            <dd>${crh:sanitize(currentNode.properties.summary.string)}</dd>
+        </c:if>
     </dl>
 </article>

@@ -1,6 +1,17 @@
 Changelog
 =========
 
+## Unreleased
+
+### Changed
+
+* **An "Initial version" revision no longer shows a "What changed" row.** The first recorded
+  revision of a page has no earlier version to have changed from, so the live page now omits that
+  text instead of presenting it as the description of a change that never happened. The field stays
+  required and whatever an editor wrote stays stored on the node and in the export -- it is simply
+  not part of the public record for that one change type. Every other change type, and an entry with
+  no change type set, renders exactly as before.
+
 ## [1.4.11](https://github.com/Jahia/content-revision-history/compare/1_4_10...1_4_11) (2026-09-06)
 
 **Security release.** Four issues found by an independent blind review of the released 1.4.10 jar,

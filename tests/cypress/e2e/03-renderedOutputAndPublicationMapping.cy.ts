@@ -269,6 +269,93 @@ describe('Rendered output correctness (crh_revisionHistory / crh_revisionEntry v
                 deleteNode(`${areaPath}/${containerName}`).then(null, () => undefined);
             });
     });
+
+    it('omits the "What changed" row for an Initial version entry, and keeps it for its sibling', () => {
+        const containerName = `crh-render-check-initial-${Date.now()}`;
+        const marker = Date.now();
+        const initialSummary = `initial summary marker ${marker}`;
+        const laterSummary = `later summary marker ${marker}`;
+
+        // A first recorded revision has no predecessor, so "What changed" has no answer. Asserted
+        // with BOTH entries in one container on purpose: the label is a shared resource-bundle
+        // string, so a page-wide `not.contain` would pass just as well if the row disappeared for
+        // every change type -- which is the regression this test exists to catch. Each assertion is
+        // therefore scoped to one entry's own <article>, located by its uuid.
+        addNode({
+            parentPathOrId: areaPath,
+            primaryNodeType: 'crh:revisionHistory',
+            name: containerName
+        })
+            .then((container: ApolloResult<AddNodeQueryData>) => {
+                expect(container.errors, 'the revision history container must be creatable').to.be.undefined;
+
+                return addNode({
+                    parentPathOrId: `${areaPath}/${containerName}`,
+                    primaryNodeType: 'crh:revisionEntry',
+                    name: 'entry-initial',
+                    properties: [
+                        {name: 'revisionLabel', value: `1.0 (${marker})`},
+                        {name: 'revisionDate', value: new Date().toISOString(), type: 'DATE'},
+                        {name: 'changeType', value: 'initial'},
+                        // Mandatory, so it has to be written even though it must not be rendered.
+                        {name: 'summary', value: initialSummary, language}
+                    ]
+                });
+            })
+            .then((initial: ApolloResult<AddNodeQueryData>) => {
+                expect(initial.errors, 'an initial-version entry must be creatable').to.be.undefined;
+                const initialUuid = initial.data?.jcr.addNode.uuid as string;
+
+                return addNode({
+                    parentPathOrId: `${areaPath}/${containerName}`,
+                    primaryNodeType: 'crh:revisionEntry',
+                    name: 'entry-later',
+                    properties: [
+                        {name: 'revisionLabel', value: `1.1 (${marker})`},
+                        {name: 'revisionDate', value: new Date().toISOString(), type: 'DATE'},
+                        {name: 'changeType', value: 'substantive'},
+                        {name: 'summary', value: laterSummary, language}
+                    ]
+                }).then((later: ApolloResult<AddNodeQueryData>) => {
+                    expect(later.errors, 'a substantive entry must be creatable').to.be.undefined;
+                    const laterUuid = later.data?.jcr.addNode.uuid as string;
+
+                    return renderPage().then(html => ({html, initialUuid, laterUuid}));
+                });
+            })
+            .then(({html, initialUuid, laterUuid}) => {
+                const articleOf = (uuid: string): string => {
+                    const match = html.match(
+                        new RegExp(`<article class="crh-entry" aria-labelledby="crh-entry-heading-${uuid}">([\\s\\S]*?)</article>`)
+                    );
+                    expect(match, `entry ${uuid} must render its own <article>`).to.not.be.null;
+                    return (match as RegExpMatchArray)[1];
+                };
+
+                const initialArticle = articleOf(initialUuid);
+                const laterArticle = articleOf(laterUuid);
+
+                expect(initialArticle, 'the initial entry must still name its change type').to.contain(
+                    'Initial version (first record)'
+                );
+                expect(
+                    initialArticle,
+                    'a first recorded revision has no predecessor, so it must not be given a "What changed" row'
+                ).to.not.contain('What changed');
+                expect(
+                    initialArticle,
+                    'the summary text must not reach the page either -- hiding only the label would leave an unlabelled paragraph'
+                ).to.not.contain(initialSummary);
+
+                expect(
+                    laterArticle,
+                    'the row must be hidden for the initial change type only, not for every entry'
+                ).to.contain('What changed');
+                expect(laterArticle, 'a subsequent revision must still show what it changed').to.contain(laterSummary);
+
+                deleteNode(`${areaPath}/${containerName}`).then(null, () => undefined);
+            });
+    });
 });
 
 describe('Publication mapping correctness', () => {
