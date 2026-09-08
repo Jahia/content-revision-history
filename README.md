@@ -83,8 +83,13 @@ inside the Revision history component:
 |---|---|
 | **Version label** | free text - `1.2`, `March 2026`, `Effective 1 April`. Whatever convention the page needs. |
 | **Revision date** | the date the change became visible, not the date you drafted it. |
-| **What changed** | rich text, shown to visitors. This is the part people actually read. |
-| **Change type** | Editorial, Substantive or Correction. Editorial means wording only; Substantive means the meaning changed; Correction fixes an error in an earlier revision. |
+| **What changed** | rich text, shown to visitors. This is the part people actually read. Not shown when the change type is *Initial version* - see below. |
+| **Change type** | Initial version, Editorial, Substantive or Correction. Initial version is the first record of the page; Editorial means wording only; Substantive means the meaning changed; Correction fixes an error in an earlier revision. |
+
+**An Initial version shows no "What changed".** The first recorded revision has no earlier
+version to have changed from, so the live page omits that text rather than presenting it as the
+description of a change that never happened. The field is still required and what you write is
+still stored - it simply is not part of the public record for that one change type.
 
 Publish the revision and it appears in the list.
 
