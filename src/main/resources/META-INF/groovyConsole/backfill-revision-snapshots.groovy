@@ -60,6 +60,16 @@ def moduleBundle = {
     return active
 }()
 
+// The capture token, read the same way and for the same reason (GHSA-q67w-prc3-ch5h #3). The
+// .markdown endpoint answers 404 to anyone who cannot prove they are inside this JVM, and this
+// script is inside it. The value is per bundle start and lives only in memory, so it is read live
+// here rather than configured -- there is nothing for an operator to set and nothing to leak.
+// A run against an instance older than 1.4.13 simply never sends the header, which those versions
+// ignore, so the script stays usable on both.
+def tokenClass = moduleBundle.loadClass('org.jahia.modules.revisionhistory.CaptureToken')
+def captureTokenHeader = tokenClass.getMethod('value').invoke(null)
+def captureTokenName = tokenClass.getField('HEADER').get(null)
+
 def normalizerClass = moduleBundle.loadClass('org.jahia.modules.revisionhistory.MarkdownNormalizer')
 // The LOCALE-AWARE overload, which is the one the live capture path calls. Using the
 // locale-less one here reproduced, in the migration script, the exact defect
@@ -233,6 +243,9 @@ def fetchMarkdown = { String path, long millis ->
     if (reachesJahiaDirectly) {
         conn.setRequestProperty('Authorization', 'Basic ' + credentials.bytes.encodeBase64().toString())
     }
+    // Proves the caller is this JVM. Without it the render answers 404 and the refusal below
+    // aborts the whole run -- loudly, which is the point: it can never write an empty snapshot.
+    conn.setRequestProperty(captureTokenName, captureTokenHeader)
     conn.connectTimeout = 10000
     conn.readTimeout = 30000
     int code = conn.responseCode

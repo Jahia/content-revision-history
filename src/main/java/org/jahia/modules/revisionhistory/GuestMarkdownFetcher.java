@@ -214,6 +214,13 @@ final class GuestMarkdownFetcher {
             }
             connection.setRequestProperty("Cache-Control", "no-cache");
             connection.setRequestProperty("Accept", "text/html, text/plain");
+            // Proves to MarkdownContentTypeFilter that this request is the module's own capture and
+            // not a caller from outside the JVM (GHSA-q67w-prc3-ch5h #3). Set unconditionally and
+            // independently of the credential above: the token says WHO IS ASKING, the credential
+            // says who the render runs AS, and capture's normal mode is to ask as itself for an
+            // anonymous render. Without this header the render answers 404 and every capture fails,
+            // so the two halves of the gate are exercised by the existing capture tests.
+            connection.setRequestProperty(CaptureToken.HEADER, CaptureToken.value());
 
             int code = connection.getResponseCode();
             if (code != HttpURLConnection.HTTP_OK) {

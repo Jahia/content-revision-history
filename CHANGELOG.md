@@ -1,6 +1,44 @@
 Changelog
 =========
 
+## Unreleased
+
+**Security release.** Closes the one finding of
+[GHSA-q67w-prc3-ch5h](https://github.com/Jahia/content-revision-history/security/advisories/GHSA-q67w-prc3-ch5h)
+that 1.4.12 did not, and verifies the one it left unmeasured. An independent review re-tested the
+released jars on a running instance and reported that #1 and #2 were fixed, #3 was **not fixed by
+default**, and #4 was unverified.
+
+No migration, and no change to any stored snapshot: existing records are byte-identical and the
+generator version is unchanged, so a comparison spanning the upgrade reads exactly as before.
+
+**One operational note.** The `.markdown` URL is no longer readable from outside the node. If you
+have a saved local copy of the backfill Groovy script, take the copy shipped with this version --
+an older copy will abort on HTTP 404 rather than write anything, so the failure is loud and safe,
+but it will abort.
+
+### Security
+
+* **The `.markdown` endpoint is no longer reachable from outside this node.** Opting a page into
+  revision history was enough to serve every text-bearing string property beneath it -- including
+  properties no template displays -- to an anonymous visitor. 1.4.11 added a per-site exclusion list
+  for this, and that did not close it: the list ships empty, so the response was measured as
+  byte-identical to 1.4.10's. A render now answers 404 unless the caller is the module's own capture
+  (which presents an in-memory token generated per bundle start) or a user holding
+  `siteAdminContentRevisionHistory` on the site. This fixes the whole class rather than the measured
+  instance -- every property, every content type including ones shipped by other modules -- and
+  needs no per-site configuration to be safe. `capture.excludedProperties` remains, and is now
+  documented in the shipped configuration file, for keeping a value out of the stored record at all.
+
+### Tests
+
+* **Per-entry access control on the comparison is now verified end to end.** The advisory could not
+  confirm it either way, because the case needs two revision entries with divergent per-entry ACLs
+  and none exist on a default install. A new spec builds that state and pins the distinction the fix
+  turns on: an entry the caller may not read is answered as absent, while the same comparison made
+  by a caller who may read it proceeds -- so the test fails if the per-entry check is removed,
+  rather than passing for both.
+
 ## [1.4.12](https://github.com/Jahia/content-revision-history/compare/1_4_11...1_4_12) (2026-09-08)
 
 ### Changed
