@@ -1,6 +1,7 @@
 package org.jahia.modules.revisionhistory;
 
 import org.jahia.services.content.JCRNodeWrapper;
+import org.jahia.services.content.decorator.JCRSiteNode;
 import org.jahia.services.render.RenderContext;
 import org.jahia.services.render.Resource;
 import org.junit.jupiter.api.BeforeEach;
@@ -8,10 +9,12 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 import javax.jcr.RepositoryException;
+import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
@@ -61,14 +64,35 @@ class MarkdownContentTypeFilterTest {
 
     // ------------------------------------------------------------------ fixtures
 
-    /** A node at the given path with the given mixin/page flags, as RevisionedAncestor.of reads it. */
+    /**
+     * A node at the given path with the given mixin/page flags, as RevisionedAncestor.of reads it.
+     *
+     * <p>It also resolves a site that GRANTS the module's site-administration permission, so the
+     * caller gate passes by default and every test above it goes on measuring what it was written to
+     * measure. The refusals are asserted explicitly below, on fixtures that withhold it.
+     */
     private static JCRNodeWrapper node(String path, boolean revisioned, boolean page)
             throws RepositoryException {
+        return node(path, revisioned, page, true);
+    }
+
+    private static JCRNodeWrapper node(String path, boolean revisioned, boolean page,
+                                       boolean mayInspect) throws RepositoryException {
         JCRNodeWrapper n = mock(JCRNodeWrapper.class);
         when(n.getPath()).thenReturn(path);
         when(n.isNodeType(RevisionHistoryConstants.REVISIONED_MIXIN)).thenReturn(revisioned);
         when(n.isNodeType(RevisionHistoryConstants.PAGE_TYPE)).thenReturn(page);
+        JCRSiteNode site = mock(JCRSiteNode.class);
+        when(site.hasPermission("siteAdminContentRevisionHistory")).thenReturn(mayInspect);
+        when(n.getResolveSite()).thenReturn(site);
         return n;
+    }
+
+    /** A request carrying the given value in the capture header, or none when null. */
+    private static HttpServletRequest requestWithToken(String token) {
+        HttpServletRequest request = mock(HttpServletRequest.class);
+        when(request.getHeader(CaptureToken.HEADER)).thenReturn(token);
+        return request;
     }
 
     /** A render context whose main resource is the given node (or absent when null). */
@@ -194,6 +218,97 @@ class MarkdownContentTypeFilterTest {
         when(renderContext.getResponse()).thenReturn(null);
 
         assertDoesNotThrow(() -> assertEquals("", filter.prepare(renderContext, null, null)));
+    }
+
+    // --------------------------------------------------- the caller gate (GHSA-q67w-prc3-ch5h #3)
+
+    @Test
+    @DisplayName("#3: an anonymous caller gets 404 even on an opted-in page, and no view runs")
+    void refusesAnAnonymousCaller() throws RepositoryException {
+        // The measured exposure: crh:textProperties emits every text-bearing string property beneath
+        // the page, including ones no template displays, and opting in was enough to hand that to an
+        // unauthenticated GET. Opted in, but no token and no permission.
+        RenderContext renderContext = contextWithMain(node("/sites/x/home/p", true, true, false));
+        HttpServletResponse response = mock(HttpServletResponse.class);
+        when(renderContext.getResponse()).thenReturn(response);
+
+        String result = filter.prepare(renderContext, null, null);
+
+        assertEquals("", result, "the chain must end at priority 5, before any view emits a property");
+        verify(response).setStatus(HttpServletResponse.SC_NOT_FOUND);
+        verify(renderContext, never()).setContentType(anyString());
+    }
+
+    @Test
+    @DisplayName("#3: the module's own capture fetch is served, with no permission of any kind")
+    void servesTheCapturesOwnFetch() throws RepositoryException {
+        // The property that makes this gate usable at all: capture renders ANONYMOUSLY on purpose,
+        // because rendering as guest is how the module establishes what the public can see. So the
+        // token has to admit a caller that holds no permission whatsoever -- which no
+        // credential-based gate could do without changing what the snapshot means.
+        RenderContext renderContext = contextWithMain(node("/sites/x/home/p", true, true, false));
+        // Built BEFORE the stubbing below: requestWithToken() stubs a mock of its own, and Mockito
+        // refuses a when() that starts while another when() is still open.
+        HttpServletRequest capturesRequest = requestWithToken(CaptureToken.value());
+        when(renderContext.getRequest()).thenReturn(capturesRequest);
+
+        String result = filter.prepare(renderContext, null, null);
+
+        assertEquals(null, result, "capture must still be served, or every snapshot fails");
+        verify(renderContext).setContentType("text/plain; charset=UTF-8");
+    }
+
+    @Test
+    @DisplayName("#3: a wrong or absent token does not pass")
+    void refusesAWrongToken() throws RepositoryException {
+        for (String presented : new String[]{null, "", "not-the-token", CaptureToken.value() + "x"}) {
+            RenderContext renderContext = contextWithMain(node("/sites/x/home/p", true, true, false));
+            HttpServletRequest request = requestWithToken(presented);
+            when(renderContext.getRequest()).thenReturn(request);
+
+            assertEquals("", filter.prepare(renderContext, null, null),
+                    "must refuse a token of: " + presented);
+        }
+    }
+
+    @Test
+    @DisplayName("#3: an operator who may administer capture may inspect what it captures")
+    void servesTheOperatorWhoMayAdministerCapture() throws RepositoryException {
+        // Keeps the URL usable for diagnosing a capture, and grants nothing new: the same person
+        // reads every one of these properties in Content Editor already.
+        RenderContext renderContext = contextWithMain(node("/sites/x/home/p", true, true, true));
+        HttpServletRequest tokenless = requestWithToken(null);
+        when(renderContext.getRequest()).thenReturn(tokenless);
+
+        assertEquals(null, filter.prepare(renderContext, null, null),
+                "the module's site-administration permission must still admit a human caller");
+    }
+
+    @Test
+    @DisplayName("#3: the gate fails CLOSED when the permission cannot be determined")
+    void refusesWhenThePermissionCheckCannotAnswer() throws RepositoryException {
+        // Same direction as the mixin gate beside it: a refused capture records FAILED and retries
+        // on the next publish, which is recoverable. Serving a dump to a caller whose rights could
+        // not be established is not.
+        JCRNodeWrapper node = node("/sites/x/home/p", true, true, false);
+        when(node.getResolveSite()).thenThrow(new IllegalStateException("no site"));
+        RenderContext renderContext = contextWithMain(node);
+
+        assertEquals("", filter.prepare(renderContext, null, null),
+                "an unanswerable permission question is a refusal, not a grant");
+    }
+
+    @Test
+    @DisplayName("#3: the token is a secret, not a constant somebody can read off the source")
+    void theTokenIsGeneratedNotHardcoded() {
+        // Both halves matter. A short or predictable value would make the gate decorative, and a
+        // value derived from anything stable across installs would let one instance's token open
+        // another's. 256 bits of SecureRandom, base64url, so 43 characters with no padding.
+        assertTrue(CaptureToken.value().length() >= 40,
+                "expected a 256-bit value; actual length " + CaptureToken.value().length());
+        assertNotEquals(CaptureToken.HEADER, CaptureToken.value());
+        assertTrue(CaptureToken.value().matches("[A-Za-z0-9_-]+"),
+                "must be header-safe with no padding: " + CaptureToken.value());
     }
 
     // ------------------------------------------------------------------ registration

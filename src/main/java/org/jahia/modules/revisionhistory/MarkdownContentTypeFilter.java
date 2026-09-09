@@ -1,6 +1,7 @@
 package org.jahia.modules.revisionhistory;
 
 import org.jahia.services.content.JCRNodeWrapper;
+import org.jahia.services.content.decorator.JCRSiteNode;
 import org.jahia.services.render.RenderContext;
 import org.jahia.services.render.Resource;
 import org.jahia.services.render.filter.AbstractFilter;
@@ -12,6 +13,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import javax.jcr.RepositoryException;
+import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 
 /**
@@ -79,6 +81,14 @@ import javax.servlet.http.HttpServletResponse;
  * #46). So a {@code .markdown} render whose page is not within a {@code jmix:publiclyRevisioned}
  * node answers 404 with no body. Capture is unaffected: it only ever fetches {@code .markdown} for
  * a revisioned page or a revisioned content node, which is exactly what passes the gate.
+ *
+ * <p><b>And it gates the endpoint to callers entitled to the dump.</b> Opting in was still enough to
+ * hand an ANONYMOUS visitor every text-bearing property beneath the page, which is
+ * GHSA-q67w-prc3-ch5h #3 and was measured live against 1.4.12. The mixin gate above answers "may
+ * this page be dumped"; {@link #callerMaySeeTheDump} answers "may this caller have it" -- the
+ * module's own capture, or a human holding the module's site-administration permission. Both
+ * questions are asked here, at priority 5, for the same reason: it is the only place before the
+ * fragment cache, so neither can be bypassed by a warm cache entry.
  */
 @Component(service = RenderFilter.class, immediate = true)
 public class MarkdownContentTypeFilter extends AbstractFilter {
@@ -105,6 +115,14 @@ public class MarkdownContentTypeFilter extends AbstractFilter {
      */
     private static final float PRIORITY = 5f;
 
+    /**
+     * The module's own site-administration permission, reused rather than a new one: someone who may
+     * configure revision capture for a site is exactly who may look at what it captures. Declared
+     * separately from Jahia's site administration so it can be revoked on its own -- see
+     * {@code SiteSettingsAccess}.
+     */
+    private static final String INSPECT_PERMISSION = "siteAdminContentRevisionHistory";
+
     @Activate
     public void start() {
         setPriority(PRIORITY);
@@ -123,7 +141,7 @@ public class MarkdownContentTypeFilter extends AbstractFilter {
      */
     @Override
     public String prepare(RenderContext renderContext, Resource resource, RenderChain chain) {
-        if (!servesRevisionedContent(renderContext)) {
+        if (!servesRevisionedContent(renderContext) || !callerMaySeeTheDump(renderContext)) {
             HttpServletResponse notFound = renderContext.getResponse();
             if (notFound != null) {
                 notFound.setStatus(HttpServletResponse.SC_NOT_FOUND);
@@ -140,6 +158,52 @@ public class MarkdownContentTypeFilter extends AbstractFilter {
             response.setHeader(NOSNIFF_HEADER, NOSNIFF_VALUE);
         }
         return null;
+    }
+
+    /**
+     * @return whether this caller is allowed the raw property dump at all
+     *
+     * <p>GHSA-q67w-prc3-ch5h #3. {@code crh:textProperties} emits every text-bearing string property
+     * beneath the node, including ones no template displays, and this URL served that to anyone. The
+     * breadth is deliberate and must stay -- a per-type list of prose properties can never be
+     * complete and emitting nothing is silent content loss -- so the exposure is closed at the
+     * READER instead. 1.4.11's per-site exclusion list did not close it: empty by default, so the
+     * response stayed byte-identical, which is what the advisory was reopened to say.
+     *
+     * <p>Two callers pass. The module's own capture presents {@link CaptureToken}, which is why the
+     * render can still be anonymous -- see that class for why a token rather than an address or a
+     * credential. A human holding {@code siteAdminContentRevisionHistory} on the site also passes,
+     * which keeps the URL inspectable by the operator debugging a capture and keeps the end-to-end
+     * tests able to assert what the fallback view emits. That grants nothing new: the same person
+     * reads every one of those properties in Content Editor already. An anonymous visitor -- the
+     * measured exposure -- gets 404.
+     *
+     * <p>Fail-closed, like the mixin gate beside it: an unreadable session or an unresolvable site
+     * refuses rather than serves.
+     */
+    private boolean callerMaySeeTheDump(RenderContext renderContext) {
+        HttpServletRequest request = renderContext == null ? null : renderContext.getRequest();
+        if (CaptureToken.presentIn(request)) {
+            return true;
+        }
+        Resource main = renderContext == null ? null : renderContext.getMainResource();
+        if (main == null) {
+            return false;
+        }
+        try {
+            JCRNodeWrapper node = main.getNode();
+            JCRSiteNode site = node == null ? null : node.getResolveSite();
+            if (site == null) {
+                return false;
+            }
+            // Asked of the node the CALLER's session resolved, so this is the caller's permission
+            // and not the render's. Capture never reaches here: it returned above on the token.
+            return site.hasPermission(INSPECT_PERMISSION);
+        } catch (RepositoryException | RuntimeException cannotTell) {
+            logger.warn("Could not determine whether the caller may read the .markdown dump of {};"
+                    + " refusing it", main.getPath(), cannotTell);
+            return false;
+        }
     }
 
     /**

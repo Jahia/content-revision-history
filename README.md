@@ -179,7 +179,50 @@ recording because the filter approach looks attractive:
 - The render used the **visitor's** session, so an editor's first visit captured content that
   anonymous users may not see — and that snapshot was destined to be published.
 
-### The `.markdown` URL is served as plain text, deliberately
+### The `.markdown` URL is not reachable from outside this node
+
+It is not a visitor-facing feature. It is the **mechanism by which a snapshot is made**: on
+publication the module asks this node, over its own loopback connector, for the markdown render of
+the page and stores the answer. The backfill script does the same for historical instants. Nothing
+else reads it, and the part visitors do see — the revision list and the comparison — is rendered by
+ordinary HTML views that never touch it.
+
+Being reachable from the internet was therefore an accident of implementing capture as an HTTP
+render, and a reportable one (GHSA-q67w-prc3-ch5h #3): the generic fallback emits **every**
+text-bearing string property of every node beneath the page, including properties no template
+displays, and an anonymous `GET` returned the lot. An independent review measured internal
+`jmix:orderedList` ordering fields coming back to an unauthenticated caller.
+
+Since 1.4.13 a `.markdown` render answers **404** unless the caller is one of:
+
+- **capture itself**, which presents `CaptureToken` — 256 bits of `SecureRandom`, generated per
+  bundle start, held only in memory, never configured and never logged. Both legitimate callers run
+  inside the JVM, so there is nothing to distribute, rotate or leak.
+- **a human holding `siteAdminContentRevisionHistory`** on the site, which keeps the URL usable for
+  diagnosing a capture and grants nothing new: that person reads every one of those properties in
+  Content Editor already.
+
+Two design notes, because both alternatives look right and are not:
+
+**Not a loopback-address rule.** Jahia is routinely fronted by Apache or HAProxy on the same host,
+so a request from the public internet arrives at Tomcat from `127.0.0.1` and would pass.
+
+**Not a credential.** The capture render must stay *anonymous* — rendering as guest is how the
+module establishes what the public can actually see, so that a page guest cannot read is recorded
+as `NOT_PUBLIC` rather than captured with privileges. The token authenticates the **caller** without
+touching the identity the render runs **as**, which is the one property no credential-based gate can
+provide.
+
+**Why not narrow what is emitted instead**, which is what 1.4.11 tried. The exclusion list ships
+empty, so the same review measured the 1.4.12 response as byte-identical to 1.4.10's — configurable
+is not fixed. Narrowing at the source is also the wrong trade here: the breadth is load-bearing,
+because a per-type list of "which properties hold prose" can never be complete (modules ship their
+own types) and a snapshot that emits nothing for an unrecognised type is silent content loss, the
+worst failure this module has. Closing the endpoint leaves every stored snapshot byte-identical,
+needs no per-site configuration to be safe, and covers types nobody has written yet.
+`capture.excludedProperties` remains, for keeping a value out of the stored record at all.
+
+### The `.markdown` response is typed as plain text, deliberately
 
 The markdown views print node content **unescaped**, and that is intentional: `bigText.jsp` emits
 the rich-text `text` property verbatim so `MarkdownNormalizer` can convert HTML to Markdown in one
@@ -196,7 +239,10 @@ unescaped HTML document — reachable anonymously, on **every page in the instal
 views are registered for the core types `jnt:page`, `jnt:content` and `jnt:bigText` rather than for
 this module's own. A site that never enabled the feature was exposed by having the module deployed.
 
-`MarkdownContentTypeFilter` fixes it at the surface rather than at the four print sites, by
+Since the gate above, an anonymous caller gets nothing at all, so this is now defence in depth
+rather than the primary control — it still matters for the operator who opens a `.markdown` URL in a
+browser to diagnose a capture, which is exactly the caller who could otherwise be handed markup to
+parse. `MarkdownContentTypeFilter` fixes it at the surface rather than at the four print sites, by
 declaring `text/plain; charset=UTF-8` plus `X-Content-Type-Options: nosniff` for the whole template
 type. Measured on 8.2.3.2, anonymously, before and after: `text/html` with the payload intact, then
 `text/plain` with the payload intact. The bytes are unchanged — what changed is that the browser is
@@ -555,13 +601,18 @@ A non-loopback value set **in the file by a server administrator** is still acce
 deployment may genuinely need one — and logged as a warning naming the site; the panel and GraphQL,
 reachable by a site administrator, refuse it.
 
-### `capture.excludedProperties`, to trim what the snapshot and the `.markdown` URL publish
+### `capture.excludedProperties`, to keep a value out of the stored record
 
 The generic Markdown fallback deliberately emits **every** text-bearing string property of a node,
 because a per-type view list can never be complete and emitting nothing loses the record silently
-(see [the `.markdown` section](#the-markdown-url-is-served-as-plain-text-deliberately)). The same
-generated Markdown is what an opted-in page serves at its anonymous `.markdown` URL — so a string
-property a site keeps out of its templates still reaches an anonymous visitor there.
+(see [the `.markdown` section](#the-markdown-url-is-not-reachable-from-outside-this-node)). So a
+string property a site keeps out of its templates is still part of the snapshot.
+
+**This is about what is stored, not about who can read it.** The `.markdown` URL is not readable
+from outside this node — that exposure is closed by the gate described above, and needs no
+configuration. Use this setting when a value should not be in the permanent archive at all: an
+internal reviewer note, a score imported from another system, anything whose presence in a record
+you may one day hand to a customer is itself the problem.
 
 `capture.excludedProperties` is an opt-out list of property names, separated by commas or
 whitespace, that are dropped from the output:
