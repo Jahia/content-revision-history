@@ -1,7 +1,7 @@
 Changelog
 =========
 
-## Unreleased
+## [1.4.13](https://github.com/Jahia/content-revision-history/compare/1_4_12...1_4_13) (2026-09-09)
 
 **Security release.** Closes the one finding of
 [GHSA-q67w-prc3-ch5h](https://github.com/Jahia/content-revision-history/security/advisories/GHSA-q67w-prc3-ch5h)
