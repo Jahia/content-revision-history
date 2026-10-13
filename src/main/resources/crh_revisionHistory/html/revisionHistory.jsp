@@ -395,6 +395,22 @@
 
                 </li>
             </c:forEach>
+            <%-- Edit mode only: the wildcard placeholder jContent reads to learn that an editor may
+                 add a crh:revisionEntry here.
+
+                 Since jContent 3.7.0 the hover "add" button and the right-click Create action are
+                 derived from the RENDERED page, not from this node's CND child definition (3.6.x
+                 read the nodetypes attribute of the enclosing module, which is always present).
+                 A view that renders its children with a bare loop emits no path="*" placeholder,
+                 so jContent concludes nothing can be added and hides both -- silently, with no
+                 error. See Jahia/jcontent#2771.
+
+                 nodeTypes is stated explicitly rather than left to the CND, so the answer does not
+                 depend on how jContent resolves a wildcard. Outside edit mode nothing is emitted,
+                 so the public list, and the semantic <ol>, are unchanged. --%>
+            <c:if test="${renderContext.editMode}">
+                <li><template:module path="*" nodeTypes="crh:revisionEntry"/></li>
+            </c:if>
         </ol>
     </details>
 </section>
