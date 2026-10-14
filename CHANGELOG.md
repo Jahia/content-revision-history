@@ -1,6 +1,20 @@
 Changelog
 =========
 
+## [1.4.14](https://github.com/Jahia/content-revision-history/compare/1_4_13...1_4_14) (2026-10-14)
+
+### Bug Fixes
+
+**Editors can add a revision entry in Page Builder again on jContent 3.7.x.** Since jContent 3.7.0
+the hover "add" button and the right-click **Create** action are derived from the rendered
+edit-mode HTML, not from the CND child definition. The revision list rendered its entries with a
+bare loop and emitted no `path="*"` placeholder, so both actions disappeared from every existing
+entry, with no error. The list now emits that placeholder in edit mode only
+([#62](https://github.com/Jahia/content-revision-history/pull/62)); the public rendering is
+unchanged. See [Jahia/jcontent#2771](https://github.com/Jahia/jcontent/issues/2771).
+
+No migration, and no change to any stored snapshot.
+
 ## [1.4.13](https://github.com/Jahia/content-revision-history/compare/1_4_12...1_4_13) (2026-09-09)
 
 **Security release.** Closes the one finding of
