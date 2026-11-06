@@ -80,6 +80,10 @@ updates:
         update-types: ["version-update:semver-major"]
       - dependency-name: "typescript"
         update-types: ["version-update:semver-major"]
+      # Babel 8 needs Node ^22.18 and drops @babel/plugin-syntax-dynamic-import (Babel-7-only,
+      # used by this build); moving to it is a build migration, not a dependency bump.
+      - dependency-name: "@babel/*"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: "npm"
     directory: "/tests"
@@ -105,6 +109,16 @@ updates:
       # Cypress majors change the runner/Node baseline and can only be validated by the e2e
       # harness; they move together with @jahia/cypress.
       - dependency-name: "cypress"
+        update-types: ["version-update:semver-major"]
+      # Test-side GraphQL client stack and mocha: their majors can only be validated by the
+      # e2e harness (mocha 12 also requires Node ^20.19 || >=22.12 in the Cypress image).
+      - dependency-name: "@apollo/*"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "graphql"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "graphql-tag"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "mocha"
         update-types: ["version-update:semver-major"]
       # TypeScript 6 deprecates moduleResolution=node10 used by both tsconfigs (TS5107), and
       # TS 7 conflicts with react-i18next peer ranges; a TS major is a tsconfig migration.
