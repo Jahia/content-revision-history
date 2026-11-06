@@ -71,7 +71,7 @@
         <dependency>
             <groupId>io.github.graphql-java</groupId>
             <artifactId>graphql-java-annotations</artifactId>
-            <version>21.1</version>
+            <version>21.5</version>
             <scope>provided</scope>
         </dependency>
         <dependency>
@@ -86,7 +86,7 @@
         <dependency>
             <groupId>org.osgi</groupId>
             <artifactId>org.osgi.service.component.annotations</artifactId>
-            <version>1.4.0</version>
+            <version>1.5.1</version>
             <scope>provided</scope>
         </dependency>
 
@@ -134,7 +134,7 @@
         <dependency>
             <groupId>org.jsoup</groupId>
             <artifactId>jsoup</artifactId>
-            <version>1.23.1</version>
+            <version>1.23.2</version>
         </dependency>
     </dependencies>
 
@@ -179,7 +179,7 @@
             <plugin>
                 <groupId>com.github.eirslett</groupId>
                 <artifactId>frontend-maven-plugin</artifactId>
-                <version>1.15.0</version>
+                <version>1.15.4</version>
                 <configuration>
                     <installDirectory>${project.build.directory}/node</installDirectory>
                     <skip>${skip.frontend}</skip>
@@ -215,7 +215,7 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-surefire-plugin</artifactId>
-                <version>3.5.6</version>
+                <version>3.6.0</version>
             </plugin>
             <!-- Coverage reporting only, no enforced gate yet: this module is roughly
                  35-45% unit-testable (see class-level comments), the rest being JCR/HTTP/
