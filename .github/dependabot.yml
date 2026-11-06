@@ -1,8 +1,9 @@
 # Dependabot version updates.
 # https://docs.github.com/code-security/dependabot/dependabot-version-updates/configuration-options-for-the-dependabot.yml-file
 #
-# This repository has three distinct dependency surfaces:
+# This repository has these dependency surfaces:
 #   - Maven at the root (the OSGi module itself)
+#   - Yarn at the root (the webpack/Module Federation UI bundle)
 #   - Yarn at /tests (the @jahia/cypress e2e harness; Dependabot handles Yarn under "npm")
 #   - a Dockerfile at /tests (the Cypress base image)
 version: 2
@@ -19,12 +20,21 @@ updates:
           - "org.junit*"
           - "org.mockito*"
           - "org.jacoco*"
+      maven-dependencies:
+        patterns:
+          - "*"
     ignore:
       # The Jahia platform artifacts are PROVIDED and must match the target Jahia version.
       # Bumping them independently produces a module that compiles but fails at runtime, so
       # these belong to a deliberate platform upgrade, never to an automated PR.
       - dependency-name: "org.jahia.modules:jahia-modules"
       - dependency-name: "org.jahia.server:*"
+      # Any other org.jahia.* artifact (e.g. graphql-dxm-provider) is versioned with the platform too.
+      - dependency-name: "org.jahia.*"
+      # frontend-maven-plugin 2.x is compiled for Java 17 and cannot load on the JDK 11 Maven
+      # runtime this module builds with. Stay on 1.15.x.
+      - dependency-name: "com.github.eirslett:frontend-maven-plugin"
+        update-types: ["version-update:semver-major"]
       # JUnit 6 is compiled to class file 61 (Java 17); this module targets Java 11, which the
       # Jahia 8.2 platform fixes for us (Build-Jdk-Spec: 11). A major bump therefore cannot
       # compile here -- it fails with "cannot access org.junit.jupiter.api.Test" -- so block
@@ -35,6 +45,41 @@ updates:
       # imported, so our copy is private to this module and can be patched independently of the
       # version the platform ships. Suppressing it would have hidden the advisory that took it
       # to 1.23.1.
+
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    groups:
+      npm-dependencies:
+        patterns:
+          - "*"
+    ignore:
+      # Module Federation shared singletons: the host (Jahia) provides these at runtime, so their
+      # majors must follow the platform, never an automated PR.
+      - dependency-name: "@jahia/*"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@apollo/*"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "react"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "react-dom"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "react-i18next"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "i18next"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "graphql"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "graphql-tag"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "redux"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "react-redux"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: "npm"
     directory: "/tests"
@@ -53,7 +98,18 @@ updates:
           - "eslint*"
           - "@typescript-eslint/*"
           - "prettier"
+      npm-dependencies:
+        patterns:
+          - "*"
     ignore:
+      # Cypress majors change the runner/Node baseline and can only be validated by the e2e
+      # harness; they move together with @jahia/cypress.
+      - dependency-name: "cypress"
+        update-types: ["version-update:semver-major"]
+      # TypeScript 6 deprecates moduleResolution=node10 used by both tsconfigs (TS5107), and
+      # TS 7 conflicts with react-i18next peer ranges; a TS major is a tsconfig migration.
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]
       # The harness resolves @jahia/cypress at run time from this range and the shipped
       # ci.*/env.run scripts are versioned with it; upgrading is a harness migration, not a
       # dependency bump.
