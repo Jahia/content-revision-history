@@ -11,7 +11,7 @@
     "@typescript-eslint/eslint-plugin": "^8.72.1",
     "@typescript-eslint/parser": "^8.72.1",
     "cross-fetch": "^4.1.0",
-    "cypress": "15.21.0",
+    "cypress": "15.21.1",
     "cypress-mailpit": "^2.0.0",
     "cypress-multi-reporters": "^2.0.5",
     "cypress-terminal-report": "^7.4.0",
