@@ -38,7 +38,7 @@ module.exports = (env, argv) => {
                     include: [path.join(__dirname, 'src')],
                     use: [
                         'style-loader',
-                        {loader: 'css-loader', options: {modules: {mode: 'local'}}}
+                        {loader: 'css-loader', options: {modules: {mode: 'local', namedExport: false, exportLocalsConvention: 'as-is'}}}
                     ]
                 },
                 {
