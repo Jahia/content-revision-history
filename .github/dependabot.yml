@@ -41,6 +41,10 @@ updates:
       # majors while still receiving 5.x updates.
       - dependency-name: "org.junit.jupiter:*"
         update-types: ["version-update:semver-major"]
+      # Declarative Services annotations set the bundle's osgi.extender requirement: 1.5.x makes
+      # bnd emit (osgi.component version>=1.5.0), but Jahia 8.2 ships Felix SCR 2.1.30 (DS 1.4),
+      # so the bundle would not resolve. Stay on 1.4.0 until the platform provides DS 1.5.
+      - dependency-name: "org.osgi:org.osgi.service.component.annotations"
       # NOTE: jsoup is deliberately NOT ignored. It is EMBEDDED in the bundle rather than
       # imported, so our copy is private to this module and can be patched independently of the
       # version the platform ships. Suppressing it would have hidden the advisory that took it
@@ -80,6 +84,10 @@ updates:
         update-types: ["version-update:semver-major"]
       - dependency-name: "typescript"
         update-types: ["version-update:semver-major"]
+      # Babel 8 needs Node ^22.18 and drops @babel/plugin-syntax-dynamic-import (Babel-7-only,
+      # used by this build); moving to it is a build migration, not a dependency bump.
+      - dependency-name: "@babel/*"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: "npm"
     directory: "/tests"
@@ -105,6 +113,16 @@ updates:
       # Cypress majors change the runner/Node baseline and can only be validated by the e2e
       # harness; they move together with @jahia/cypress.
       - dependency-name: "cypress"
+        update-types: ["version-update:semver-major"]
+      # Test-side GraphQL client stack and mocha: their majors can only be validated by the
+      # e2e harness (mocha 12 also requires Node ^20.19 || >=22.12 in the Cypress image).
+      - dependency-name: "@apollo/*"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "graphql"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "graphql-tag"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "mocha"
         update-types: ["version-update:semver-major"]
       # TypeScript 6 deprecates moduleResolution=node10 used by both tsconfigs (TS5107), and
       # TS 7 conflicts with react-i18next peer ranges; a TS major is a tsconfig migration.
