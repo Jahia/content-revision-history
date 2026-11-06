@@ -41,6 +41,10 @@ updates:
       # majors while still receiving 5.x updates.
       - dependency-name: "org.junit.jupiter:*"
         update-types: ["version-update:semver-major"]
+      # Declarative Services annotations set the bundle's osgi.extender requirement: 1.5.x makes
+      # bnd emit (osgi.component version>=1.5.0), but Jahia 8.2 ships Felix SCR 2.1.30 (DS 1.4),
+      # so the bundle would not resolve. Stay on 1.4.0 until the platform provides DS 1.5.
+      - dependency-name: "org.osgi:org.osgi.service.component.annotations"
       # NOTE: jsoup is deliberately NOT ignored. It is EMBEDDED in the bundle rather than
       # imported, so our copy is private to this module and can be patched independently of the
       # version the platform ships. Suppressing it would have hidden the advisory that took it
