@@ -3,7 +3,6 @@
 # The license is supplied at RUNTIME via docker-compose (JAHIA_LICENSE), never baked in.
 .env
 .env.local
-artifacts/
 results/
 run-artifacts/
 node_modules
