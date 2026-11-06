@@ -45,6 +45,11 @@ updates:
       # bnd emit (osgi.component version>=1.5.0), but Jahia 8.2 ships Felix SCR 2.1.30 (DS 1.4),
       # so the bundle would not resolve. Stay on 1.4.0 until the platform provides DS 1.5.
       - dependency-name: "org.osgi:org.osgi.service.component.annotations"
+      # graphql-java / graphql-java-annotations are PROVIDED by the platform (Jahia 8.2.3.2 ships
+      # graphql-java-annotations 21.1). Building against a newer one raises the Import-Package
+      # floor (e.g. [21.5,22)) and the bundle no longer resolves.
+      - dependency-name: "io.github.graphql-java:*"
+      - dependency-name: "com.graphql-java:*"
       # NOTE: jsoup is deliberately NOT ignored. It is EMBEDDED in the bundle rather than
       # imported, so our copy is private to this module and can be patched independently of the
       # version the platform ships. Suppressing it would have hidden the advisory that took it
