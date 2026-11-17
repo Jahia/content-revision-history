@@ -4,7 +4,7 @@
   "description": "Cypress tests for the Content Revision History module",
   "devDependencies": {
     "@apollo/client": "^3.14.0",
-    "@babel/core": "^8.1.0",
+    "@babel/core": "^8.1.2",
     "@babel/preset-env": "^8.0.7",
     "@jahia/cypress": "^7.0.0",
     "@jahia/eslint-config": "^2.1.2",
@@ -68,7 +68,7 @@
     "js-yaml": "^4.3.1",
     "brace-expansion": "^5.0.12",
     "form-data": "^4.0.6",
-    "@babel/core": "^8.1.0",
+    "@babel/core": "^8.1.2",
     "qs": "^6.16.1",
     "uuid": "^11.1.1",
     "follow-redirects": "^1.16.2",
