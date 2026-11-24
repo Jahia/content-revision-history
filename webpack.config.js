@@ -5,6 +5,14 @@ const ModuleFederationPlugin = require('webpack/lib/container/ModuleFederationPl
 const moonstone = require('@jahia/moonstone/dist/rulesconfig-wp');
 const getModuleFederationConfig = require('@jahia/webpack-config/getModuleFederationConfig');
 const packageJson = require('./package.json');
+const {CycloneDxWebpackPlugin} = require('@cyclonedx/webpack-plugin');
+
+/** @type {import('@cyclonedx/webpack-plugin').CycloneDxWebpackPluginOptions} */
+const cycloneDxWebpackPluginOptions = {
+    specVersion: '1.4',
+    rootComponentType: 'library',
+    outputLocation: './bom'
+};
 
 module.exports = (env, argv) => {
     const config = {
@@ -72,7 +80,8 @@ module.exports = (env, argv) => {
             new CleanWebpackPlugin({verbose: false}),
             // The app shell discovers a module's remotes by fetching javascript/apps/package.json,
             // so the manifest has to sit next to remoteEntry.js, not just at the module root.
-            new CopyWebpackPlugin({patterns: [{from: './package.json', to: ''}]})
+            new CopyWebpackPlugin({patterns: [{from: './package.json', to: ''}]}),
+            new CycloneDxWebpackPlugin(cycloneDxWebpackPluginOptions)
         ],
         // argv.mode, not a constant: package.json's build:production passes --mode=production,
         // and a hardcoded value here overrode it, so the "production" build shipped an unminified
