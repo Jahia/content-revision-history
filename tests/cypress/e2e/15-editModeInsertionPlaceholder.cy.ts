@@ -27,7 +27,9 @@ describe('The revision list offers an insertion placeholder to an editor', () =>
     const areaPath = `${pagePath}/area-main`;
     const historyPath = `${areaPath}/history`;
 
-    const editUrl = `/cms/edit/default/${language}${pagePath}.html`;
+    // The URL jContent's page builder loads in its iframe: it renders the page in edit mode on every 8.2
+    // release. /cms/edit does not on 8.2.3.x (jContent 3.6), where it never reaches the render chain.
+    const editUrl = `/cms/editframe/default/${language}${pagePath}.html`;
     const previewUrl = `/cms/render/default/${language}${pagePath}.html`;
 
     // The wildcard placeholder as the edit-mode renderer writes it. Matched loosely on purpose:
